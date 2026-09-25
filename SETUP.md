@@ -473,6 +473,18 @@ allows. Not a defect of the page under test.
 
 ## Vercel Deployment
 
+> **La sync Scalable NON funziona su Vercel**, e il rifiuto è intenzionale: `sc login` è un
+> device flow che l'utente approva nel browser, quindi il processo deve sopravvivere tra l'avvio
+> e l'approvazione e il token deve restare in uno store persistente — su Vercel l'istanza viene
+> reclamata tra una richiesta e l'altra. `assertLongLivedHost` rifiuta al click e ti rimanda al
+> fallback «Anteprima dal testo» (incolli l'output di `sc broker holdings --json`,
+> `sc broker overview --json`, `sc overnight --json`: stessi parser, stessa anteprima).
+>
+> Per la sync con un solo click serve un host **sempre attivo** (una VM), con `sc` installato e
+> la sessione salvata. Su una VM senza keyring D-Bus vale la strada documentata da Scalable:
+> una `config.toml` con `[auth] session_backend = "file"` in un `XDG_CONFIG_HOME` dedicato.
+> Regole, prove della misura e percorso multi-utente: `doc/guide/collegamenti.md`.
+
 ### Step 1: Push to GitHub
 
 1. Create a new GitHub repository

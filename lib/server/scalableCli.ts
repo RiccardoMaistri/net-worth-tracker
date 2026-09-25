@@ -29,6 +29,19 @@ const READ_COMMAND_ARGS: Record<ScalableReadCommand, string[]> = {
   overnight: ['overnight', '--json'],
 };
 
+/**
+ * The OAuth device-flow login — the ONE argv outside the read surface, and deliberately so.
+ *
+ * It is not a broker write: it writes a session into THIS machine's OS keyring and reads
+ * nothing from the account. `--local-read-only` is not optional here — it is what keeps the
+ * stored session from being able to place orders, so a stolen session can only READ.
+ *
+ * The `login.human_only` flag in `sc capabilities` is about the APPROVAL, not the terminal:
+ * measured with stdout piped and stdin closed, the CLI prints the verification URL and the
+ * user code, then waits — so a server can show that link. Fixed argv, no caller input, ever.
+ */
+export const SCALABLE_LOGIN_ARGS: readonly string[] = ['login', '--local-read-only'];
+
 export class ScalableCliError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
