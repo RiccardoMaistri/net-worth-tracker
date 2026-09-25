@@ -4,6 +4,7 @@ set -eu
 ROOT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd)
 ENV_FILE=${ENV_FILE:-"$ROOT_DIR/.env.local"}
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
+export NEXT_PUBLIC_APP_URL='http://100.104.108.25:9090'
 
 usage() {
   cat <<'EOF'
@@ -65,16 +66,10 @@ validate_env() {
     NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET \
     NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID \
     NEXT_PUBLIC_FIREBASE_APP_ID \
-    NEXT_PUBLIC_APP_URL \
     CRON_SECRET
   do
     require_value "$key"
   done
-
-  case "$(value_for NEXT_PUBLIC_APP_URL)" in
-    http://*|https://*) ;;
-    *) die 'NEXT_PUBLIC_APP_URL must start with http:// or https://.' ;;
-  esac
 
   if [ -z "$(value_for FIREBASE_SERVICE_ACCOUNT_KEY)" ]; then
     require_value FIREBASE_ADMIN_PROJECT_ID
@@ -98,7 +93,7 @@ create_env() {
 deploy() {
   validate_env
   compose up -d --build --remove-orphans
-  printf 'Deployment ready at %s\n' "$(value_for NEXT_PUBLIC_APP_URL)"
+  printf 'Deployment ready at %s\n' "$NEXT_PUBLIC_APP_URL"
 }
 
 command=${1:-help}
