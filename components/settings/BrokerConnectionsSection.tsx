@@ -19,7 +19,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, RefreshCw } from 'lucide-react';
+import { ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -126,6 +126,47 @@ async function postReadCommand(
   return data;
 }
 
+type LoginStatus = 'pending' | 'approved' | 'failed' | 'expired';
+
+interface LoginView {
+  id: string;
+  status: LoginStatus;
+  verificationUri?: string;
+  userCode?: string;
+  error?: string;
+}
+
+async function startScalableLogin(ownerId: string): Promise<LoginView> {
+  const response = await authenticatedFetch('/api/broker/scalable/login/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ownerId }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data?.id) {
+    throw new Error(
+      typeof data?.error === 'string' ? data.error : 'Collegamento non riuscito: riprova.'
+    );
+  }
+  return data as LoginView;
+}
+
+async function readScalableLoginStatus(ownerId: string, sessionId: string): Promise<LoginView | null> {
+  const response = await authenticatedFetch(
+    `/api/broker/scalable/login/status?sessionId=${encodeURIComponent(sessionId)}&ownerId=${encodeURIComponent(ownerId)}`
+  );
+  // 404 means the server forgot the session (a restart): the UI restarts the flow rather than
+  // showing a failure, because the user's next action is identical either way.
+  if (response.status === 404) return null;
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data?.status) {
+    throw new Error(
+      typeof data?.error === 'string' ? data.error : 'Stato del collegamento non disponibile.'
+    );
+  }
+  return data as LoginView;
+}
+
 export function BrokerConnectionsSection({ ownerId, disabled = false }: BrokerConnectionsSectionProps) {
   const queryClient = useQueryClient();
   const [connection, setConnection] = useState<BrokerConnection | null>(null);
@@ -146,6 +187,13 @@ export function BrokerConnectionsSection({ ownerId, disabled = false }: BrokerCo
    * nothing would look like an emptied account).
    */
   const [overnightWarning, setOvernightWarning] = useState<string | null>(null);
+  /**
+   * The device-flow login: the server runs `sc login` and hands back the verification URL and
+   * the user code; the user approves in their own browser (with their MFA), and this polls
+   * until the session lands. Null means «not linking».
+   */
+  const [login, setLogin] = useState<LoginView | null>(null);
+  const [linking, setLinking] = useState(false);
 
   const loadAll = useCallback(async () => {
     try {
@@ -251,6 +299,55 @@ export function BrokerConnectionsSection({ ownerId, disabled = false }: BrokerCo
       );
     }
   };
+
+  const handleStartLogin = async () => {
+    if (disabled) return;
+    setLinking(true);
+    setError(null);
+    try {
+      setLogin(await startScalableLogin(ownerId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Collegamento non riuscito: riprova.');
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  /**
+   * Polls while the user approves in their own browser. The interval is the effect's only
+   * state path (an async callback, never a synchronous set in the effect body), and it stops
+   * itself the moment the status is no longer `pending`. The deps are the two PRIMITIVES, not
+   * the object: a dep on `login` would rebuild the interval on every poll tick.
+   */
+  const loginId = login?.id ?? null;
+  const loginStatus = login?.status ?? null;
+  useEffect(() => {
+    if (!loginId || loginStatus !== 'pending') return;
+    const timer = setInterval(() => {
+      void (async () => {
+        try {
+          const next = await readScalableLoginStatus(ownerId, loginId);
+          if (!next) {
+            setLogin(null);
+            setError('Il server non ricorda più il collegamento: riavvialo per un nuovo codice.');
+            return;
+          }
+          setLogin(next);
+          if (next.status === 'approved') {
+            setLogin(null);
+            toast.success('Collegamento completato: ora puoi sincronizzare.');
+            await loadAll();
+          } else if (next.status === 'failed' || next.status === 'expired') {
+            setLogin(null);
+            setError(next.error ?? 'Collegamento non riuscito: riprova.');
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Stato del collegamento non disponibile.');
+        }
+      })();
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [loginId, loginStatus, ownerId, loadAll]);
 
   const handleSave = async () => {
     if (!plan || disabled) return;
@@ -375,10 +472,46 @@ export function BrokerConnectionsSection({ ownerId, disabled = false }: BrokerCo
               {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               {syncing ? 'Lettura…' : 'Sincronizza'}
             </Button>
+            {connection && !login && (
+              <Button
+                variant="outline"
+                onClick={handleStartLogin}
+                disabled={disabled || linking}
+                className="h-10"
+              >
+                {linking && <Loader2 className="h-4 w-4 animate-spin" />}
+                {linking ? 'Preparo…' : 'Ricollega Scalable'}
+              </Button>
+            )}
             {disabled && (
               <span className="text-xs text-muted-foreground">Modalità demo: sincronizzazione disattivata.</span>
             )}
           </div>
+
+          {login?.verificationUri && (
+            <div className="flex flex-col gap-2 rounded-lg bg-muted p-3">
+              <p className="text-[13px] leading-[1.45]">
+                Apri il link di Scalable, accedi con le tue credenziali e conferma il codice: la
+                sessione si salva su questo server e non ti viene chiesto nessun segreto qui.
+              </p>
+              <Button asChild variant="default" className="h-10 self-start">
+                {/* The CLI's own activation endpoint — the one place the user gives consent. */}
+                <a href={login.verificationUri} target="_blank" rel="noreferrer noopener">
+                  Apri il collegamento sicuro
+                  <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                </a>
+              </Button>
+              <p className="text-[12px] text-muted-foreground">
+                Codice: <span className="font-mono text-[15px] font-semibold text-foreground">{login.userCode}</span>
+              </p>
+              <p role="status" aria-live="polite" className="text-[12px] text-muted-foreground">
+                In attesa della conferma nel browser…
+              </p>
+              <Button variant="ghost" size="sm" onClick={() => setLogin(null)} className="h-8 self-start text-[11px]">
+                Annulla
+              </Button>
+            </div>
+          )}
 
           {error && (
             <p role="alert" className="text-[13px] leading-[1.45] text-destructive">
