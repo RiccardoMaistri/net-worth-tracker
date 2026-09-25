@@ -7,11 +7,12 @@ This guide will walk you through setting up the Portfolio Tracker web app from s
 1. [Prerequisites](#prerequisites)
 2. [Firebase Setup](#firebase-setup)
 3. [Local Development Setup](#local-development-setup)
-4. [Local Verification Troubleshooting](#local-verification-troubleshooting)
-5. [Vercel Deployment](#vercel-deployment)
-6. [Price Data Provider Alternatives](#price-data-provider-alternatives)
-7. [Infrastructure Alternatives](#infrastructure-alternatives)
-8. [Troubleshooting](#troubleshooting)
+4. [Scalable Broker Sync on a Long-Lived Host](#scalable-broker-sync-on-a-long-lived-host)
+5. [Local Verification Troubleshooting](#local-verification-troubleshooting)
+6. [Vercel Deployment](#vercel-deployment)
+7. [Price Data Provider Alternatives](#price-data-provider-alternatives)
+8. [Infrastructure Alternatives](#infrastructure-alternatives)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -471,19 +472,122 @@ allows. Not a defect of the page under test.
 
 ---
 
+## Scalable Broker Sync on a Long-Lived Host
+
+La sincronizzazione del broker (Impostazioni › Collegamenti) chiama la CLI `sc` **sul server**.
+Quindi funziona solo dove la CLI può eseguire e dove la sessione sopravvive fra una richiesta e
+l'altra. Vale per `next start` su una VM, e **non** per Vercel/Lambda: lì l'istanza viene
+reclamata e `assertLongLivedHost` rifiuta il click invece di fingere che funzioni.
+
+Su qualsiasi hosting il fallback resta il paste degli output (`sc broker holdings --json`,
+`sc broker overview --json`, `sc overnight --json`) nel riquadro «Anteprima dal testo»: stessi
+parser, stessa anteprima, stesse protezioni. Le regole del dominio sono in
+`doc/guide/collegamenti.md`.
+
+### 1. Abilita l'accesso nel profilo Scalable (prerequisito)
+
+Prima di qualsiasi login, sul **sito** Scalable: `Profilo › Sicurezza › Agentic Investing`.
+Senza questo, `sc login` non ha i grant OAuth necessari e fallisce.
+
+### 2. Installa `sc`
+
+**Linux (VM, server): solo installazione manuale** — non esiste un package manager per Linux,
+Homebrew è macOS-only. Dall'ultima release scarica il `tar.gz` della tua architettura
+(`x86_64` o `aarch64`), estrai e metti `sc` in una directory del `PATH`.
+
+**macOS:** `brew tap ScalableCapital/tap` → `brew trust --formula ScalableCapital/tap/scalable-cli`
+→ `brew install scalable-cli`, oppure il PKG della release.
+
+Se il binario non è nel `PATH` del processo che avvia l'app, impostare `SCALABLE_CLI_PATH` con
+il percorso assoluto.
+
+### 3. Verifica la provenienza del binario — non è facoltativo
+
+Gli asset hanno checksum e una firma minisign del manifest, e il README upstream avverte di usare
+solo binari di cui ti fidi «especially before logging in». Con `minisign` e `gh` installati:
+
+```bash
+tag="vX.Y.Z"
+arch="x86_64"            # oppure aarch64
+repo="ScalableCapital/scalable-cli"
+minisign_public_key="<prendi dalla sezione 'Release artifact provenance' del README, per QUESTA release>"
+
+asset="sc-${tag}-linux-${arch}-gnu.tar.gz"
+checksums="sc-${tag}-SHA256SUMS"
+
+gh release download "${tag}" --repo "${repo}" \
+  --pattern "${asset}" --pattern "${checksums}" --pattern "${checksums}.minisig" --clobber
+
+minisign -V -P "${minisign_public_key}" -m "${checksums}" -x "${checksums}.minisig"
+set -o pipefail
+grep -F "  ${asset}" "${checksums}" | sha256sum -c -
+```
+
+> La chiave pubblica è descritta come «the **current** release signing public key»: **ruota a ogni
+> release**. Prendila dal README della versione che stai installando, non da un copia-incolla.
+
+Poi `sc --version` e `sc --help` come verifica di base.
+
+### 4. Configurazione per un server senza keyring
+
+Il default di `sc` è `session_backend = "keyring"` **sia su macOS che su Linux**, e su una VM
+headless non esiste un keyring D-Bus: è il motivo per cui `sc login` non funzionerebbe. La strada
+documentata è un file:
+
+```toml
+# $XDG_CONFIG_HOME/scalable-cli/config.toml   (o ~/.config/scalable-cli/config.toml)
+[auth]
+session_backend = "file"
+```
+
+`signing_key_backend` è già `file` di default su Linux (`secure_enclave` solo su macOS,
+`pkcs11` Linux-only e opt-in). La directory va protetta come un file di credenziali.
+
+Lo stesso `XDG_CONFIG_HOME` per owner è anche la strada per il multi-utente: vedi
+`doc/guide/collegamenti.md`.
+
+### 5. Collega l'account
+
+Dal terminale, o direttamente dal tile «Ricollega Scalable» in Impostazioni › Collegamenti, che
+mostra il link e il codice del device flow. Consigliato sempre `--local-read-only`: una sessione
+rubata potrà leggere, non ordinare.
+
+### 6. (Opzionale ma raccomandato) Utente Unix dedicato per `sc`
+
+Il README upstream prescrive di non dare all'applicazione accesso ai file di sessione. Con
+l'app come `app-user`:
+
+```bash
+sudo useradd -m -s /usr/sbin/nologin scalable-cli-user
+sudo install -m 0755 /percorso/del/sc /usr/local/bin/sc
+```
+
+```sudoers
+# /etc/sudoers.d/app-cli
+app-user ALL=(scalable-cli-user) NOPASSWD: /usr/local/bin/sc
+```
+
+```bash
+sudo chmod 440 /etc/sudoers.d/app-cli
+sudo visudo -cf /etc/sudoers.d/app-cli   # validare prima di riavviare
+```
+
+Così l'app può lanciare `sc` ma non leggerne i file, e la regola non consente altri comandi.
+
+> **Limite noto del codice:** `SCALABLE_CLI_PATH` oggi è solo un percorso di binario e
+> `READ_COMMAND_ARGS` non esprime un prefisso. Per usare questa topologia serve invocare
+> `sudo -n -u scalable-cli-user /usr/local/bin/sc`, quindi un prefisso argv da aggiungere. Finché
+> non c'è, la topologia vale solo se l'app gira come `scalable-cli-user` o sotto un utente che può
+> leggere quei file.
+
+---
+
 ## Vercel Deployment
 
-> **La sync Scalable NON funziona su Vercel**, e il rifiuto è intenzionale: `sc login` è un
-> device flow che l'utente approva nel browser, quindi il processo deve sopravvivere tra l'avvio
-> e l'approvazione e il token deve restare in uno store persistente — su Vercel l'istanza viene
-> reclamata tra una richiesta e l'altra. `assertLongLivedHost` rifiuta al click e ti rimanda al
-> fallback «Anteprima dal testo» (incolli l'output di `sc broker holdings --json`,
-> `sc broker overview --json`, `sc overnight --json`: stessi parser, stessa anteprima).
->
-> Per la sync con un solo click serve un host **sempre attivo** (una VM), con `sc` installato e
-> la sessione salvata. Su una VM senza keyring D-Bus vale la strada documentata da Scalable:
-> una `config.toml` con `[auth] session_backend = "file"` in un `XDG_CONFIG_HOME` dedicato.
-> Regole, prove della misura e percorso multi-utente: `doc/guide/collegamenti.md`.
+> **La sync Scalable NON funziona su Vercel**, e il rifiuto è intenzionale. Per il perché e per
+> la strada su un host adatto vedi
+> [Scalable Broker Sync on a Long-Lived Host](#scalable-broker-sync-on-a-long-lived-host);
+> il fallback è sempre il paste degli output.
 
 ### Step 1: Push to GitHub
 
