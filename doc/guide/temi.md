@@ -1,12 +1,12 @@
 # Temi colore (Color Theme System)
 
-> **When to open this guide** — whoever touches `app/globals.css` (the twelve theme blocks: `:root` + `.dark` and the five named themes, each as `[data-theme="name"]` + `.dark[data-theme="name"]`), `contexts/ColorThemeContext.tsx`, `lib/hooks/useChartColors.ts`, `lib/hooks/useActionColors.ts`, `lib/utils/costCenterColors.ts`, `lib/constants/colors.ts`, `components/layout/ThemePicker.tsx` or the `COLOR_THEME_SWATCHES` in `app/dashboard/settings/page.tsx`. The palette itself is in `DESIGN.md` → §2 (Colors: The Zero-Chroma Foundation). `AGENTS.md` keeps the stub with the essentials plus the repo-wide token rules (`AGENTS.md § Layout and Color Tokens`, `AGENTS.md § Recharts`); here is the full rule.
+> **When to open this guide** — whoever touches `app/globals.css` (the twelve theme blocks: `:root` + `.dark` and the five named themes, each as `[data-theme="name"]` + `.dark[data-theme="name"]`), `contexts/ColorThemeContext.tsx`, `lib/hooks/useChartColors.ts`, `lib/hooks/useActionColors.ts`, `lib/hooks/useCssColorTokens.ts` (with its parser `lib/utils/cssColorToHex.ts`), `lib/utils/costCenterColors.ts`, `lib/constants/colors.ts`, `components/layout/ThemePicker.tsx` or the `COLOR_THEME_SWATCHES` in `app/dashboard/settings/page.tsx`. The palette itself is in `DESIGN.md` → §2 (Colors: The Zero-Chroma Foundation). `AGENTS.md` keeps the stub with the essentials plus the repo-wide token rules (`AGENTS.md § Layout and Color Tokens`, `AGENTS.md § Recharts`); here is the full rule.
 
 ## Files
 
 Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
 
-- **Temi**: `app/globals.css` (twelve theme blocks), `contexts/ColorThemeContext.tsx`, `lib/hooks/{useChartColors,useActionColors}.ts`, `lib/utils/costCenterColors.ts` — doc/guide/temi.md
+- **Temi**: `app/globals.css` (twelve theme blocks, plus the five `--role-*` aliases in `:root`), `contexts/ColorThemeContext.tsx`, `lib/hooks/{useChartColors,useActionColors,useCssColorTokens}.ts`, pure `lib/utils/cssColorToHex.ts` (a served colour → `#rrggbb` for Nivo, on `actionColor.ts`'s `parseToOklch`), `lib/utils/costCenterColors.ts` — doc/guide/temi.md; tests `__tests__/{chartPaletteDistinctness,cssColorToHex}.test.ts`
 
 ## Color Theme System
 - **Parallel theming**: next-themes owns `.dark`, the custom system owns `data-theme` — fully independent. CSS:
@@ -81,6 +81,21 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
   express — and the accessible name is the POSITION («Colore 3 di 6: Midnight Bloom»), never the hue.
   **A new theme or a moved slot runs `__tests__/chartPaletteDistinctness.test.ts` first** — solar-dusk shipped two
   classes as the same grey for months.
+
+- **The five `--role-*` tokens are `:root` aliases that no theme block redefines** (`--role-need: var(--chart-1)`,
+  `--role-want: var(--chart-4)`, `--role-saving: var(--chart-2)`, `--role-unclassified: var(--muted-foreground)`,
+  `--role-deficit: var(--destructive)`; `grep -n -- '--role-' app/globals.css` finds those five lines and nothing else).
+  The theme attribute and `.dark` sit on the same root element, so the alias resolves against the active block's slots
+  — no block names a role, and `chartPaletteDistinctness` measures the slots, not the aliases. A theme may declare its
+  own later. The bucket → token map is ONE constant, `lib/constants/spendingRoleColors.ts` (`SPENDING_ROLE_TOKEN`, and
+  `spendingRoleColorVar` for a `var()`), read by its three painters. The phone's 50/30/20 bar and the Impostazioni
+  badge read them as `var()`; Nivo cannot, so the roles Sankey reads them through
+  **`useCssColorTokens(tokens, fallbacks, enabled)`** — `useChartColors`' timing (rAF → `getComputedStyle` →
+  `setState`), with `lib/utils/cssColorToHex.ts` turning the served `#hex` / `lab()` / `oklch()` into hex through
+  `actionColor.ts`'s `parseToOklch` (ONE `lab()` parser in the repo). **`enabled` is whether the caller paints them this
+  render**: `FlussoTile` passes it only while the roles Sankey is on screen (the setting on, «Per ruolo», from 640px),
+  so with the setting off the tile renders once at mount and never calls `getComputedStyle` — the read's `setState`
+  always hands over a new object, a second render and a second Sankey build for nothing (PERF-12/14).
 
 ## Per-page blind spots
 

@@ -70,6 +70,7 @@ import { Tile, TILE_SUB_EYEBROW_CLASS } from '@/components/ui/tile';
 import {
   AssetClassChip,
   AssetRow,
+  InstrumentClassChip,
   RealEstateValueTooltip,
   describeAssetRowSubLine,
   formatDeltaPercent,
@@ -502,7 +503,6 @@ export function StrumentiTile({
     // A hand-VALUED holding (no market quote at all, as opposed to a quoted one the owner
     // prices by hand): its quantity, price and PMC describe the storage, not the holding.
     const isHandValued = !hasMarketPrice(asset.type, asset.subCategory);
-    const displayAssetClass = resolveDisplayAssetClass(asset);
     const perf = performance[asset.id];
     const gain = computeUnrealizedGain(asset);
     const withCost = gain !== null;
@@ -559,7 +559,7 @@ export function StrumentiTile({
           </div>
         </th>
         <td className={cn(CELL_CLASS, 'text-left')}>
-          <AssetClassChip assetClass={displayAssetClass} />
+          <InstrumentClassChip asset={asset} />
         </td>
         {showPriceColumns && (
           <>

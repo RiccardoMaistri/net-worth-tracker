@@ -17,21 +17,26 @@
  * is no date that survives that and still proves the distinction.
  *
  * THE ARITHMETIC, and why these amounts
- * Salaries 2400 and 1600 give exactly 60/40, so no share is a repeating decimal. The pool is 1500,
- * of which 500 is still in the calendar:
+ * Salaries 2400 and 1600 give exactly 60/40, so no share is a repeating decimal. The common
+ * spending is 2500, of which 1500 is still in the calendar; the 1000 € of income left «in comune»
+ * pays it first (2026-09-27), so the pool the shares divide is 1500 for the period and 0 for what
+ * has already happened (1000 booked − 1000 received):
  *
  *   |          | quota del periodo | quota contabilizzata | personali | resta (periodo) | resta (contab.) |
- *   | Ghiandaia| 900               | 600                  | 200       | 1300            | 1600            |
- *   | Tarsio   | 600               | 400                  | 1100      | −100            | +100            |
+ *   | Ghiandaia| 900               | 0                    | 200       | 1300            | 2200            |
+ *   | Tarsio   | 600               | 0                    | 1100      | −100            | +500            |
  *
- * Tarsio is the case the page exists to get right: **+100 € today, −100 € once the calendar is
+ * Tarsio is the case the page exists to get right: **+500 € today, −100 € once the calendar is
  * paid**. Before 2026-09-21 the tile printed the −100 in the destructive token and the verdict
  * said «lo stipendio di Tarsio non basta» — over money still in the account.
  *
- * A third labor-income row of 1000 € is left «in comune» on purpose: labor income nobody is named
- * on cannot earn a share, and the page must SAY so rather than quietly compute 60/40 on part of
- * the month's salaries. One more row belongs to a member who is not in Famiglia, so «Senza
- * intestatario» has something in it.
+ * The third income row of 1000 € is left «in comune» on purpose, and it is two facts at once:
+ * income nobody is named on cannot earn a share, and the page must SAY so rather than quietly
+ * compute 60/40 on part of the month's income; and, being the household's, it is what the «In
+ * comune» tile subtracts before the split («Entrate in comune −1000 €», «Da dividere 1500 €»).
+ * One more row belongs to a member who is not in Famiglia, so «Senza intestatario» has something
+ * in it. Every income row here is a salary, but since 2026-09-27 the category no longer matters
+ * to the split: `laborIncomeCategoryIds` is written for the other features that read it.
  *
  * Every proper noun is a DECOY — Ghiandaia, Tarsio, Lemure, Okapi, Narvalo, Axolotl, Bradipo —
  * words that appear in no other fixture, so a locator that finds one has found this data.
@@ -96,12 +101,14 @@ interface SeedRow {
 const ROWS: SeedRow[] = [
   { id: 'split-inc-ghiandaia', categoryId: 'split-cat-stipendio', date: JANUARY, amount: 2400, personalMemberId: 'split-m-ghiandaia' },
   { id: 'split-inc-tarsio', categoryId: 'split-cat-stipendio', date: JANUARY, amount: 1600, personalMemberId: 'split-m-tarsio' },
-  // Labor income left «in comune»: it buys nobody a share, and the page must declare it.
+  // Income left «in comune»: it buys nobody a share (the page must declare it), and it pays the
+  // common spending first (the tile must show it).
   { id: 'split-inc-orphan', categoryId: 'split-cat-stipendio', date: JANUARY, amount: 1000 },
 
   { id: 'split-com-booked', categoryId: 'split-cat-affitto', date: JANUARY, amount: -1000 },
-  // The row that has NOT happened: inside the pool, outside every booked residual.
-  { id: 'split-com-scheduled', categoryId: 'split-cat-bollette', date: NEW_YEARS_EVE, amount: -500 },
+  // The row that has NOT happened: inside the pool, outside every booked residual. 1500, not 500,
+  // so that the period's pool survives the 1000 € of common income and Tarsio still ends short.
+  { id: 'split-com-scheduled', categoryId: 'split-cat-bollette', date: NEW_YEARS_EVE, amount: -1500 },
 
   { id: 'split-per-ghiandaia', categoryId: 'split-cat-svago', date: JANUARY, amount: -200, personalMemberId: 'split-m-ghiandaia' },
   { id: 'split-per-tarsio', categoryId: 'split-cat-auto', date: JANUARY, amount: -1100, personalMemberId: 'split-m-tarsio' },
@@ -166,7 +173,7 @@ async function seedSettings(): Promise<void> {
     },
     { merge: true }
   );
-  console.info('  ✓ settings — expenseSplitEnabled, 2 members, 1 labor category');
+  console.info('  ✓ settings — expenseSplitEnabled, 2 members');
 }
 
 console.info(`Seeding Divisione E2E fixture for ${UID} on ${PROJECT_ID}…`);

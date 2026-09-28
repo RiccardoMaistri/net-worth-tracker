@@ -51,6 +51,7 @@ const STORED_SETTINGS = {
   cashflowHistoryStartYear: 2019,
   familyMembers: [{ id: 'm1', name: 'Giuseppe' }],
   expenseSplitEnabled: true,
+  spendingRolesEnabled: true,
   dividendCashAssetId: 'cash-1',
   transferFeeCategoryId: 'cat-fee',
   transferFeeSubCategoryId: 'sub-fee',
@@ -95,6 +96,7 @@ describe('getSettings — lettura', () => {
     expect(settings?.cashflowHistoryStartYear).toBe(2019);
     expect(settings?.familyMembers).toEqual([{ id: 'm1', name: 'Giuseppe' }]);
     expect(settings?.expenseSplitEnabled).toBe(true);
+    expect(settings?.spendingRolesEnabled).toBe(true);
   });
 
   it('returns the transfer fee category instead of dropping it', async () => {
@@ -272,6 +274,14 @@ describe('setSettings — scrittura, ramo senza targets (merge: true)', () => {
 
     await setSettings('user-1', { targets: TARGETS, expenseSplitEnabled: true } as AssetAllocationSettings);
     expect(writtenPayload().expenseSplitEnabled).toBe(true);
+  });
+
+  it('writes spendingRolesEnabled through both chains', async () => {
+    await setSettings('user-1', { spendingRolesEnabled: true } as AssetAllocationSettings);
+    expect(writtenPayload().spendingRolesEnabled).toBe(true);
+
+    await setSettings('user-1', { targets: TARGETS, spendingRolesEnabled: true } as AssetAllocationSettings);
+    expect(writtenPayload().spendingRolesEnabled).toBe(true);
   });
 
   it('does not touch the start month when the key is absent from the update', async () => {

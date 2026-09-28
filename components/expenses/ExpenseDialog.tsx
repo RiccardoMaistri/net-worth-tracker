@@ -1321,6 +1321,7 @@ export function ExpenseDialog({ open, onClose, expense, onSuccess }: Readonly<Ex
   // Divisione: '' is «in comune», the default. Stored as its own state rather than a form field
   // because it is not validated and has no error state — same shape as the cost centre above.
   const [splitEnabled, setSplitEnabled] = useState(false);
+  const [spendingRolesEnabled, setSpendingRolesEnabled] = useState(false);
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([]);
   const [personalMemberId, setPersonalMemberId] = useState<string>('');
   // Where a new transfer fee lands (Impostazioni › Spese), read with the other settings.
@@ -1450,6 +1451,7 @@ export function ExpenseDialog({ open, onClose, expense, onSuccess }: Readonly<Ex
         setCostCentersEnabled(settings?.costCentersEnabled ?? false);
         setCostCenters(centers);
         setSplitEnabled(settings?.expenseSplitEnabled ?? false);
+        setSpendingRolesEnabled(settings?.spendingRolesEnabled ?? false);
         setFamilyMembers(settings?.familyMembers ?? []);
         setTransferFeeSettings({
           transferFeeCategoryId: settings?.transferFeeCategoryId,
@@ -2229,6 +2231,7 @@ export function ExpenseDialog({ open, onClose, expense, onSuccess }: Readonly<Ex
         initialType={selectedType}
         initialName={categoryInitialName}
         initialSubCategoryName={subCategoryInitialName}
+        spendingRolesEnabled={spendingRolesEnabled}
       />
     </>
   );

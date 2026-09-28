@@ -97,7 +97,7 @@ import { Asset } from '@/types/assets';
 import { getAllAssets } from '@/lib/services/assetService';
 import { getAllCategories, deleteCategory, getCategoryById } from '@/lib/services/expenseCategoryService';
 import { getExpenseCountByCategoryId, reassignExpensesCategory, clearExpensesCategoryAssignment, moveExpensesToCategory, TransferBoundaryError } from '@/lib/services/expenseService';
-import { CategoryManagementDialog } from '@/components/expenses/CategoryManagementDialog';
+import { CategoryManagementDialog, invalidateCategoryCaches } from '@/components/expenses/CategoryManagementDialog';
 import { CategoryDeleteConfirmDialog } from '@/components/expenses/CategoryDeleteConfirmDialog';
 import { CategoryMoveDialog } from '@/components/expenses/CategoryMoveDialog';
 import { LAZY_CATEGORY_ICONS } from '@/components/expenses/IconPickerPopover';
@@ -126,6 +126,7 @@ import {
   describeCosts,
   describeDefaultAccounts,
   describeTransferFeeCategory,
+  describeSpendingRolesSetting,
   describeDividendCategory,
   describeExpenseCategories,
   describeEmails,
@@ -139,6 +140,7 @@ import {
   summarizeExpenseCategories,
   type ThemeMode,
 } from '@/lib/utils/settingsNarrative';
+import { categoryRoleColor, summarizeCategoryClassification } from '@/lib/utils/spendingRoles';
 
 interface SubTarget {
   name: string;
@@ -397,6 +399,8 @@ interface CategoryRowProps {
   onConfirmDelete: (categoryId: string) => void;
   /** The list's one live region: arm and disarm are sentences, spoken there. */
   announce: (text: string) => void;
+  /** With the 50/30/20 roles on, the badge wears the role, not the saved hue. */
+  spendingRolesEnabled: boolean;
 }
 
 /**
@@ -405,7 +409,7 @@ interface CategoryRowProps {
  * 2.2.1 time limit and announced nothing); the button stays a compact «Conferma» and the ROW
  * prints what the second press does (AGENTS.md → Accessibility).
  */
-function CategoryRow({ category, onEdit, onMove, onRequestDelete, onConfirmDelete, announce }: CategoryRowProps) {
+function CategoryRow({ category, onEdit, onMove, onRequestDelete, onConfirmDelete, announce, spendingRolesEnabled }: CategoryRowProps) {
   const deleteRef = useRef<HTMLButtonElement | null>(null);
   const { armed, onClick: onArmedClick, onBlur } = useArmedDelete(deleteRef, () => onConfirmDelete(category.id));
   const wasArmed = useRef(false);
@@ -432,20 +436,27 @@ function CategoryRow({ category, onEdit, onMove, onRequestDelete, onConfirmDelet
   // render is a new type every render (`react-hooks/static-components`).
   const CatIcon = category.icon ? LAZY_CATEGORY_ICONS[category.icon] : undefined;
   const iconButtonClass = 'h-11 w-11 desktop:h-8 desktop:w-8';
+  // With the roles on the badge reads as the classification at a glance; off, the saved hue as ever.
+  const roleColor = categoryRoleColor(category, spendingRolesEnabled);
+  const glyph = roleColor ?? (category.color || 'var(--muted-foreground)');
+  const wash = roleColor
+    ? `color-mix(in oklch, ${roleColor} 14%, transparent)`
+    : category.color ? `${category.color}20` : 'var(--muted)';
+  const dot = roleColor ?? (category.color || 'var(--chart-1)');
 
   return (
     <div className={cn('flex items-center justify-between gap-3 py-2.5 transition-colors', armed ? 'bg-destructive/5' : 'hover:bg-muted/30')}>
       <div className="flex min-w-0 items-center gap-3">
         <div
           className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg"
-          style={{ backgroundColor: category.color ? `${category.color}20` : 'var(--muted)' }}
+          style={{ backgroundColor: wash }}
         >
           {CatIcon ? (
-            <Suspense fallback={<div className="h-3.5 w-3.5 rounded-full" style={{ backgroundColor: category.color || 'var(--chart-1)' }} />}>
-              <CatIcon className="h-3.5 w-3.5" style={{ color: category.color || 'var(--muted-foreground)' }} aria-hidden="true" />
+            <Suspense fallback={<div className="h-3.5 w-3.5 rounded-full" style={{ backgroundColor: dot }} />}>
+              <CatIcon className="h-3.5 w-3.5" style={{ color: glyph }} aria-hidden="true" />
             </Suspense>
           ) : (
-            <div className="h-3 w-3 rounded-full" style={{ backgroundColor: category.color || 'var(--chart-1)' }} />
+            <div className="h-3 w-3 rounded-full" style={{ backgroundColor: dot }} />
           )}
         </div>
         <div className="min-w-0">
@@ -558,6 +569,7 @@ export default function SettingsPage() {
   const [laborIncomeCategoryIds, setLaborIncomeCategoryIds] = useState<string[]>([]);
   const [costCentersEnabled, setCostCentersEnabled] = useState<boolean>(false);
   const [expenseSplitEnabled, setExpenseSplitEnabled] = useState<boolean>(false);
+  const [spendingRolesEnabled, setSpendingRolesEnabled] = useState<boolean>(false);
   const [performanceIncludesPensionFunds, setPerformanceIncludesPensionFunds] = useState<boolean>(false);
   const [performanceIncludesExcludedAssets, setPerformanceIncludesExcludedAssets] = useState<boolean>(false);
   const [performanceExcludesCash, setPerformanceExcludesCash] = useState<boolean>(false);
@@ -752,6 +764,7 @@ export default function SettingsPage() {
         setLaborIncomeCategoryIds(settingsData.laborIncomeCategoryIds ?? []);
         setCostCentersEnabled(settingsData.costCentersEnabled ?? false);
         setExpenseSplitEnabled(settingsData.expenseSplitEnabled ?? false);
+        setSpendingRolesEnabled(settingsData.spendingRolesEnabled ?? false);
         setPerformanceIncludesPensionFunds(settingsData.performanceIncludesPensionFunds ?? false);
         setPerformanceIncludesExcludedAssets(settingsData.performanceIncludesExcludedAssets ?? false);
         setPerformanceExcludesCash(settingsData.performanceExcludesCash ?? false);
@@ -919,6 +932,7 @@ export default function SettingsPage() {
           defaultCreditCashAssetId: settingsData?.defaultCreditCashAssetId || '__none__',
           transferFeeCategoryId: settingsData?.transferFeeCategoryId || '',
           transferFeeSubCategoryId: settingsData?.transferFeeSubCategoryId || '',
+          spendingRolesEnabled: settingsData?.spendingRolesEnabled ?? false,
         })
       );
       return true;
@@ -1060,6 +1074,7 @@ export default function SettingsPage() {
         setDeleteConfirmDialogOpen(false);
         setCategoryToDelete(null);
         setExpenseCountToReassign(0);
+        invalidateCategoryCaches(queryClient, ownerId, { rowsChanged: true });
         await loadExpenseCategories();
         return;
       }
@@ -1101,6 +1116,7 @@ export default function SettingsPage() {
       setDeleteConfirmDialogOpen(false);
       setCategoryToDelete(null);
       setExpenseCountToReassign(0);
+      invalidateCategoryCaches(queryClient, ownerId, { rowsChanged: true });
       await loadExpenseCategories();
     } catch (error) {
       console.error('Error during reassignment and deletion:', error);
@@ -1113,6 +1129,8 @@ export default function SettingsPage() {
     try {
       await deleteCategory(categoryId);
       toast.success('Categoria eliminata con successo');
+      // The armed path is the zero-row one: only the taxonomy changed.
+      if (ownerId) invalidateCategoryCaches(queryClient, ownerId, { rowsChanged: false });
       await loadExpenseCategories();
     } catch (error) {
       console.error('Error deleting category:', error);
@@ -1186,6 +1204,8 @@ export default function SettingsPage() {
         `${movedCount} ${movedCount === 1 ? 'transazione spostata' : 'transazioni spostate'} da "${categoryToMove.name}" a "${newCategory.name}"`
       );
 
+      invalidateCategoryCaches(queryClient, ownerId, { rowsChanged: true });
+
       // Reset state — source category is NOT deleted
       setMoveCategoryDialogOpen(false);
       setCategoryToMove(null);
@@ -1203,6 +1223,8 @@ export default function SettingsPage() {
     setEditingCategory(null);
   };
 
+  // The dialog has already invalidated the React Query copies (invalidateCategoryCaches, where the
+  // write happens): what is left is the page's own list.
   const handleExpenseCategorySuccess = async () => {
     await loadExpenseCategories();
   };
@@ -1491,6 +1513,7 @@ export default function SettingsPage() {
         laborIncomeCategoryIds,
         costCentersEnabled,
         expenseSplitEnabled,
+        spendingRolesEnabled,
         performanceIncludesPensionFunds,
         performanceIncludesExcludedAssets,
         performanceExcludesCash,
@@ -1815,6 +1838,7 @@ export default function SettingsPage() {
         defaultCreditCashAssetId,
         transferFeeCategoryId,
         transferFeeSubCategoryId,
+        spendingRolesEnabled,
       });
 
   // One dirty flag per tab that has fields «Salva» writes — each snapshot holds the fields of
@@ -1928,6 +1952,7 @@ export default function SettingsPage() {
   const debitAccount = cashAssets.find((a) => a.id === defaultDebitCashAssetId);
   const creditAccount = cashAssets.find((a) => a.id === defaultCreditCashAssetId);
   const categoryCounts = summarizeExpenseCategories(expenseCategories);
+  const categoryClassification = summarizeCategoryClassification(expenseCategories);
   const dividendCategory = expenseCategories.find((cat) => cat.id === dividendIncomeCategoryId);
   const dividendSubCategory = dividendCategory?.subCategories.find((sub) => sub.id === dividendIncomeSubCategoryId);
   const transferFeeCategory = expenseCategories.find((cat) => cat.id === transferFeeCategoryId);
@@ -3358,9 +3383,9 @@ export default function SettingsPage() {
         >
             <div className="grid grid-cols-1 gap-3 tablet:grid-cols-2 desktop:grid-cols-12">
 
-              {/* Left column: the two settings the expense FORM reads. Below desktop the wrapper
-                  dissolves (`contents`) and each tile is a grid cell; from desktop the two stack at
-                  their natural height beside the taller import tile. */}
+              {/* Left column: the two settings the expense FORM reads, then the 50/30/20 switch. Below
+                  desktop the wrapper dissolves (`contents`) and each tile is a grid cell; from desktop
+                  they stack at their natural height beside the taller import tile. */}
               <div className="contents desktop:col-span-5 desktop:flex desktop:flex-col desktop:gap-3">
               {/* Conti di default (moved here from Preferenze: they act in the expense dialog) */}
               <div className={TILE_CELL_CLASS}>
@@ -3551,6 +3576,38 @@ export default function SettingsPage() {
                 </Tile>
                 )}
               </div>
+              {/* Ruoli 50/30/20 — opt-in; the roles themselves are set in the category dialog. Its own
+                  tile, not a row of Categorie: that tile gives way to an error notice when the
+                  categories fail to load, and the switch and the «non letti» reading must not. */}
+              <div className={TILE_CELL_CLASS}>
+                <Tile
+                  eyebrow="Ruoli 50/30/20"
+                  reading={
+                    categoriesState === 'loading'
+                      ? null
+                      : describeSpendingRolesSetting({
+                          enabled: spendingRolesEnabled,
+                          classification: categoryClassification,
+                          categoriesUnread: categoriesState === 'failed',
+                        })
+                  }
+                >
+                  <div className="mt-1 flex items-center justify-between gap-4 py-3">
+                    <div className="min-w-0">
+                      <Label htmlFor="spendingRolesEnabled" className="text-[13px] font-medium">Necessità, desideri, risparmi</Label>
+                      <p className="mt-0.5 text-[11px] leading-[1.4] text-muted-foreground">
+                        Ogni categoria di spesa riceve un ruolo, e il flusso di Analisi si legge anche per ruolo
+                      </p>
+                    </div>
+                    <Switch
+                      id="spendingRolesEnabled"
+                      checked={spendingRolesEnabled}
+                      onCheckedChange={setSpendingRolesEnabled}
+                      className={cn('shrink-0', interactiveControlClass)}
+                    />
+                  </div>
+                </Tile>
+              </div>
               </div>
 
               {/* Import CSV — the section renders its own tile (preview-first, undo per batch) */}
@@ -3601,6 +3658,7 @@ export default function SettingsPage() {
                                   onRequestDelete={requestCategoryDelete}
                                   onConfirmDelete={handleConfirmDirectDelete}
                                   announce={announceCategory}
+                                  spendingRolesEnabled={spendingRolesEnabled}
                                 />
                               ))}
                             </div>
@@ -3995,6 +4053,7 @@ export default function SettingsPage() {
         onClose={handleExpenseCategoryDialogClose}
         category={editingCategory}
         onSuccess={handleExpenseCategorySuccess}
+        spendingRolesEnabled={spendingRolesEnabled}
       />
 
       {/* Category Delete Confirmation Dialog */}

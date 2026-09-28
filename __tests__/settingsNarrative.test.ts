@@ -44,6 +44,7 @@ import {
   describeTargetProblem,
   describeThemeMode,
   describeTransferFeeCategory,
+  describeSpendingRolesSetting,
   describeUnsavedChanges,
   summarizeExpenseCategories,
 } from '@/lib/utils/settingsNarrative';
@@ -753,6 +754,52 @@ describe('describeImport', () => {
 
 // ─── Commissioni sui trasferimenti ────────────────────────────────────────────
 
+describe('describeSpendingRolesSetting', () => {
+  const ON = { enabled: true };
+
+  it('says what off means, and that the roles already set survive it', () => {
+    expect(plain(describeSpendingRolesSetting({ enabled: false, classification: { spending: 4, classified: 0 } }))).toBe(
+      'Spenti: il flusso di Analisi si legge solo per tipo di spesa. I ruoli già assegnati restano sulle categorie.'
+    );
+  });
+
+  it('names how many categories still land in «Da classificare»', () => {
+    expect(plain(describeSpendingRolesSetting({ ...ON, classification: { spending: 14, classified: 11 } }))).toBe(
+      'Attivi: 11 categorie di spesa su 14 hanno un ruolo; 3 finiscono in «Da classificare».'
+    );
+    expect(plain(describeSpendingRolesSetting({ ...ON, classification: { spending: 14, classified: 13 } }))).toBe(
+      'Attivi: 13 categorie di spesa su 14 hanno un ruolo; 1 finisce in «Da classificare».'
+    );
+  });
+
+  it('speaks of ONE classified category in the singular', () => {
+    expect(plain(describeSpendingRolesSetting({ ...ON, classification: { spending: 3, classified: 1 } }))).toBe(
+      'Attivi: 1 categoria di spesa su 3 ha un ruolo; 2 finiscono in «Da classificare».'
+    );
+  });
+
+  it('reads the fully classified state', () => {
+    expect(plain(describeSpendingRolesSetting({ ...ON, classification: { spending: 14, classified: 14 } }))).toBe(
+      'Attivi: tutte le 14 categorie di spesa hanno un ruolo.'
+    );
+    expect(plain(describeSpendingRolesSetting({ ...ON, classification: { spending: 1, classified: 1 } }))).toBe(
+      'Attivi: l’unica categoria di spesa ha un ruolo.'
+    );
+  });
+
+  it('names the missing input when there is nothing to classify', () => {
+    expect(plain(describeSpendingRolesSetting({ ...ON, classification: { spending: 0, classified: 0 } }))).toBe(
+      'Attivi, ma non c’è ancora nessuna categoria di spesa da classificare.'
+    );
+  });
+
+  it('does not read a failed category fetch as «nothing to classify»', () => {
+    expect(
+      plain(describeSpendingRolesSetting({ ...ON, classification: { spending: 0, classified: 0 }, categoriesUnread: true }))
+    ).toBe('Attivi; i ruoli delle categorie non sono stati letti.');
+  });
+});
+
 describe('describeTransferFeeCategory', () => {
   it('says where a typed fee lands, subcategory included, and which account pays it', () => {
     expect(plain(describeTransferFeeCategory({ categoryName: 'Commissioni', subCategoryName: 'Bonifici' }))).toBe(
@@ -825,30 +872,81 @@ describe('describeSharing', () => {
 
 describe('describeBrokerConnections', () => {
   it('states the never-connected state', () => {
-    expect(plain(describeBrokerConnections({}))).toBe(
-      'Nessun broker collegato: la sincronizzazione legge posizioni e liquidità da Scalable, in sola lettura.'
+    expect(plain(describeBrokerConnections('scalable', {}))).toBe(
+      'Nessuna sincronizzazione Scalable: la sincronizzazione legge posizioni e liquidità, in sola lettura.'
     );
   });
 
   it('names the last sync, the positions and the cash', () => {
     expect(
       plain(
-        describeBrokerConnections({
+        describeBrokerConnections('scalable', {
           lastSyncAt: '2026-09-18T10:00:00.000Z',
           holdingsCount: 3,
           cashBalance: 1000,
         })
       )
     ).toBe(
-      'Ultima lettura 18/09/2026: 3 posizioni e liquidità 1000 € — i prezzi si aggiornano, le quantità restano del Registro.'
+      'Ultima lettura 18/09/2026 da Scalable: 3 posizioni e liquidità 1000 € — i prezzi si aggiornano, le quantità restano del Registro.'
     );
   });
 
   it('uses the singular for one position and drops the cash clause when absent', () => {
     expect(
-      plain(describeBrokerConnections({ lastSyncAt: '2026-09-18T10:00:00.000Z', holdingsCount: 1 }))
+      plain(
+        describeBrokerConnections('scalable', {
+          lastSyncAt: '2026-09-18T10:00:00.000Z',
+          holdingsCount: 1,
+        })
+      )
     ).toBe(
-      'Ultima lettura 18/09/2026: 1 posizione — i prezzi si aggiornano, le quantità restano del Registro.'
+      'Ultima lettura 18/09/2026 da Scalable: 1 posizione — i prezzi si aggiornano, le quantità restano del Registro.'
+    );
+  });
+
+  // The honesty rule, pinned: Trade Republic's portfolio payload carries NO quote, so the Scalable
+  // closing clause would be a claim the sync does not make. These two assertions are the load-bearing
+  // ones — if the branch ever collapsed back to the shared wording, the first goes red.
+  it('does not claim the broker updates prices for Trade Republic', () => {
+    const text = plain(
+      describeBrokerConnections('traderepublic', {
+        lastSyncAt: '2026-09-18T10:00:00.000Z',
+        holdingsCount: 2,
+        cashBalance: 500,
+      })
+    );
+    expect(text).toBe(
+      'Ultima lettura 18/09/2026 da Trade Republic: 2 posizioni e liquidità 500 € — le quantità restano del Registro, i prezzi arrivano da Yahoo.'
+    );
+    expect(text).not.toContain('i prezzi si aggiornano');
+  });
+
+  it('names the savings plans and drops the clause when there are none', () => {
+    expect(
+      plain(
+        describeBrokerConnections('traderepublic', {
+          lastSyncAt: '2026-09-18T10:00:00.000Z',
+          holdingsCount: 1,
+          savingsPlanCount: 1,
+        })
+      )
+    ).toContain('1 piano di accumulo');
+    // A count of zero is not a fact worth a clause: «nessun piano» would read as a claim about
+    // money that the sync may simply not have read.
+    expect(
+      plain(
+        describeBrokerConnections('traderepublic', {
+          lastSyncAt: '2026-09-18T10:00:00.000Z',
+          holdingsCount: 1,
+          savingsPlanCount: 0,
+        })
+      )
+    ).not.toContain('piano di accumulo');
+  });
+
+  it('states the Trade Republic empty state with its own scope', () => {
+    expect(plain(describeBrokerConnections('traderepublic', {}))).toBe(
+      'Nessuna sincronizzazione Trade Republic: la sincronizzazione legge posizioni, liquidità e piani di accumulo, in sola lettura.'
     );
   });
 });

@@ -16,6 +16,13 @@ import type { CategoryDeltaRow } from '@/lib/utils/comparisonDeltas';
 import { NO_SUBCATEGORY_KEY } from '@/types/expenses';
 import { getCategoryKey, getCategoryName, getSubCategoryKey, getSubCategoryLabel } from '@/lib/utils/expenseGrouping';
 import { MONTH_NAMES_SHORT } from '@/lib/utils/period';
+import {
+  isSpendingType,
+  resolveFlowAbsence,
+  SPENDING_EXPENSE_TYPES,
+  type FlowAbsence,
+  type SpendingExpenseType,
+} from '@/lib/utils/spendingRoles';
 
 // ─── The period ───────────────────────────────────────────────────────────────
 
@@ -237,19 +244,25 @@ export function buildYearlySpending(expenses: Expense[], historyStartYear: numbe
 
 // ─── Flow ─────────────────────────────────────────────────────────────────────
 
-export type SpendingType = 'fixed' | 'variable' | 'debt';
+/** The spending types, declared once in spendingRoles.ts (`SPENDING_EXPENSE_TYPES`). */
+export type SpendingType = SpendingExpenseType;
 
 /** The lowercase names the Flusso reading uses («Fisse 58%, variabili 37%, debiti 5%»). */
 export const SPENDING_TYPE_LABELS: Record<SpendingType, string> = { fixed: 'Fisse', variable: 'Variabili', debt: 'Debiti' };
-
-const SPENDING_TYPES: SpendingType[] = ['fixed', 'variable', 'debt'];
 
 export interface TypeShare {
   type: SpendingType;
   label: string;
   amount: number;
-  /** Share of the spending, 0-100. */
+  /** Share of the spending, 0-100, unrounded. */
   percentage: number;
+  /**
+   * The same share as printed — a whole percent, rounded ONCE here so the reading and the phone's
+   * legend print the same figure and the list adds up to exactly 100 (AGENTS.md → «A list that
+   * must add up adds up ON SCREEN»). No type is a remainder by definition, so the drift goes to the
+   * largest, where one point is the smallest relative error.
+   */
+  printedPercentage: number;
 }
 
 export interface FlowSummary {
@@ -285,9 +298,17 @@ export function summarizeFlow(expenses: Expense[]): FlowSummary {
     if (expense.type in byType) byType[expense.type as SpendingType] += amount;
   }
 
-  const typeShares = SPENDING_TYPES.filter((type) => byType[type] > 0)
-    .map((type) => ({ type, label: SPENDING_TYPE_LABELS[type], amount: byType[type], percentage: expensesTotal > 0 ? (byType[type] / expensesTotal) * 100 : 0 }))
+  const typeShares: TypeShare[] = SPENDING_EXPENSE_TYPES.filter((type) => byType[type] > 0)
+    .map((type) => {
+      const percentage = expensesTotal > 0 ? (byType[type] / expensesTotal) * 100 : 0;
+      return { type, label: SPENDING_TYPE_LABELS[type], amount: byType[type], percentage, printedPercentage: Math.round(percentage) };
+    })
     .sort((a, b) => b.amount - a.amount);
+  // Three shares round off by at most one point, and the largest of three is at least 33: the
+  // correction can never push it below zero.
+  if (typeShares.length > 0) {
+    typeShares[0].printedPercentage += 100 - typeShares.reduce((sum, share) => sum + share.printedPercentage, 0);
+  }
 
   return {
     incomeTotal,
@@ -295,6 +316,95 @@ export function summarizeFlow(expenses: Expense[]): FlowSummary {
     expensesTotal,
     categoryCount: spendingByCategory.size,
     typeShares,
+  };
+}
+
+/** One spending category inside a type block of the phone's type flow. */
+export interface TypeFlowCategory {
+  /** `getCategoryKey` of the rows — the identity a click hands to Analisi's entity focus. */
+  categoryKey: string;
+  categoryName: string;
+  value: number;
+}
+
+export interface TypeFlowBlock extends TypeShare {
+  /** Every category of the type, largest first. Sums to `amount`. */
+  categories: TypeFlowCategory[];
+}
+
+export interface TypeFlowBreakdown {
+  /** The spending types in the reading's own order (largest first), each with its categories. */
+  blocks: TypeFlowBlock[];
+  /** The bar's base: the period's spending (`flow.expensesTotal`), a magnitude. */
+  spending: number;
+  /** SIGNED income (`flow.incomeTotal`): a reversal lowers it, as on Periodo. */
+  income: number;
+  /** income − spending when positive, else 0: what the period put aside. */
+  surplus: number;
+  /** spending − income when positive, else 0: what the wealth covered. */
+  deficit: number;
+  /**
+   * Where the income ends along the spending bar, 0-100 (clamped), when spending ran past it.
+   * `null` with no deficit, and `null` when income is not positive (none, or a net reversal):
+   * a line at 0 — or left of the bar — would draw its label outside the tile.
+   */
+  incomeEdge: number | null;
+  /** Spending with income ≤ 0: every euro spent came from the wealth. */
+  noIncome: boolean;
+  /** Non-null exactly when there is nothing to draw (no spending and no surplus). */
+  absence: FlowAbsence | null;
+}
+
+/**
+ * The Flusso «Per tipo» on a phone, in numbers: the reading's type
+ * shares — taken from the SAME `FlowSummary` the sentence prints, so the bar and the words can
+ * never show two figures — plus each type's categories for the rows under it.
+ *
+ * Shares are of the SPENDING, not of what left the budget: the reading gives the types over the
+ * spending and the savings over the income, and a screen shows one base, never two figures on
+ * different bases. Savings therefore sit outside the bar, as `surplus`.
+ *
+ * Categories are keyed by (type, category) and labelled by their plain name: inside one type's
+ * block a qualifier could only repeat the block's own type (see `resolveDisplayLabels`). The map
+ * is PER TYPE because the key alone is not: two legacy rows without a `categoryId`, both named
+ * «Casa», one fixed and one variable, share the name-derived key and must still land apart.
+ */
+export function buildTypeFlowBreakdown(expenses: Expense[], flow: FlowSummary): TypeFlowBreakdown {
+  const byType = new Map<SpendingType, Map<string, TypeFlowCategory>>(SPENDING_EXPENSE_TYPES.map((type) => [type, new Map()]));
+  let rowCount = 0;
+  for (const expense of expenses) {
+    if (expense.type === 'income') rowCount++;
+    if (!isSpendingType(expense.type)) continue;
+    rowCount++;
+    const categories = byType.get(expense.type)!;
+    const categoryKey = getCategoryKey(expense);
+    const category = categories.get(categoryKey) ?? { categoryKey, categoryName: getCategoryName(expense), value: 0 };
+    category.value += Math.abs(expense.amount);
+    categories.set(categoryKey, category);
+  }
+
+  const blocks = flow.typeShares.map((share) => ({
+    ...share,
+    categories: Array.from(byType.get(share.type)!.values())
+      .filter((category) => category.value > 0)
+      .sort((a, b) => b.value - a.value),
+  }));
+  const spending = flow.expensesTotal;
+  const income = flow.incomeTotal;
+  const surplus = Math.max(0, income - spending);
+  const deficit = Math.max(0, spending - income);
+  const hasIncome = income > 0;
+  return {
+    blocks,
+    spending,
+    income,
+    surplus,
+    deficit,
+    // income / spending is below 1 whenever there is a deficit; the clamp keeps the line on the
+    // bar however the caller's rounding lands.
+    incomeEdge: hasIncome && deficit > 0 ? Math.min(100, Math.max(0, (income / spending) * 100)) : null,
+    noIncome: !hasIncome && spending > 0,
+    absence: resolveFlowAbsence(rowCount, spending + surplus),
   };
 }
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -12,7 +13,12 @@ import {
   ExpenseType,
   EXPENSE_TYPE_LABELS,
   ExpenseSubCategory,
+  SpendingRole,
+  SPENDING_ROLES,
+  SPENDING_ROLE_LABELS,
+  UNCLASSIFIED_SPENDING_LABEL,
 } from '@/types/expenses';
+import { isSpendingType } from '@/lib/utils/spendingRoles';
 import {
   createCategory,
   updateCategory,
@@ -26,6 +32,7 @@ import {
   TransferBoundaryError,
 } from '@/lib/services/expenseService';
 import { crossesTransferBoundary } from '@/lib/utils/expenseTypeTransition';
+import { queryKeys } from '@/lib/query/queryKeys';
 import { CategoryDeleteConfirmDialog } from './CategoryDeleteConfirmDialog';
 import { ResponsiveModal } from '@/components/ui/responsive-modal';
 import { Button } from '@/components/ui/button';
@@ -54,6 +61,7 @@ const categorySchema = z.object({
   type: z.enum(['fixed', 'variable', 'debt', 'income', 'transfer']),
   color: z.string().optional(),
   icon: z.string().optional(),
+  spendingRole: z.enum(['need', 'want', 'saving']).optional(),
 });
 
 type CategoryFormValues = z.infer<typeof categorySchema>;
@@ -86,6 +94,33 @@ const TYPE_OPTIONS: { value: ExpenseType; label: string; description: string }[]
   { value: 'transfer', label: EXPENSE_TYPE_LABELS.transfer, description: 'Spostamenti tra conti, investimenti' },
 ];
 
+// Select values cannot be empty strings: the absence of a role travels as a sentinel.
+const NO_ROLE = '__none__';
+const INHERIT_ROLE = '__inherit__';
+
+const SPENDING_ROLE_DESCRIPTIONS: Record<SpendingRole, string> = {
+  need: 'Casa, spesa, salute, trasporti: ciò che non si può tagliare',
+  want: 'Uscite, svago, viaggi, shopping: ciò che si sceglie',
+  saving: 'Uscite che restano patrimonio, oltre a quanto avanza nel periodo',
+};
+
+/**
+ * What a category write leaves stale in React Query. The taxonomy (and the 50/30/20 roles on it)
+ * is read by Analisi from `expenses.categories` under the global 5-minute staleTime: without this,
+ * a role set in Impostazioni reached the Flusso only minutes later (review of PR #400, F4). When the
+ * write also rewrote the ROWS — a rename or a type change cascades into them
+ * (`updateExpensesCategoryName` / `updateExpensesType`), a move or a reassignment re-points them —
+ * every expense list goes too (`expenses.all` is the prefix of the per-month keys).
+ *
+ * Called where the writes happen: this dialog (create, update, a subcategory's move or
+ * reassignment — it is mounted by Impostazioni, ExpenseDialog, CategoryMoveDialog and
+ * CategoryDeleteConfirmDialog alike) and the Impostazioni handlers that move or delete a category.
+ */
+export function invalidateCategoryCaches(queryClient: QueryClient, ownerId: string, { rowsChanged }: { rowsChanged: boolean }): void {
+  queryClient.invalidateQueries({ queryKey: queryKeys.expenses.categories(ownerId) });
+  if (rowsChanged) queryClient.invalidateQueries({ queryKey: queryKeys.expenses.all(ownerId) });
+}
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -98,6 +133,11 @@ export interface CategoryManagementDialogProps {
   initialName?: string;
   /** Pre-fill the new-subcategory input when opening in edit mode */
   initialSubCategoryName?: string;
+  /**
+   * settings.spendingRolesEnabled — shows the 50/30/20 role and the per-subcategory override.
+   * Off (the default), the dialog neither shows nor writes the role, so a stored one survives.
+   */
+  spendingRolesEnabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +156,9 @@ interface FormBodyProps {
   handleRemoveSubCategory: (id: string) => void;
   handleUpdateSubCategoryName: (id: string, name: string) => void;
   handleUpdateSubCategoryIcon: (id: string, icon: string | undefined) => void;
+  handleUpdateSubCategoryRole: (id: string, role: SpendingRole | undefined) => void;
   handleMoveSubCategory: ((id: string) => void) | null;
+  spendingRolesEnabled: boolean;
   form: ReturnType<typeof useForm<CategoryFormValues>>;
 }
 
@@ -132,7 +174,9 @@ function CategoryFormBody({
   handleRemoveSubCategory,
   handleUpdateSubCategoryName,
   handleUpdateSubCategoryIcon,
+  handleUpdateSubCategoryRole,
   handleMoveSubCategory,
+  spendingRolesEnabled,
   form,
 }: Readonly<FormBodyProps>) {
   const { register, setValue, control, formState: { errors } } = form;
@@ -140,7 +184,10 @@ function CategoryFormBody({
   const selectedType  = useWatch({ control, name: 'type' });
   const selectedIcon  = useWatch({ control, name: 'icon' });
   const selectedName  = useWatch({ control, name: 'name' });
+  const selectedRole  = useWatch({ control, name: 'spendingRole' });
   const subInputRef   = useRef<HTMLInputElement>(null);
+  // A role means something only for spending: income and transfers never reach Necessità/Desideri.
+  const showRoles = spendingRolesEnabled && !!selectedType && isSpendingType(selectedType);
 
   // The live preview shows the icon only for a name in the curated set (an unknown name keeps
   // the coloured tag); the component itself is read from the module-level map by `CategoryIcon`.
@@ -246,6 +293,46 @@ function CategoryFormBody({
         })()}
       </div>
 
+      {/* ---- Ruolo 50/30/20 (opt-in) ---- */}
+      {showRoles && (
+        <div className="space-y-2">
+          <Label htmlFor="cat-spending-role">Ruolo 50/30/20</Label>
+          <Select
+            value={selectedRole ?? NO_ROLE}
+            onValueChange={(v) =>
+              setValue('spendingRole', v === NO_ROLE ? undefined : (v as SpendingRole), { shouldDirty: true })
+            }
+          >
+            <SelectTrigger id="cat-spending-role" aria-label="Ruolo 50/30/20">
+              <span className={cn(!selectedRole && 'text-muted-foreground')}>
+                {selectedRole ? SPENDING_ROLE_LABELS[selectedRole] : UNCLASSIFIED_SPENDING_LABEL}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_ROLE}>
+                <div className="flex flex-col gap-0.5 py-0.5">
+                  <span className="font-medium">{UNCLASSIFIED_SPENDING_LABEL}</span>
+                  <span className="text-xs text-muted-foreground font-normal">
+                    Nel flusso di Analisi resta a parte, fuori dai tre ruoli
+                  </span>
+                </div>
+              </SelectItem>
+              {SPENDING_ROLES.map((role) => (
+                <SelectItem key={role} value={role}>
+                  <div className="flex flex-col gap-0.5 py-0.5">
+                    <span className="font-medium">{SPENDING_ROLE_LABELS[role]}</span>
+                    <span className="text-xs text-muted-foreground font-normal">{SPENDING_ROLE_DESCRIPTIONS[role]}</span>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            Vale per tutte le voci della categoria, anche passate; una sottocategoria può averne uno suo.
+          </p>
+        </div>
+      )}
+
       {/* ---- Aspetto: Icona + Colore ---- */}
       <div className="space-y-4 rounded-xl border border-border/60 bg-muted/30 p-4">
         <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70">Aspetto</p>
@@ -330,6 +417,32 @@ function CategoryFormBody({
                   className="h-8 flex-1 border-transparent bg-transparent shadow-none hover:bg-muted/50 focus-visible:bg-background focus-visible:border-input text-sm px-2"
                   aria-label="Nome sottocategoria"
                 />
+                {showRoles && (
+                  <Select
+                    value={sub.spendingRole ?? INHERIT_ROLE}
+                    onValueChange={(v) =>
+                      handleUpdateSubCategoryRole(sub.id, v === INHERIT_ROLE ? undefined : (v as SpendingRole))
+                    }
+                  >
+                    <SelectTrigger
+                      className="h-8 w-[6.5rem] shrink-0 px-2 text-xs"
+                      aria-label={`Ruolo 50/30/20 di ${sub.name}`}
+                    >
+                      <span className={cn('truncate', !sub.spendingRole && 'text-muted-foreground')}>
+                        {sub.spendingRole ? SPENDING_ROLE_LABELS[sub.spendingRole] : 'Eredita'}
+                      </span>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={INHERIT_ROLE}>
+                        Come la categoria
+                        {selectedRole ? ` (${SPENDING_ROLE_LABELS[selectedRole]})` : ` (${UNCLASSIFIED_SPENDING_LABEL.toLowerCase()})`}
+                      </SelectItem>
+                      {SPENDING_ROLES.map((role) => (
+                        <SelectItem key={role} value={role}>{SPENDING_ROLE_LABELS[role]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
                 <div className="flex items-center shrink-0">
                   {handleMoveSubCategory && (
                     <Button
@@ -414,9 +527,11 @@ export function CategoryManagementDialog({
   initialType,
   initialName,
   initialSubCategoryName,
+  spendingRolesEnabled = false,
 }: Readonly<CategoryManagementDialogProps>) {
   const { user } = useAuth();
   const { ownerId } = useActiveAccount();
+  const queryClient = useQueryClient();
 
   const [subCategories, setSubCategories] = useState<ExpenseSubCategory[]>([]);
   const [newSubCategoryName, setNewSubCategoryName] = useState('');
@@ -494,9 +609,15 @@ export function CategoryManagementDialog({
   useEffect(() => {
     if (!open) return;
     if (category) {
-      reset({ name: category.name, type: category.type, color: category.color || '#3b82f6', icon: category.icon });
+      reset({
+        name: category.name,
+        type: category.type,
+        color: category.color || '#3b82f6',
+        icon: category.icon,
+        spendingRole: category.spendingRole,
+      });
     } else {
-      reset({ name: initialName || '', type: initialType || 'variable', color: '#3b82f6', icon: undefined });
+      reset({ name: initialName || '', type: initialType || 'variable', color: '#3b82f6', icon: undefined, spendingRole: undefined });
     }
   }, [open, category, reset, initialType, initialName, initialSubCategoryName]);
 
@@ -521,6 +642,10 @@ export function CategoryManagementDialog({
 
   const handleUpdateSubCategoryIcon = (id: string, icon: string | undefined) => {
     setSubCategories((prev) => prev.map((s) => s.id === id ? { ...s, icon } : s));
+  };
+
+  const handleUpdateSubCategoryRole = (id: string, spendingRole: SpendingRole | undefined) => {
+    setSubCategories((prev) => prev.map((s) => s.id === id ? { ...s, spendingRole } : s));
   };
 
   const handleRemoveSubCategory = async (subCategoryId: string) => {
@@ -562,6 +687,8 @@ export function CategoryManagementDialog({
         setSubCategories(subCategories.filter((s) => s.id !== subCategoryToDelete.id));
         toast.success(`Sottocategoria "${subCategoryToDelete.name}" eliminata. Le spese rimarranno nella categoria senza sottocategoria.`);
       }
+      // The rows moved already, whether or not the dialog is then saved.
+      invalidateCategoryCaches(queryClient, ownerId, { rowsChanged: true });
       setDeleteSubCategoryDialogOpen(false);
       setSubCategoryToDelete(null);
       setSubCategoryExpenseCount(0);
@@ -612,6 +739,7 @@ export function CategoryManagementDialog({
       );
       const destLabel = resolvedSubName ? `${newCategory.name} \u2192 ${resolvedSubName}` : newCategory.name;
       toast.success(`${movedCount} ${movedCount === 1 ? 'transazione spostata' : 'transazioni spostate'} da "${category.name} \u2192 ${subCategoryToMove.name}" a "${destLabel}"`);
+      invalidateCategoryCaches(queryClient, ownerId, { rowsChanged: true });
       setMoveSubCategoryDialogOpen(false);
       setSubCategoryToMove(null);
       setSubCategoryMoveExpenseCount(0);
@@ -633,6 +761,16 @@ export function CategoryManagementDialog({
         icon: data.icon,
         subCategories,
       };
+      // Only a dialog that SHOWED the role writes it (the key present with undefined clears it —
+      // see updateCategory). A category moved to income or transfer sheds its roles: they would
+      // be ignored by resolveSpendingRole anyway, and a stale one would resurface on a type flip back.
+      if (spendingRolesEnabled) {
+        const spending = isSpendingType(data.type);
+        categoryData.spendingRole = spending ? data.spendingRole : undefined;
+        if (!spending) {
+          categoryData.subCategories = subCategories.map((sub) => ({ ...sub, spendingRole: undefined }));
+        }
+      }
       if (category) {
         await updateCategory(category.id, categoryData, ownerId);
         toast.success('Categoria aggiornata');
@@ -640,6 +778,9 @@ export function CategoryManagementDialog({
         await createCategory(ownerId, categoryData);
         toast.success('Categoria creata');
       }
+      // The same comparison updateCategory makes before cascading into the rows.
+      const rowsChanged = !!category && (category.name !== categoryData.name || category.type !== categoryData.type);
+      invalidateCategoryCaches(queryClient, ownerId, { rowsChanged });
       onSuccess?.();
       onClose();
     } catch (error) {
@@ -667,7 +808,9 @@ export function CategoryManagementDialog({
     handleRemoveSubCategory,
     handleUpdateSubCategoryName,
     handleUpdateSubCategoryIcon,
+    handleUpdateSubCategoryRole,
     handleMoveSubCategory: category ? handleMoveSubCategory : null,
+    spendingRolesEnabled,
     form,
   };
 

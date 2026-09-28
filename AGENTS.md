@@ -320,7 +320,7 @@ file used to carry.
 - A Borsa Italiana bond quote is `% of par`, always, and `lib/utils/bondPricing.ts` is the ONE conversion (`quote / 100 × nominal × coefficient`, nominal **1 €** by default). Never re-implement it; never guard it on `nominal > 1` again (issue #340).
 - Every G/P, tax estimate, YOC and PMC cell stands EUR against EUR through `lib/utils/costBasisEur.ts` (`costBasisPerUnitEur`, fees included); `undefined` without a EUR PMC — print nothing, never dollars against euros.
 - Δ columns are UNIT-PRICE variations, not P&L; `isHeld` (`quantity > 0`) gates every count/share/sum; numbers not in the payload are born in `patrimonioSummary.ts`; the page owns every dialog.
-- Il resto — the «Mutuo» tile (interest measured only from the settled instalments, `mortgageSummary.ts`), BTP€i, the «Andamento» view, `hasCostBasis`, `MIN_ANNUALIZABLE_DAYS`, the instrument driver, `suggestIsLiquid`, the cash-account picker rule, the article helpers, the failed-overview branch, the `averageCostEur` backfill — in `doc/guide/patrimonio.md`.
+- Il resto — the «Mutuo» tile (interest measured only from the settled instalments, `mortgageSummary.ts`), the split class chip of a composite instrument (`describeAssetClassChip`), BTP€i, the «Andamento» view, `hasCostBasis`, `MIN_ANNUALIZABLE_DAYS`, the instrument driver, `suggestIsLiquid`, the cash-account picker rule, the article helpers, the failed-overview branch, the `averageCostEur` backfill — in `doc/guide/patrimonio.md`.
 
 ### Asset Trade Ledger → `doc/guide/registro-operazioni.md`
 - ALL trade money-math (replay, PMC, realized P&L, XIRR, invested capital) lives in `assetTransactionUtils.ts`, pure; the service/route layer is a thin atomic writer. A new `AssetTransactionType` updates the replay switch, the zod schema AND `TransactionDialog`.
@@ -351,7 +351,7 @@ file used to carry.
 - A running year is NOT clipped (`periodExpenses` takes the whole calendar year); the pacing compares year vs year−1 on the period's own span (`resolveComparisonScope`), the running MONTH on the same days of its baseline (`throughDay`, rows through `dayOf`), plus the shared `scheduledSentence`. The history CLOSES on the current year (`availableYears`, the Storico slice, the two charts' `BucketCeiling`): a plan's rows in 2043 are a calendar, not years.
 - The Scheda is a tile of the grid; every entry point lands through `handleEntitySelect`; URL focus is three FLAT params (`?focusType&focusCat&focusSub`); closing it returns the focus to its opener. Its pace divides the LIVED total by the months lived (`computeEntityRunRate`: `livedTotal`/`livedMonths`), the projection takes the calendar as a FLOOR under the pace, and its period carries the page's `throughMonth` cut.
 - Every number has one source (`analisiSummary.ts`, `comparisonDeltas.ts`); every sentence from `analisiNarrative.ts`/`cashflowNarrative.ts`, never a component.
-- Il resto — «Fuori scala», the Periodo pacing, `EntityDossier`, the Sankey rules, Playwright — in `doc/guide/cashflow-analisi.md`.
+- Il resto — «Fuori scala», the Periodo pacing, `EntityDossier`, the Sankey rules, the optional Flusso by 50/30/20 role (`spendingRoles.ts`), the Flusso's drawing below 640px (a share bar and rows, a legibility threshold of the chart), Playwright — in `doc/guide/cashflow-analisi.md`.
 
 ### Cashflow › Budget → `doc/guide/cashflow-budget.md`
 - Opt-in (`reconcileBudgetItems` never auto-creates); NO period axis (always the current Italian month; annual budgets are year-to-date on their own Off-Axis tile).
@@ -370,9 +370,10 @@ file used to carry.
 
 ### Cashflow › Divisione → `doc/guide/cashflow-divisione.md`
 - Opt-in, on Tracciamento's period axis. ONE field carries the feature: `Expense.personalMemberId`; absent (or `null`) MEANS «in comune» (so no migration). Members are Previdenza's `FamilyMember`s, never a second list. NOT denormalized to a name.
-- The share is NEVER invented: `resolveSplitBasis` returns `unavailable` (with `missingNames`) below two people, with no labor category, or when one person has no salary in the period; every split figure is then `null`. Labor income nobody owns is DECLARED (`unattributedSalary`), never dropped.
+- The share is NEVER invented: `resolveSplitBasis` returns `unavailable` (with `missingNames`) below two people or when one person has no income attributed in the period; every split figure is then `null`. Income nobody owns is DECLARED (`unattributedIncome`), never dropped.
+- Income left «in comune» pays the pool FIRST (2026-09-27): the shares divide `CommonSpending.toSplit = max(0, total − income)`, a `surplus` is declared and never distributed, the booked pool is net of the income already received. The hero stays the gross; the net is the «Da dividere» row under it and the verdict's clause.
 - A residual is of money that has MOVED: the page prints and colours `remainingBooked`, and where the calendar takes it is a separate clause (2026-09-21). `remaining` is the whole period's.
-- The base is the PERIOD's attributed labor income (owner's decision, 2026-08-31) — the most faithful and most volatile reading; do not «stabilise» it silently.
+- The base is the PERIOD's attributed income, WHATEVER its category (owner's decision, 2026-09-27; labor-only from 2026-08-31 until then) — `laborIncomeCategoryIds` is not read here, the sentences say «entrate». The most faithful and most volatile reading; do not «stabilise» it silently.
 - `allocateByShare` charges the rounding residual to the LARGEST share and re-rounds — untestable on two shares (they cancel), test on three. Writing it is a FOUR-place fan-out; the readers outside the tab are Tracciamento's «Intestatario» filter and the owner chip (`movementsOwnerFilter.ts`, same contract).
 - Il resto — the deleted-member bucket, the dialog control, `effectiveTab`, the one-cell people row, the verdict-explains/tile-instructs split, «Attribuisci spese» — in `doc/guide/cashflow-divisione.md`.
 
@@ -413,7 +414,7 @@ file used to carry.
 - "Versa" and "Preleva" are ONE tree with the sign flipped; THE ASYMMETRY is the design (buy what you do not own, never sell it). The balance score is band-INDEPENDENT.
 - The subcategory is OPTIONAL, so every euro lands in a bucket (`NO_SUBCATEGORY_LABEL`); the orphaned target (`findOrphanedTargets`/`stripOrphanedSubTargets`) is the trap. `ASSET_CLASS_SEQUENCE` is the ONE enumeration of the union — a hand-listed class drops its EUROS, not just its label.
 - Ribilancia descends to the INSTRUMENT through the flow plans' own splits (`RebalanceDescent`, 2026-09-21) — a sell through the withdrawal nodes, a buy through the contribution ones, Σchildren === the class amount; never a second algorithm. A plan that sells prices the withholding (`estimatePlanSaleTax`), `null` WITH a reason when a leg has no EUR basis or rate.
-- «Prelevare 1000 €» means 1000 € IN HAND: the withdrawal sells the GROSS that leaves the request after the withholding (`solveWithdrawalGross`), a FIXED POINT and never a division by (1 − rate) — the tax follows which instruments the plan drains, and those follow the amount.
+- «Prelevare 1000 €» means 1000 € IN HAND: the withdrawal sells the GROSS that leaves the request after the withholding (`solveWithdrawalGross`), a FIXED POINT and never a division by (1 − rate) — the tax follows which instruments the plan drains, and those follow the amount. The leverage engine too: its orders become the same class → instrument tree (a composite split by composition, a same-class swap as two moves).
 - A DORMANT class (`isDormantClass`: neither value nor target) keeps its row, loses its verdict and leaves every count — the page reads `activeClassGaps`, never the raw `summarizeClassGaps`.
 - A level that repeats the one above it is dropped (`collapseRepeatedLevels`), and which row is an INSTRUMENT is the node's own `isInstrument`, never its depth — a lifted ETF at depth 1 read «→ 100,0%» otherwise.
 - Il resto — the Bull's formula, the leverage engine, the five label maps, the action colours' measured lightness band and the `lab()` trap that made the old clamp dead code, the verdict-over-tiles rules — in `doc/guide/allocazione.md`.
@@ -448,7 +449,7 @@ file used to carry.
 - Il resto — `PDF_RAMP`, the class labels, `signedPct`/`signedEur` it-IT, the deterministic-comparison rule, the AI-prompt body — in `doc/guide/email-pdf.md`.
 
 ### Impostazioni — tessere senza verdetto → `doc/guide/impostazioni.md`
-- The page has NO verdict and must not grow one (a configuration page measures nothing) — it keeps the CADENCE: 21 `describe*` functions in `settingsNarrative.ts`, NO `build*Verdict`.
+- The page has NO verdict and must not grow one (a configuration page measures nothing) — it keeps the CADENCE: 23 `describe*` functions in `settingsNarrative.ts`, NO `build*Verdict`.
 - ONE «Salva», so the save state is PER TAB (2026-09-22): a dot on each tab holding edits, a bottom bar naming them with «Annulla modifiche» (a re-read, not a copy); the target rules are `allocationTargetValidation.ts`, which says WHERE they failed so «Salva» opens the group and focuses the field. A failed read here is never an empty list (members, categories, accounts).
 - A reading declares the effect DOWNSTREAM, not the control under it; the Narrative Honesty Rule holds (a missing input drops its clause).
 - A field another page OWNS is DECLARED, never edited here («Parametri del piano» from FIRE, «Assistente» a mirror that loses on read). The colour theme and light/dark mode save themselves, outside `handleSave`.
@@ -593,7 +594,9 @@ file used to carry.
   lives in `git show 4b0a2dd`, not in the tree. A hand-written SVG that must glide between windows resamples the OLD series onto the new length and tweens per
   index (`lib/hooks/useMorphingSeries.ts`); the hover reads the landed data, never the frame.
 - **Never pass `useChartColors()` to a Nivo/react-spring component**: `@react-spring/web` cannot interpolate hex→oklch
-  and throws on load. Sankey node colors stay hardcoded hex; only Recharts is react-spring-free.
+  and throws on load. Sankey node colors are HEX: hardcoded, or a theme token resolved to hex by `useCssColorTokens` +
+  `lib/utils/cssColorToHex.ts` (the Flusso's five `--role-*`, read only while that Sankey is drawn — the hook takes
+  `enabled`); only Recharts is react-spring-free.
 - **Three separate tooltip style props, none inherited**: `contentStyle`, `labelStyle`, `itemStyle` — omitting
   `itemStyle` leaves value rows at Recharts' hardcoded colour, invisible on dark. Define all three as module-level `as
   const` objects using `var(--card)`/`var(--border)`/`var(--card-foreground)`.
@@ -786,7 +789,14 @@ file used to carry.
   by guessing. **Merging an accepted PR "with changes" means applying its diff to the working tree, not merging its
   commits** (2026-09-07): `git diff base...head > pr.patch`, `git apply --reject`, the rejected hunk redone by hand
   (develop had moved under it), then the session's own fixes on top — one commit, the author as `Co-authored-by`, and
-  the review's list of changes visible in the same diff.
+  the review's list of changes visible in the same diff. **A contribution that lands while `doc/perf/` or
+  `doc/mobile/` are open** (2026-09-27) is also crossed with the open specs — for every file it touches, grep both
+  dossiers: a cited line that moves, a count that changes, a baseline that ages, a rule of the spec the new code should
+  already follow — and the specs are amended in the same commit. It lands BEFORE a spec that rewrites the same files
+  (the contributor is the one who would rebase), after it only when it depends on what that spec builds. The PR's own
+  `CLAUDE.md` and draft hunks are never taken. Look first for the five defects all three PRs of that day had: a
+  sentence or a number born in a component; an overflow asserted on `document` instead of `main`; an absence asserted
+  with no positive anchor; a hook that runs with its feature off; a write that does not invalidate the key its reader reads.
 - **Run the suite under `TZ=Europe/Rome` too.** Every date fixture is stamped at noon, twelve hours clear of the DST
   edge, so a whole class of timezone bug is structurally invisible — while production dates are **local midnight** and
   the pure layer runs in the user's browser. Compute day-of-year from calendar fields in UTC (`Date.UTC(y,m,d) -

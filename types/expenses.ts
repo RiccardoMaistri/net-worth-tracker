@@ -34,10 +34,30 @@ export const NO_SUBCATEGORY_LABEL = 'Senza sottocategoria';
 // same way — see lib/utils/expenseGrouping.ts.
 export const UNCATEGORIZED_LABEL = 'Senza categoria';
 
+// The 50/30/20 role of a spending category (opt-in, settings.spendingRolesEnabled).
+// Lives ONLY on the category/subcategory documents, never on an Expense row: rows carry
+// categoryId, so a reclassification is retroactive with no bulk update. Absent = «Da
+// classificare». Meaningful only for spending types (fixed/variable/debt) — resolved in
+// lib/utils/spendingRoles.ts, the one place that decides a row's role.
+export type SpendingRole = 'need' | 'want' | 'saving';
+
+export const SPENDING_ROLES: SpendingRole[] = ['need', 'want', 'saving'];
+
+export const SPENDING_ROLE_LABELS: Record<SpendingRole, string> = {
+  need: 'Necessità',
+  want: 'Desideri',
+  saving: 'Risparmi',
+};
+
+export const UNCLASSIFIED_SPENDING_LABEL = 'Da classificare';
+
 export interface ExpenseSubCategory {
   id: string;
   name: string;
   icon?: string;
+  // Overrides the parent category's role for this subcategory only (WiFi = need inside a
+  // want-classified Abbonamenti). Absent = inherit the category's role.
+  spendingRole?: SpendingRole;
 }
 
 export interface ExpenseCategory {
@@ -47,6 +67,7 @@ export interface ExpenseCategory {
   type: ExpenseType;
   color?: string;
   icon?: string;
+  spendingRole?: SpendingRole;
   subCategories: ExpenseSubCategory[];
   createdAt: Date;
   updatedAt: Date;
@@ -57,6 +78,9 @@ export interface ExpenseCategoryFormData {
   type: ExpenseType;
   color?: string;
   icon?: string;
+  // On update, the KEY present with an undefined value clears the stored role (deleteField);
+  // the key absent leaves it untouched — see expenseCategoryService.updateCategory.
+  spendingRole?: SpendingRole;
   subCategories?: ExpenseSubCategory[];
 }
 

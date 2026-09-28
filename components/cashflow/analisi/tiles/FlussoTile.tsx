@@ -7,24 +7,52 @@ import type { Narrative } from '@/lib/utils/narrative';
 import {
   buildBudgetFlowData,
   buildBudgetFlowDataWithSubcategories,
+  buildSpendingRoleDrillDownData,
+  buildSpendingRolesFlowData,
+  buildSpendingRolesFlowDataWithSubcategories,
   buildTypeDrillDownData,
   countSankeyLayers,
+  DEFAULT_SPENDING_ROLE_PALETTE,
   resolveSankeyHeight,
   MAX_SUBCATEGORY_CATEGORIES,
   type SankeyNodeDescriptor,
   type SankeyView,
+  type SpendingRolePalette,
 } from '@/lib/utils/cashflowSankey';
+import { SPENDING_BUCKET_LABELS, type SpendingBucket, type SpendingRoleSource, type SpendingRolesSummary } from '@/lib/utils/spendingRoles';
+import { buildTypeFlowBreakdown, type FlowSummary } from '@/lib/utils/analisiSummary';
+import type { ScheduledSlice } from '@/lib/utils/tracciamentoSummary';
+import { useCssColorTokens } from '@/lib/hooks/useCssColorTokens';
+import { SPENDING_ROLE_TOKEN } from '@/lib/constants/spendingRoleColors';
 import { narrativeToText } from '@/lib/utils/narrative';
 import { cn } from '@/lib/utils';
 import { Tile } from '@/components/ui/tile';
+import { AsideToggle } from '@/components/ui/aside-toggle';
 import { DrillBreadcrumb } from '@/components/ui/drill-breadcrumb';
 import { CashflowSankeyChart } from '@/components/cashflow/CashflowSankeyChart';
+import { SpendingRolesMobileFlow } from '@/components/cashflow/analisi/SpendingRolesMobileFlow';
+import { SpendingTypesMobileFlow } from '@/components/cashflow/analisi/SpendingTypesMobileFlow';
+
+/** The 50/30/20 view's inputs; `null` while settings.spendingRolesEnabled is off. */
+export interface SpendingRolesFlowInput {
+  categories: SpendingRoleSource[];
+  summary: SpendingRolesSummary;
+  reading: Narrative | null;
+}
 
 interface FlussoTileProps {
   /** The period's rows (income + spending); transfers are not flows. */
   expenses: Expense[];
+  /** Below 640px: the tile draws a share bar and rows, never a Sankey. */
   isMobile: boolean;
+  /** The reading of the type view. */
   reading: Narrative | null;
+  /** The reading's own figures (`summarizeFlow`) — the phone's type bar is built from them, only when drawn. */
+  flow: FlowSummary;
+  spendingRoles: SpendingRolesFlowInput | null;
+  /** The period's not-yet-happened slice and how far it reaches: the phone's surplus note declares it. */
+  scheduled: ScheduledSlice;
+  scheduledHorizon: string | null;
   /**
    * Category/subcategory node clicks land HERE, not in an internal drill — the page routes
    * them to the one entity-focus path every other entry point uses.
@@ -33,43 +61,107 @@ interface FlussoTileProps {
   className?: string;
 }
 
-/** The only internal drill left: one expense type's flow. */
-interface TypeDrillState {
-  expenseType: ExpenseType;
-  /** The TYPE node's own colour — the drill-down view derives its shades from it. */
-  color: string;
-}
+type FlowMode = 'types' | 'roles';
+
+// Parallel names that say what the flow is grouped by, one always pressed: the tile-aside view
+// switch (AsideToggle — one Tab stop, the selected option; 44px below desktop:).
+const FLOW_MODE_OPTIONS: ReadonlyArray<{ value: FlowMode; label: string }> = [
+  { value: 'roles', label: 'Per ruolo' },
+  { value: 'types', label: 'Per tipo' },
+];
+
+/**
+ * The only internal drill left: one expense type's flow, or one role's. `color` is the root
+ * node's own colour — the drill-down view derives its shades from it.
+ */
+type DrillState =
+  | { kind: 'type'; expenseType: ExpenseType; color: string }
+  | { kind: 'role'; bucket: SpendingBucket; color: string };
 
 /**
  * «Come scorrono i soldi?» — the app's one Sankey inside a tile: eyebrow, the reading over the
- * flow, the view's size and its toggles as the aside, then the plot. The tile owns the two
- * bits of navigation the chart has — the subcategory layer and the single type drill — and
- * builds the view, so the words above the plot describe exactly what is drawn.
+ * flow, the view's size and its toggles as the aside, then the plot. The tile owns the navigation
+ * the chart has — the view (by type or by 50/30/20 role, the latter the default once the setting is
+ * on), the subcategory layer and the single type/role drill — and builds the view, so the words
+ * above the plot describe exactly what is drawn.
+ *
+ * THE FLUSSO PICKS ITS DRAWING AT 640px (owner's decision, 2026-09-27): a legibility threshold of
+ * the chart, not a second composition. From 640 the Sankey; below it, where a four-column flow gets
+ * ~80px a column, the SAME figures as a share bar and ranked rows — SpendingRolesMobileFlow for the
+ * roles view, SpendingTypesMobileFlow for the type view, both drawn by FlowShareMobile. Below 640
+ * no Sankey model is built at all (no view, no height, no label), and the role colours are not read.
  */
-export function FlussoTile({ expenses, isMobile, reading, onEntityClick, className }: FlussoTileProps) {
-  const [drill, setDrill] = useState<TypeDrillState | null>(null);
+export function FlussoTile({ expenses, isMobile, reading, flow, spendingRoles, scheduled, scheduledHorizon, onEntityClick, className }: FlussoTileProps) {
   const [showSubcategories, setShowSubcategories] = useState(false);
+  const [preferredMode, setPreferredMode] = useState<FlowMode>('roles');
+  // A drill is a place INSIDE the Sankey, and the Sankey exists only from 640px. Stored WITH the
+  // width it was opened at (AGENTS.md → «State belonging to a subject must be stored WITH its
+  // subject»), it resolves to none as soon as the viewport crosses below 640 — no effect resets it,
+  // and the phone never builds a view for it; widened again, the reader is back where they were.
+  const [storedDrill, setStoredDrill] = useState<{ isMobile: boolean; drill: DrillState } | null>(null);
+  const drill = storedDrill !== null && storedDrill.isMobile === isMobile ? storedDrill.drill : null;
+  const setDrill = (next: DrillState | null) => setStoredDrill(next ? { isMobile, drill: next } : null);
 
-  const view = useMemo((): SankeyView => {
-    if (drill) return buildTypeDrillDownData(expenses, drill.expenseType, drill.color, isMobile);
-    return showSubcategories ? buildBudgetFlowDataWithSubcategories(expenses, isMobile) : buildBudgetFlowData(expenses, isMobile);
-  }, [expenses, drill, isMobile, showSubcategories]);
+  // With the setting off there is only one view, whatever was chosen before.
+  const mode: FlowMode = spendingRoles ? preferredMode : 'types';
+  // The role colours are read from the theme only while the roles Sankey is on screen: with the
+  // setting off, on «Per tipo» or on a phone nothing paints them, and the read would cost a second
+  // render of the tile and a second build of the Sankey for nothing (PERF-12/PERF-14).
+  const rolesSankeyDrawn = !isMobile && spendingRoles !== null && mode === 'roles';
+  // SPENDING_ROLE_TOKEN is a module-level constant, so the hook's effect sees a stable identity.
+  const palette: SpendingRolePalette = useCssColorTokens(SPENDING_ROLE_TOKEN, DEFAULT_SPENDING_ROLE_PALETTE, rolesSankeyDrawn);
 
-  const viewKey = drill ? `type-${drill.expenseType}` : `budget-${showSubcategories ? 'subcategories' : 'categories'}`;
-  const modeLabel = drill ? 'Dettaglio per tipologia' : showSubcategories ? `Con sottocategorie · prime ${MAX_SUBCATEGORY_CATEGORIES} categorie` : 'Vista compatta';
+  // Every view that does NOT read the palette — the type flow and both drills (a drill takes its
+  // colour from the clicked node) — so a palette read never rebuilds them. Null on a phone.
+  const plainView = useMemo((): SankeyView | null => {
+    if (isMobile) return null;
+    if (drill?.kind === 'type') return buildTypeDrillDownData(expenses, drill.expenseType, drill.color);
+    if (drill?.kind === 'role' && spendingRoles) return buildSpendingRoleDrillDownData(expenses, spendingRoles.categories, drill.bucket, drill.color);
+    if (mode === 'roles') return null;
+    return showSubcategories ? buildBudgetFlowDataWithSubcategories(expenses) : buildBudgetFlowData(expenses);
+  }, [isMobile, drill, expenses, spendingRoles, mode, showSubcategories]);
+
+  // The roles flow, the one view painted with the theme's role colours.
+  const rolesView = useMemo((): SankeyView | null => {
+    if (!rolesSankeyDrawn || drill || !spendingRoles) return null;
+    return showSubcategories
+      ? buildSpendingRolesFlowDataWithSubcategories(expenses, spendingRoles.categories, palette)
+      : buildSpendingRolesFlowData(expenses, spendingRoles.categories, palette);
+  }, [rolesSankeyDrawn, drill, spendingRoles, showSubcategories, expenses, palette]);
+
+  const view = rolesView ?? plainView;
+
+  // The phone's type bar and rows, built only when they are what the tile draws.
+  const typeBreakdown = useMemo(() => (isMobile && mode === 'types' ? buildTypeFlowBreakdown(expenses, flow) : null), [isMobile, mode, expenses, flow]);
+
+  const layer = showSubcategories ? 'subcategories' : 'categories';
+  const viewKey = drill
+    ? drill.kind === 'type' ? `type-${drill.expenseType}` : `role-${drill.bucket}`
+    : `${mode === 'roles' ? 'roles' : 'budget'}-${layer}`;
+  const modeLabel = drill
+    ? drill.kind === 'type' ? 'Dettaglio per tipologia' : 'Dettaglio per ruolo'
+    : showSubcategories ? `Con sottocategorie · prime ${MAX_SUBCATEGORY_CATEGORIES} categorie` : 'Vista compatta';
+  const drillLabel = drill ? (drill.kind === 'type' ? EXPENSE_TYPE_LABELS[drill.expenseType] : SPENDING_BUCKET_LABELS[drill.bucket]) : null;
+  const shownReading = mode === 'roles' && spendingRoles && !drill ? spendingRoles.reading : reading;
   // The plot grows with its widest column, so every label keeps its own line (see resolveSankeyHeight).
-  const height = resolveSankeyHeight(countSankeyLayers(view), isMobile);
+  const height = view ? resolveSankeyHeight(countSankeyLayers(view)) : 0;
   // The chart is an image to a screen reader: its name is the tile's reading and its size.
-  const chartLabel = `Flusso del periodo, ${modeLabel.toLowerCase()}: ${view.nodes.length} nodi e ${view.links.length} flussi.${reading ? ` ${narrativeToText(reading)}` : ''}`;
+  const chartLabel = view
+    ? `Flusso del periodo, ${modeLabel.toLowerCase()}: ${view.nodes.length} nodi e ${view.links.length} flussi.${shownReading ? ` ${narrativeToText(shownReading)}` : ''}`
+    : '';
 
   const handleNodeClick = (descriptor: SankeyNodeDescriptor, color: string) => {
     switch (descriptor.kind) {
       case 'budget':
       case 'savings':
+      case 'deficit':
         return;
       case 'expenseType':
         // Clicking the root of the view we are already in is a no-op, not a re-entry.
-        if (!drill) setDrill({ expenseType: descriptor.expenseType, color });
+        if (!drill) setDrill({ kind: 'type', expenseType: descriptor.expenseType, color });
+        return;
+      case 'spendingRole':
+        if (!drill) setDrill({ kind: 'role', bucket: descriptor.bucket, color });
         return;
       case 'category':
         onEntityClick({ expenseType: descriptor.expenseType, categoryKey: descriptor.categoryKey });
@@ -80,16 +172,26 @@ export function FlussoTile({ expenses, isMobile, reading, onEntityClick, classNa
     }
   };
 
+  const handleModeChange = (next: FlowMode) => {
+    setPreferredMode(next);
+    setDrill(null);
+  };
+
   return (
     <Tile
       eyebrow="Flusso"
       aside={
         <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-          <span>
-            {modeLabel} · <span className="font-mono tabular-nums">{view.nodes.length}</span> nodi ·{' '}
-            <span className="font-mono tabular-nums">{view.links.length}</span> flussi
-          </span>
-          {!drill && (
+          {view && (
+            <span>
+              {modeLabel} · <span className="font-mono tabular-nums">{view.nodes.length}</span> nodi ·{' '}
+              <span className="font-mono tabular-nums">{view.links.length}</span> flussi
+            </span>
+          )}
+          {spendingRoles && !drill && (
+            <AsideToggle options={FLOW_MODE_OPTIONS} value={mode} onChange={handleModeChange} ariaLabel="Raggruppa il flusso" />
+          )}
+          {!drill && !isMobile && (
             <button
               type="button"
               onClick={() => setShowSubcategories((value) => !value)}
@@ -104,7 +206,7 @@ export function FlussoTile({ expenses, isMobile, reading, onEntityClick, classNa
           )}
         </div>
       }
-      reading={reading}
+      reading={shownReading}
       className={className}
     >
       {drill && (
@@ -119,24 +221,42 @@ export function FlussoTile({ expenses, isMobile, reading, onEntityClick, classNa
           </button>
           <DrillBreadcrumb
             ariaLabel="Posizione nel flusso"
-            steps={[{ label: 'Flusso', onClick: () => setDrill(null) }, { label: EXPENSE_TYPE_LABELS[drill.expenseType] }]}
+            steps={[{ label: 'Flusso', onClick: () => setDrill(null) }, { label: drillLabel ?? '' }]}
           />
         </div>
       )}
-      {/* The mobile chart drops small slices for legibility — declared, never silent. */}
-      {isMobile && (
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          Su schermi piccoli il grafico mostra solo le voci principali — l&apos;elenco completo è nelle tessere per categoria.
-        </p>
+      {isMobile ? (
+        spendingRoles && mode === 'roles' ? (
+          <SpendingRolesMobileFlow summary={spendingRoles.summary} scheduled={scheduled} horizon={scheduledHorizon} onEntityClick={onEntityClick} />
+        ) : (
+          typeBreakdown && (
+            <SpendingTypesMobileFlow breakdown={typeBreakdown} scheduled={scheduled} horizon={scheduledHorizon} onEntityClick={onEntityClick} />
+          )
+        )
+      ) : (
+        view && (
+          <div className="mt-3">
+            <CashflowSankeyChart
+              view={view}
+              viewKey={viewKey}
+              height={height}
+              drilled={drill !== null}
+              ariaLabel={chartLabel}
+              onNodeClick={handleNodeClick}
+              nodeSort={mode === 'roles' && !drill ? 'input' : 'auto'}
+            />
+          </div>
+        )
       )}
-      <div className="mt-3">
-        <CashflowSankeyChart view={view} viewKey={viewKey} isMobile={isMobile} height={height} drilled={drill !== null} ariaLabel={chartLabel} onNodeClick={handleNodeClick} />
-      </div>
       {/* What a click does, in words — it used to live in a hover tooltip only, invisible to touch. */}
       <p className="mt-auto border-t border-border pt-3.5 text-[11px] text-muted-foreground">
-        {drill
-          ? 'Una categoria apre la sua scheda; «Indietro» torna al flusso intero.'
-          : 'Un tipo di spesa apre il suo dettaglio; una categoria o una sottocategoria apre la scheda.'}
+        {isMobile
+          ? 'Una categoria apre la sua scheda.'
+          : drill
+            ? 'Una categoria apre la sua scheda; «Indietro» torna al flusso intero.'
+            : mode === 'roles'
+              ? 'Un ruolo apre il suo dettaglio; una categoria o una sottocategoria apre la scheda.'
+              : 'Un tipo di spesa apre il suo dettaglio; una categoria o una sottocategoria apre la scheda.'}
       </p>
     </Tile>
   );

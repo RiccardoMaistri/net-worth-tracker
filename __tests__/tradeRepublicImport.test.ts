@@ -1,0 +1,357 @@
+/**
+ * The pure Trade Republic layer: the three topic payloads in, an import plan out.
+ *
+ * Every fixture here is a REAL `compactPortfolioByType` / `cash` / `savingsPlans` shape taken from
+ * the SDK's arktype schemas, not a shape invented for the test — a parser that only ever sees a
+ * friendly fixture is a parser that has never met the broker.
+ */
+
+import { describe, expect, it } from 'vitest';
+import {
+  buildTrImportPlan,
+  mapTrHoldingToAssetFormData,
+  mapTrType,
+  parseTrCash,
+  parseTrHoldings,
+  parseTrSavingsPlans,
+  TrParseError,
+  TR_CASH_TICKER,
+  type TrHoldingInput,
+} from '@/lib/utils/tradeRepublicImport';
+
+const PORTFOLIO = {
+  categories: [
+    {
+      categoryType: 'etf',
+      positions: [
+        {
+          isin: 'IE00B3VTMJ91',
+          averageBuyIn: '112,44',
+          netSize: '12,5',
+          virtualSize: '12,5',
+          status: 'active',
+          instrumentType: 'etf',
+          name: 'iShares Core MSCI World',
+          derivativeInfo: null,
+          bondInfo: null,
+          imageId: 'img-1',
+        },
+      ],
+    },
+    {
+      categoryType: 'stock',
+      positions: [
+        {
+          isin: 'US0378331005',
+          averageBuyIn: '180.10',
+          netSize: '3',
+          virtualSize: '3',
+          status: 'active',
+          instrumentType: 'stock',
+          name: 'Apple',
+          derivativeInfo: null,
+          bondInfo: null,
+          imageId: 'img-2',
+        },
+      ],
+    },
+  ],
+};
+
+const CASH = [{ accountNumber: 'DE123', currencyId: 'EUR', amount: 1234.56 }];
+
+const SAVINGS_PLANS = {
+  savingsPlans: [
+    {
+      id: '3f1b0a52-8c4d-4a1e-9b77-0f2d5e6a7c81',
+      createdAt: 1750000000000,
+      instrumentId: 'IE00B3VTMJ91.HAM',
+      amount: 20000,
+      interval: 'monthly',
+      startDate: { type: 'x', value: 1, nextExecutionDate: '2026-10-01' },
+      firstExecutionDate: null,
+      nextExecutionDate: '2026-10-01',
+      previousExecutionDate: '2026-09-01',
+      virtualPreviousExecutionDate: '2026-09-01',
+      finalExecutionDate: null,
+      paymentMethodId: null,
+      paymentMethodCode: null,
+      lastPaymentExecutionDate: null,
+      paused: false,
+      fundingCashAccNo: 'DE123',
+      secAccNo: 'DE999',
+    },
+  ],
+};
+
+describe('parseTrHoldings', () => {
+  it('reads the positions and the German decimals out of the categories envelope', () => {
+    const { holdings, skipped } = parseTrHoldings(PORTFOLIO);
+    expect(skipped).toBe(0);
+    expect(holdings).toHaveLength(2);
+    // The German comma is the payload's own convention: `parseFloat` alone would read 112,44 as 112.
+    expect(holdings[0]).toMatchObject({
+      isin: 'IE00B3VTMJ91',
+      quantity: 12.5,
+      averageCost: 112.44,
+      rawType: 'etf',
+      rawCategory: 'etf',
+    });
+    expect(holdings[1]).toMatchObject({ isin: 'US0378331005', quantity: 3, rawType: 'stock' });
+  });
+
+  it('skips a sold position rather than importing a zero', () => {
+    const { holdings, skipped } = parseTrHoldings({
+      categories: [
+        {
+          categoryType: 'stock',
+          positions: [
+            { ...PORTFOLIO.categories[1].positions[0], netSize: '0' },
+            PORTFOLIO.categories[1].positions[0],
+          ],
+        },
+      ],
+    });
+    expect(holdings.map((h) => h.isin)).toEqual(['US0378331005']);
+    expect(skipped).toBe(1);
+  });
+
+  it('keeps a position whose status it does not recognise', () => {
+    // Deleting a real holding because the broker renamed a status is the worst failure here, and
+    // it would be invisible: the net worth would just be lower.
+    const { holdings } = parseTrHoldings({
+      categories: [
+        { categoryType: 'stock', positions: [{ ...PORTFOLIO.categories[1].positions[0], status: 'frozen_2027' }] },
+      ],
+    });
+    expect(holdings).toHaveLength(1);
+  });
+
+  it('drops an explicitly inactive position', () => {
+    const { holdings, skipped } = parseTrHoldings({
+      categories: [
+        { categoryType: 'stock', positions: [{ ...PORTFOLIO.categories[1].positions[0], status: 'inactive' }] },
+      ],
+    });
+    expect(holdings).toHaveLength(0);
+    expect(skipped).toBe(1);
+  });
+
+  it('ignores virtualSize, which counts orders that have not settled', () => {
+    const { holdings } = parseTrHoldings({
+      categories: [
+        {
+          categoryType: 'stock',
+          positions: [{ ...PORTFOLIO.categories[1].positions[0], netSize: '3', virtualSize: '0' }],
+        },
+      ],
+    });
+    // A pending sell must not read as a position the user no longer holds.
+    expect(holdings[0].quantity).toBe(3);
+  });
+
+  it('keeps the first row of a duplicated ISIN', () => {
+    const row = PORTFOLIO.categories[0].positions[0];
+    const { holdings, skipped } = parseTrHoldings({
+      categories: [
+        { categoryType: 'etf', positions: [row, { ...row, netSize: '99' }] },
+      ],
+    });
+    expect(holdings).toHaveLength(1);
+    expect(holdings[0].quantity).toBe(12.5);
+    expect(skipped).toBe(1);
+  });
+
+  it('throws on a payload that is not a portfolio', () => {
+    expect(() => parseTrHoldings({ nope: true })).toThrow(TrParseError);
+  });
+});
+
+describe('parseTrCash', () => {
+  it('reads the EUR balance in major units', () => {
+    const { balances, skipped } = parseTrCash(CASH);
+    expect(skipped).toBe(0);
+    expect(balances).toEqual([{ balance: 1234.56, currency: 'EUR', accountNumber: 'DE123' }]);
+  });
+
+  it('skips a foreign-currency balance instead of converting it without a rate', () => {
+    const { balances, skipped } = parseTrCash([
+      ...CASH,
+      { accountNumber: 'US9', currencyId: 'USD', amount: 500 },
+    ]);
+    expect(balances).toHaveLength(1);
+    expect(skipped).toBe(1);
+  });
+
+  it('returns a LIST, so a cash deposit is never folded into settleable cash', () => {
+    const { balances } = parseTrCash([
+      { accountNumber: 'DE1', currencyId: 'EUR', amount: 100 },
+      { accountNumber: 'DE2', currencyId: 'EUR', amount: 250 },
+    ]);
+    expect(balances.map((b) => b.balance)).toEqual([100, 250]);
+  });
+});
+
+describe('parseTrSavingsPlans', () => {
+  it('splits the ISIN off the instrument id and converts the instalment from minor units', () => {
+    const plans = parseTrSavingsPlans(SAVINGS_PLANS);
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      isin: 'IE00B3VTMJ91',
+      amount: 200,
+      rawAmount: 20000,
+      interval: 'monthly',
+      nextExecutionDate: '2026-10-01',
+      paused: false,
+    });
+  });
+
+  it('keeps a bare calendar day as written instead of shifting it through UTC', () => {
+    // `new Date('2026-10-01')` is UTC midnight, which is the PREVIOUS day in Rome: a savings plan
+    // that fires on the 1st would print on the 30th of the month before.
+    expect(parseTrSavingsPlans(SAVINGS_PLANS)[0].nextExecutionDate).toBe('2026-10-01');
+  });
+
+  it('returns an empty list for a payload with no plans', () => {
+    expect(parseTrSavingsPlans({ savingsPlans: [] })).toEqual([]);
+  });
+});
+
+describe('mapTrType', () => {
+  it('falls back to the category when the instrument type is unknown', () => {
+    expect(mapTrType('SOMETHING_NEW', 'bond')).toEqual({
+      type: 'bond',
+      assetClass: 'bonds',
+      typeUncertain: false,
+    });
+  });
+
+  it('flags the ETF fallback as uncertain when neither matches', () => {
+    expect(mapTrType('???', '???')).toEqual({
+      type: 'etf',
+      assetClass: 'equity',
+      typeUncertain: true,
+    });
+  });
+});
+
+describe('mapTrHoldingToAssetFormData', () => {
+  const holding: TrHoldingInput = {
+    isin: 'IE00B3VTMJ91',
+    name: 'iShares Core MSCI World',
+    rawType: 'etf',
+    rawCategory: 'etf',
+    quantity: 12.5,
+    averageCost: 112.44,
+    status: 'active',
+    currency: 'EUR',
+    price: 130.2,
+  };
+
+  it('lets the ordinary price path own the quote, the opposite of the Scalable bridge', () => {
+    const formData = mapTrHoldingToAssetFormData(holding);
+    expect(formData.autoUpdatePrice).toBe(true);
+    expect(formData.currentPrice).toBe(130.2);
+    expect(formData.ticker).toBe('IE00B3VTMJ91');
+    expect(formData.isin).toBe('IE00B3VTMJ91');
+  });
+
+  it('falls back to 0 when the quote lookup failed, so the plan can warn about it', () => {
+    expect(mapTrHoldingToAssetFormData({ ...holding, price: undefined }).currentPrice).toBe(0);
+  });
+});
+
+describe('buildTrImportPlan', () => {
+  const holding: TrHoldingInput = {
+    isin: 'IE00B3VTMJ91',
+    name: 'iShares Core MSCI World',
+    rawType: 'etf',
+    rawCategory: 'etf',
+    quantity: 12.5,
+    averageCost: 112.44,
+    status: 'active',
+    currency: 'EUR',
+    price: 130.2,
+  };
+
+  it('offers a new position and never proposes a quantity or price write for it', () => {
+    const plan = buildTrImportPlan([holding], [], [], []);
+    expect(plan.holdings[0].kind).toBe('new');
+    expect(plan.stats.newCount).toBe(1);
+    // No price branch exists at all, unlike the Scalable plan: the broker publishes no quote, so
+    // there is nothing to compare and nothing to patch. Asserted as ABSENCE of the key, because a
+    // `priceUpdateCount: 0` would be a count of a thing this bridge never measures.
+    expect(Object.keys(plan.stats)).not.toContain('priceUpdateCount');
+  });
+
+  it('reports a ledger quantity mismatch as drift and leaves the quantity alone', () => {
+    const plan = buildTrImportPlan([holding], [], [], [
+      { id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 10 },
+    ]);
+    expect(plan.holdings[0]).toMatchObject({ kind: 'drift-only', quantityDrift: 2.5 });
+    expect(plan.warnings.join(' ')).toContain('non viene toccata');
+  });
+
+  it('reads an exact quantity as unchanged', () => {
+    const plan = buildTrImportPlan([holding], [], [], [
+      { id: 'asset-1', name: 'World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 12.5 },
+    ]);
+    expect(plan.holdings[0].kind).toBe('unchanged');
+    expect(plan.warnings).toHaveLength(0);
+  });
+
+  it('names a position that enters without a price instead of creating it silently worthless', () => {
+    const plan = buildTrImportPlan([{ ...holding, price: undefined }], [], [], []);
+    expect(plan.holdings[0].formData.currentPrice).toBe(0);
+    expect(plan.warnings.join(' ')).toContain('prezzo non trovato');
+  });
+
+  it('tracks the first cash balance and DECLARES the second rather than summing them', () => {
+    // The Scalable deposit lesson: two balances at one broker are two accounts, and a sum would
+    // quietly merge money the user tracks separately.
+    const plan = buildTrImportPlan(
+      [],
+      [
+        { balance: 100, currency: 'EUR', accountNumber: 'DE1' },
+        { balance: 59201.61, currency: 'EUR', accountNumber: 'DE2' },
+      ],
+      [],
+      []
+    );
+    expect(plan.cash).toMatchObject({ balance: 100 });
+    expect(plan.warnings.join(' ')).toContain('59201.61');
+    expect(plan.warnings.join(' ')).toContain('non viene sommato');
+  });
+
+  it('reports no cash as null, which the preview shows as absent rather than as zero', () => {
+    expect(buildTrImportPlan([], [], [], []).cash).toBeNull();
+  });
+
+  it('matches a savings plan to the tracked asset by ISIN and never writes it', () => {
+    const plan = buildTrImportPlan(
+      [holding],
+      [],
+      parseTrSavingsPlans(SAVINGS_PLANS),
+      [{ id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 12.5 }]
+    );
+    expect(plan.savingsPlans[0]).toMatchObject({
+      trackedAssetId: 'asset-1',
+      trackedAssetName: 'iShares Core MSCI World',
+    });
+    // The plan is a PREVIEW: nothing in it proposes a write for a standing order.
+    expect(JSON.stringify(plan.savingsPlans)).not.toContain('quantity');
+  });
+
+  it('leaves a savings plan unmatched rather than guessing an asset', () => {
+    const plan = buildTrImportPlan([], [], parseTrSavingsPlans(SAVINGS_PLANS), []);
+    expect(plan.savingsPlans[0].trackedAssetId).toBeUndefined();
+    expect(plan.savingsPlans[0].plan.isin).toBe('IE00B3VTMJ91');
+  });
+});
+
+describe('the cash account identity', () => {
+  it('is the ticker the sync writes, not the editable name', () => {
+    // A user may rename the account; matching by name would duplicate it on the next sync.
+    expect(TR_CASH_TICKER).toBe('TR-EUR');
+  });
+});

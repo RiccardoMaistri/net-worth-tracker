@@ -233,10 +233,19 @@ The app **is** locally runnable; there is no fallback to declare.
   whatever is active (usually `develop`) and merges into it by PR.
 - **The outcome of a verification**: `SESSION_NOTES.md` during the session (untracked — delete it
   before the commit); it is folded into `CLAUDE.md` (the "Latest" entry) and `Draft Release Temp.md`
-  before the PR. **The draft ACCUMULATES until a release is tagged**: a session PREPENDS its entries to the
+  before the PR. **Before the closing prompt it ends with one block** (owner, 2026-09-27): *Cosa* (what
+  was implemented), *Perché* (the decision behind it), *Nota* (gotchas and measures, each with its date),
+  *Dove va a fine sessione* (AGENTS.md if repo-wide · `doc/guide/<tema>.md` if a domain lesson ·
+  WORKFLOW.md if a session rule · CLAUDE.md if project state · a comment at the right line if it is the
+  why of one line) — the closing prompt reads that block, so a note that names no destination is lost. **The draft ACCUMULATES until a release is tagged**: a session PREPENDS its entries to the
   existing sections and never rewrites the file from scratch — on 2026-09-11 a session replaced 534 lines with 5
-  and 308 commits of draft had to be recovered from git two days later. It is emptied only when the owner cuts
-  the tag, and `git log -1 --format=%ad <last tag>` says whether that has happened. **The draft carries no private
+  and 308 commits of draft had to be recovered from git two days later. **The owner DELETES the file when cutting
+  the tag** (2026-09-26, `v10.0.0 — Kalendae`): its body has become the release; `git log -1 --format=%ad <last tag>`
+  says when. A file that is missing is therefore never a loss — the first session after a tag recreates it from
+  this template, and every later one prepends: a `# Draft release notes` title, a quote line («Accumulates until
+  the next tag (WORKFLOW.md § Where things are recorded). Grouped by area; one entry per surface, rewritten to its
+  final state.»), then the four sections `## ✨ New Features`, `## 🐛 Bug Fixes`, `## 🔧 Improvements`,
+  `## 📚 Documentation`, one blank line between the entries of different areas. **The draft carries no private
   data** (owner, 2026-09-20): it becomes public release notes, so an example sentence takes round invented figures and
   generic names («Conto corrente», «un ETF») — never an amount, an instrument, a bank or a family detail of the real
   account, which the mirror makes easy to paste. That day 33 entries had to be rewritten.

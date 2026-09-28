@@ -1,11 +1,125 @@
 # Collegamenti broker
 
 > **Quando aprire questa guida** — chi tocca `components/settings/BrokerConnectionsSection.tsx`,
-> `lib/utils/scalableImport.ts` (mapping puro), `lib/server/scalableCli.ts` (runner `sc`),
-> `app/api/broker/scalable/read/route.ts`, `lib/services/brokerConnectionService.ts`
-> (metadati `brokerConnections/{ownerId}`). File: `CLAUDE.md` → *Key Features* → *Collegamenti broker*.
+> `components/settings/broker/ScalableConnectionTile.tsx`,
+> `components/settings/broker/TradeRepublicConnectionTile.tsx`,
+> `lib/utils/scalableImport.ts` o `lib/utils/tradeRepublicImport.ts` (i mapping puri),
+> `lib/server/scalableCli.ts` (runner `sc`), `lib/server/scalableLogin.ts` (device flow),
+> `lib/server/tradeRepublicQr.ts` (handshake QR), `lib/server/tradeRepublicClient.ts` (sessione),
+> `lib/utils/tradeRepublicSession.ts` (involucro della sessione), `app/api/broker/traderepublic/session`,
+> `lib/server/qrImage.ts`,
+> `app/api/broker/**`, `lib/services/brokerConnectionService.ts` (metadati
+> `brokerConnections/{ownerId}/brokers/{broker}`) o `firestore.rules` (la match `brokerSessions`).
+> File: `CLAUDE.md` → *Key Features* → *Collegamenti broker*.
 
-## Collegamenti broker — sync in sola lettura da Scalable (`scalableImport.ts`, `scalableCli.ts`)
+## I due ponti, e cosa li distingue
+
+- **Ogni broker è un componente e un modulo puri propri.** `BrokerConnectionsSection` possiede la
+  pagina e nient'altro: due tile in una griglia `items-start`. Il resto — come si ottiene la
+  sessione, cosa contiene il payload, quali cifre si possono scrivere — è diverso per broker, e
+  accorparlo avrebbe prodotto un file da 700 righe con un `broker ===` in ogni ramo. La griglia
+  usa `items-start` perché la colonna Scalable è due tile e quella Trade Republic uno solo: senza,
+  il secondo verrebbe stirato fino all'altezza della vicina.
+- **La regola comune è UNA SOLA: una sync legge e non scrive.** Per Scalable è una whitelist di
+  argv (`READ_COMMAND_ARGS`); per Trade Republic è una whitelist di topic (`TR_READ_COMMANDS`).
+  Trade Republic NON ha una sessione «sola lettura» come la CLI di Scalable, quindi la garanzia è
+  **strutturale** — l'elenco chiuso in `tradeRepublicClient.ts` — e non un'impostazione lato
+  broker. Aggiungere un comando in quella lista è il cambio che questa guida vieta, esattamente
+  come aggiungere un argv in quella.
+- **Il doc id dei metadati è il broker, non l'owner** (`brokerConnections/{ownerId}/brokers/{broker}`).
+  Con due broker servono due documenti per owner, e le rules non possono estrarre una sottostringa
+  da un doc id composto: l'owner resta sul padre, così le rule sopra non si toccano. Il documento
+  piatto dell'era mono-broker NON è migrato, di proposito: ogni campo che conteneva
+  (`lastSyncAt`, i conteggi, gli id degli asset) lo riscrive la sync successiva, quindi si perderebbe
+  solo il «quando» di una lettura passata.
+
+## Trade Republic — sola lettura, collegamento con QR (`tradeRepublicImport.ts`, `tradeRepublicQr.ts`)
+
+- **TRE differenze rispetto a Scalable, e ognuna è imposta dal broker.** Ognuna è una cosa che un
+  lettore del tile Scalable scambierebbe per un bug:
+  - **Il portafoglio NON porta i prezzi.** `compactPortfolioByType` restituisce
+    `{ isin, averageBuyIn, netSize, virtualSize, status, instrumentType, name }` e niente di
+    quotabile: Trade Republic quota un titolo come `ticker` su `ISIN.EXCHANGE` e il suffisso
+    exchange NON è nel payload. Quindi il ponte **non cerca un prezzo**: i nuovi asset nascono con
+    `autoUpdatePrice: TRUE` e li quota il path Yahoo di sempre. Indovinare un exchange metterebbe
+    un prezzo sbagliato su un asset reale, che è peggio di un prezzo che arriva al cron dopo.
+    Conseguenze: **il plan non ha un ramo prezzo** (i `kind` sono `new` / `drift-only` /
+    `unchanged`, e `plan.stats` non ha `priceUpdateCount`) e la chiusura della narrazione NON dice
+    «i prezzi si aggiornano».
+  - **La cassa è un saldo REALE, non un residuo.** `valuation − securities − crypto` era l'unico
+    modo di Scalable perché la sua overview non espone altro; Trade Republic pubblica il conto
+    cassa stesso (`cash`, importi in unità **maggiori** — `projectCash` dell'SDK mappa `amount`
+    verbatim, nessuna divisione per 100). Niente da sottrarre, e il saldo non può diventare
+    negativo per aritmetica.
+  - **I piani di accumulo sono una REGOLA, non un fatto.** Uno Sparplan non è una posizione né una
+    transazione, e nessun campo di `Asset` lo contiene: sono **dichiarati** nell'anteprima (con
+    l'asset che comprano, agganciato per ISIN) e **mai scritti**. Stessa postura del tasso del
+    deposito Scalable.
+- **Il prezzo lo riempie la route, dal path Yahoo di sempre** (`getMultipleQuotes` per ISIN, in
+  `withQuotes`). Serve perché `AssetFormData.currentPrice` è obbligatorio: senza, un portafoglio
+  sincronizzato nasce a 0 e il patrimonio dell'utente cala di tutto ciò che possiede fino al
+  prossimo refresh. Il fallimento **non è fatale e non è silenzioso**: una quotazione mancante
+  lascia `price` ASSENTE e il plan ne fa un avviso che nomina la posizione. Uno `0` lì sarebbe una
+  lettura che il broker non ha mai dato.
+- **Più saldi EUR sono PIÙ conti, mai una somma** (`parseTrCash` ritorna una LISTA). Il piano
+  traccia il primo e **dichiara** gli altri per importo. La lezione Scalable (deposito ≠ liquidità)
+  vale identica: due saldi presso un broker sono due conti, e sommarli li fonderebbe silenziosamente.
+- **`amount` dei piani di accumulo è l'unica cifra non verificata** contro un account reale: l'SDK
+  passa il valore del topic intatto (a differenza di `cash`, non ha un `projectMoney`), e il client
+  web di Trade Republic lo manda in unità minori. Passa quindi da **UNA costante**
+  (`SAVINGS_PLAN_MINOR_UNIT_DIVISOR`) e l'anteprima stampa la cifra calcolata, così un'assunzione
+  sbagliata è visibile e non solo sbagliata. Non inlineare un `100` altrove.
+- **`netSize`, non `virtualSize`.** `virtualSize` conta gli ordini non regolati: una vendita in
+  attesa si leggerebbe come una posizione che l'utente non ha più. E uno `status` **non
+  riconosciuto** mantiene la posizione: cancellare una posizione reale perché il broker ha
+  rinominato uno stato è il fallimento peggiore qui, e sarebbe invisibile.
+- **Il login è un QR e il FRONTEND lo mostra** (`tradeRepublicQr.ts` + `login/start` +
+  `login/status`), misurato sull'API prima di scriverlo:
+  `POST /api/v2/auth/web/login/qr-challenges` → `challengeId`; il poll su `qr-challenges/{id}`
+  restituisce `qrCodePayload` (il payload da **codificare**, e **ruota** finché non viene
+  scansionato: l'UI sostituisce l'immagine, non la congela) e poi `processId`; da lì il poll su
+  `login/processes/{id}` finché non arriva il cookie `tr_session`.
+  - **Il QR è una CREDENZIALE finché il challenge vive**, quindi è reso in immagine **sul server**
+    (`qrImage.ts`) e al browser viaggia solo la `data:` URL. Il payload è comunque mostrato come
+    testo accanto all'immagine: un QR richiede un **secondo dispositivo**, e chi legge da telefono
+    non può scansionare lo schermo che ha davanti.
+  - **La sessione SOPRAVVIVE al riavvio** (`brokerSessions/{ownerId}`, solo Admin SDK, rules
+    `allow read, write: if false`). È la differenza vera rispetto a Scalable: lì la sessione sta
+    nel keyring della macchina e un riavvio la dimentica; qui è un documento, e i cookie che
+    l'SDK rinnova vengono riscritti dopo ogni lettura (`persistRefreshedSession`). L'in-flight
+    vive invece in memoria e un riavvio lo dimentica → 404 → l'UI riavvia il flusso.
+  - **Il jar è unito per NOME**: il broker ri-emette `tr_session` durante l'handshake e deve
+    vincere il valore più recente, altrimenti il poll ripropone per sempre il cookie
+    pre-approvazione. Il traguardo sono **ENTAMBI** i cookie, `tr_session` **e** `tr_refresh`:
+    l'SDK rifiuta un restore senza il secondo (non può rinnovare senza) e anche il suo login
+    li controlla entrambi. Fermarsi al primo avrebbe salvato una sessione leggibile una volta e mai
+    rinnovabile — un fallimento che l'utente avrebbe incontrato alla prima sync, senza indizi.
+  - **L'involucro della sessione sta in `lib/utils/tradeRepublicSession.ts`, non nel modulo server**,
+    per un motivo misurato: `version` è il **NUMERO** `1`. Lo schema dell'SDK è
+    `type({ version: "1", cookies: "string[]" })` e in **arktype un letterale numerico tra apici è
+    un numero**, quindi la forma stringa è rifiutata con «version must be 1 (was "1")». Scriverla
+    come `"1"` ha prodotto «Invalid exported Session» alla **prima sync**, molto dopo che il login
+    QR era riuscito e aveva salvato una sessione perfettamente valida. `parseTrSession` tollera la
+    forma legacy e la riscrive: quei cookie sono buoni e obbligare a riscanire un QR per riparare
+    un dettaglio di serializzazione sarebbe il consiglio sbagliato. Il test asserisce contro
+    `TRClient` vero, non contro un commento.
+  - **Una sessione che l'SDK rifiuta è una sessione MORTA**, non un errore inatteso: il costruttore
+    la parla e può buttare, quindi `buildClient` la traduce in «ricallegati» (401). Non tralasciata,
+    la stessa cosa arrivava come 500 con dentro il messaggio di arktype.
+  - **Per UTENTE, non per macchina** (a differenza di `sc`): ogni entry porta il proprio jar, quindi
+    due proprietari di uno stesso host non condividono la sessione. `getTrLogin` esige `ownerId` e
+    una sessione d'altri è un 404, non uno stato — altrimenti un utente qualsiasi potrebbe vedere
+    il QR di un altro.
+  - **Il WAF è dichiarato, non nascosto.** Tre client Trade Republic alternativi girano un browser
+    headless solo per un `x-aws-waf-token`; questo modulo non lo chiede, perché nemmeno il path
+    telefono+PIN dell'SDK ne ha bisogno. **Se gli endpoint QR siano protetti non è stato verificabile
+    da qui**: un 403 con challenge WAF diventa quindi `TradeRepublicWafError`, con parole sue e uno
+    status proprio, perché il rimedio (un passo col token) è un altro lavoro e l'utente deve poterlo
+    dire. Non è un errore di credenziali e non si risolve ritentando.
+- **Il salvataggio scrive solo asset nuovi e la cassa.** Nessun prezzo (non letto), nessuna
+  quantità (è del Registro), nessun piano di accumulo (una regola del broker).
+
+##Collegamenti broker — sync in sola lettura da Scalable (`scalableImport.ts`, `scalableCli.ts`)
 
 - **L'app non parla mai con Scalable: parla con `sc`, e solo in locale.** Il login OAuth
   (device flow) e la sessione vivono nel keyring della macchina dell'utente, dove solo il
@@ -103,4 +217,11 @@
   negativa se i totali non quadrano — è il residuo dei totali broker, non un calcolo dell'app.
   Un utente SENZA conto overnight non deve perdere la sync: la terza lettura è separata e il suo
   fallimento compare come avviso, non come errore. Su Vercel anche «Ricollega Scalable» si
-  rifiuta: il flusso è costruito per una VM, e il rifiuto è l'informazione utile.
+  rifiuta: il flusso è costruito per una VM, e il rifiuto è l'informazione utile. Trade Republic ha
+  lo stesso `assertTrLongLivedHost` e lo stesso motivo.
+- **Trade Republic**: i prezzi NON vengono dalla sync e la pagina non lo promette — se una posizione
+  entra a 0 è perché Yahoo non l'ha quotata, e l'avviso la nomina. Uno Sparplan in pausa compare
+  due volte (nel testo e nella colonna) per non poterlo distinguere a colpo d'occhio. Il secondo
+  saldo EUR non viene sommato: se ti serve, creane il conto a parte. E un piano di accumulo qui è
+  solo DICHIARATO: l'app non lo usa per calcolare la spesa futura, quindi non aspettarti che
+  compaia nel Cashflow o nel piano FIRE.

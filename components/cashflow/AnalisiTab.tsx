@@ -82,11 +82,13 @@ import {
 } from '@/lib/utils/analisiSummary';
 import {
   buildAnalisiVerdict,
+  describeAnalisiScheduledHorizon,
   describeAnalisiSubject,
   describeAnomalies,
   describeBaseline,
   describeEntityFocus,
   describeFlow,
+  describeSpendingRolesFlow,
   describeMissingBaseline,
   describePeriodScope,
   describeSpendingChart,
@@ -111,6 +113,7 @@ import { FuoriScalaTile } from '@/components/cashflow/analisi/tiles/FuoriScalaTi
 import { SpeseMaggioriTile } from '@/components/cashflow/analisi/tiles/SpeseMaggioriTile';
 import { CategorieTile } from '@/components/cashflow/analisi/tiles/CategorieTile';
 import { FlussoTile } from '@/components/cashflow/analisi/tiles/FlussoTile';
+import { summarizeSpendingRoles } from '@/lib/utils/spendingRoles';
 import { SchedaTile, type SchedaFocus } from '@/components/cashflow/analisi/tiles/SchedaTile';
 
 type DrillDownLevel = 'category' | 'subcategory' | 'expenseList';
@@ -149,6 +152,8 @@ interface AnalisiTabProps {
   /** The queries behind `allExpenses`/`categories` failed: say so, never render zeros. */
   loadFailed: boolean;
   historyStartYear?: number;
+  /** settings.spendingRolesEnabled — adds the 50/30/20 view to Flusso, and makes it the default. */
+  spendingRolesEnabled?: boolean;
 }
 
 // The focusable expense types, used to validate the focusType URL param without trusting
@@ -248,7 +253,7 @@ function resolvePeriodLabel(period: AnalisiPeriod): string {
   return String(period.year);
 }
 
-export function AnalisiTab({ allExpenses, categories, loading, loadFailed, historyStartYear = 2024 }: AnalisiTabProps) {
+export function AnalisiTab({ allExpenses, categories, loading, loadFailed, historyStartYear = 2024, spendingRolesEnabled = false }: AnalisiTabProps) {
   const COLORS = useChartColors();
   const router = useRouter();
   const pathname = usePathname();
@@ -423,6 +428,12 @@ export function AnalisiTab({ allExpenses, categories, loading, loadFailed, histo
   const expenseSlices = useMemo(() => buildExpenseComposition(periodExpenses), [periodExpenses]);
   const incomeSlices = useMemo(() => buildIncomeComposition(periodExpenses), [periodExpenses]);
   const flow = useMemo(() => summarizeFlow(periodExpenses), [periodExpenses]);
+  // The 50/30/20 view reads the same totals the Sankey draws (summarizeSpendingRoles), off when the setting is.
+  const spendingRolesFlow = useMemo(() => {
+    if (!spendingRolesEnabled) return null;
+    const summary = summarizeSpendingRoles(periodExpenses, categories);
+    return { categories, summary, reading: describeSpendingRolesFlow(summary) };
+  }, [spendingRolesEnabled, categories, periodExpenses]);
 
   // The month the anomalies run on — an Off-Axis figure the tile names; null when none can be meant.
   const singleMonth = useMemo(() => resolveSingleMonth(period, today), [period, today]);
@@ -790,7 +801,17 @@ export function AnalisiTab({ allExpenses, categories, loading, loadFailed, histo
           {/* Transfers are not flows: a period holding only transfers has no Sankey to draw. */}
           {(flow.incomeTotal > 0 || flow.expensesTotal > 0) && (
             <div className={cn(TILE_CELL_CLASS, 'order-7 desktop:order-none tablet:col-span-2 desktop:col-span-12')}>
-              <FlussoTile expenses={periodExpenses} isMobile={isMobile} reading={describeFlow(flow, totals.savingsRate)} onEntityClick={handleEntitySelect} />
+              <FlussoTile
+                expenses={periodExpenses}
+                isMobile={isMobile}
+                reading={describeFlow(flow, totals.savingsRate)}
+                flow={flow}
+                spendingRoles={spendingRolesFlow}
+                // The verdict's own calendar slice: on a phone the surplus note declares it too.
+                scheduled={scheduled}
+                scheduledHorizon={describeAnalisiScheduledHorizon(period, today)}
+                onEntityClick={handleEntitySelect}
+              />
             </div>
           )}
         </div>

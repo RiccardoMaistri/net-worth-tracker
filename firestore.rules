@@ -274,6 +274,9 @@ service cloud.firestore {
 
 // Collezione brokerConnections - metadati sync broker in sola lettura (doc id = ownerUid)
     // Solo metadati (quando, quante posizioni): mai token o credenziali. Stessa postura di budgets.
+    // Il doc id resta l'ownerUid e i metadati per BROKER stanno nella sotto-collezione
+    // `brokers/{brokerId}`: con due broker servono due documenti per owner, e le rules non
+    // possono estrarre una sottostringa da un doc id composto — quindi l'owner resta sul padre.
     match /brokerConnections/{userId} {
       // Read: usa userId (doc id) per consentire la lettura di doc inesistenti (null)
       allow read: if canAccess(userId);
@@ -284,6 +287,27 @@ service cloud.firestore {
 
       // Delete: proprietario o membro delegato
       allow delete: if canAccess(userId);
+
+      // Metadati per broker: stessa postura, e `broker` deve coincidere col doc id — altrimenti
+      // una copia di Scalable finirebbe sotto la chiave di Trade Republic e il conteggio
+      // mostrato sarebbe quello dell'altro broker.
+      match /brokers/{brokerId} {
+        allow read: if canAccess(userId);
+
+        allow create, update: if canAccess(userId) &&
+                                 request.resource.data.userId == userId &&
+                                 request.resource.data.broker == brokerId;
+
+        allow delete: if canAccess(userId);
+      }
+    }
+
+    // Collezione brokerSessions - SESSIONETrade Republic (doc id = ownerUid)
+    // È una CREDENZIALE (cookie `tr_session` + refresh): il client SDK non deve poterla leggere,
+    // quindi `allow read, write: if false` e il solo accesso è Admin SDK dalle route broker
+    // (che verificano già `assertCanAccessAccount`). I METADATI restano in `brokerConnections`.
+    match /brokerSessions/{userId} {
+      allow read, write: if false;
     }
 
     // Collezione account-access - concessioni di accesso delegato (doc id = ownerUid)

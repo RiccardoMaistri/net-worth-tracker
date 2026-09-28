@@ -19,7 +19,8 @@ import type { PeriodCashflowTotals, ScheduledSlice } from '@/lib/utils/tracciame
 import type { CategoryDeltaRow, ComparisonMonthScope, PacingSide, TotalsPacing } from '@/lib/utils/comparisonDeltas';
 import type { SpendingAnomaly } from '@/lib/utils/cashflowComposition';
 import type { ExpenseType } from '@/types/expenses';
-import type { AnalisiPeriod, CategoryMover, FlowSummary, MonthRef, SpendingPoint, SpendingType, TopExpenses } from '@/lib/utils/analisiSummary';
+import { summarizeSpendingRoleShares, type FlowAbsence, type SpendingRoleShares, type SpendingRolesSummary } from '@/lib/utils/spendingRoles';
+import type { AnalisiPeriod, CategoryMover, FlowSummary, MonthRef, SpendingPoint, SpendingType, TopExpenses, TypeFlowBreakdown } from '@/lib/utils/analisiSummary';
 import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
 import { formatPercentage } from '@/lib/services/chartService';
 import { articleForPercent, monthWithPrepositionA, ofThePercent } from '@/lib/utils/patrimonioNarrative';
@@ -427,6 +428,22 @@ export function describeTopExpenses(top: TopExpenses): Narrative | null {
   return [prose(`Le ${word} più grandi fanno `), ...percentWithArticle(share), prose(' delle spese; '), ...largestClause, prose('.')];
 }
 
+/**
+ * A share of the Flusso as a sentence prints it: the whole percent, or «meno dell'1%» for a share
+ * that holds money and rounds to zero (owner's decision, 2026-09-27). Every share that reaches
+ * here belongs to a role or a type with money in it — the empty ones are not listed — so «0%»
+ * would say «nothing» over something. The shares still add up to 100 with this one counted as zero.
+ */
+export function describeShare(percentage: number): Narrative {
+  if (percentage === 0) return [prose("meno dell'"), figure(formatPercentage(1, 0))];
+  return [figure(formatPercentage(percentage, 0))];
+}
+
+/** The same share where there is no room for words — a legend beside a swatch: «<1%». */
+export function describeShareCompact(percentage: number): string {
+  return percentage === 0 ? `<${formatPercentage(1, 0)}` : formatPercentage(percentage, 0);
+}
+
 /** «fisse» is an adjective, «debiti» a noun: the single-type clause needs the adjectival form. */
 const SPENDING_TYPE_ADJECTIVES: Record<SpendingType, string> = { fixed: 'fisse', variable: 'variabili', debt: 'di debito' };
 
@@ -441,9 +458,11 @@ export function describeFlow(flow: FlowSummary, savingsRate: number | null): Nar
   const typeClause = (): Narrative => {
     if (types === 0) return [];
     if (types === 1) return [prose(` Tutte spese ${SPENDING_TYPE_ADJECTIVES[flow.typeShares[0].type]}.`)];
+    // The printed share, not `percentage`: the phone's legend prints the same whole figures, and
+    // rounded one by one three equal types would read 33% + 33% + 33%.
     const parts = flow.typeShares.map((share, index): Narrative => [
       prose(`${index === 0 ? share.label : share.label.toLowerCase()} `),
-      figure(formatPercentage(share.percentage, 0)),
+      ...describeShare(share.printedPercentage),
     ]);
     return [prose(' '), ...joinClauses(parts, ', '), prose('.')];
   };
@@ -472,6 +491,147 @@ export function describeFlow(flow: FlowSummary, savingsRate: number | null): Nar
   }
   narrative.push(prose('.'), ...typeClause());
   return narrative;
+}
+
+/**
+ * « (di cui 300 € accantonati e 450 € avanzati)» — what Risparmi is made of, whenever rows are
+ * classified as saving (owner's decision, 2026-09-27). The word «Risparmi» stays, but it then
+ * names two different things from the type view's surplus, and this clause is what tells them
+ * apart. Without saving rows Risparmi IS the surplus, and nothing is said.
+ */
+function savingsSplitClause(roleShares: SpendingRoleShares): Narrative {
+  if (roleShares.saved <= 0) return [];
+  if (roleShares.surplus <= 0) return [prose(' (tutti accantonati)')];
+  return [
+    prose(' (di cui '),
+    figure(euro(roleShares.saved)),
+    prose(' accantonati e '),
+    figure(euro(roleShares.surplus)),
+    prose(' avanzati)'),
+  ];
+}
+
+/**
+ * Flusso in its 50/30/20 view — the sentence over the roles flow.
+ *
+ * Shares are of everything that left the budget: income plus what the patrimony covered, the same
+ * total both sides of the Sankey carry. They come from `summarizeSpendingRoleShares`, the one source
+ * the phone bar reads too, so they add up to exactly 100 as printed and follow
+ * SPENDING_ROLE_FLOW_ORDER, the order the Sankey and the bar draw. A deficit is named first,
+ * because it is why Risparmi is missing; «Da classificare» is named whenever it is not zero,
+ * because those euros belong to no role yet. Null when there is no flow at all.
+ */
+export function describeSpendingRolesFlow(summary: SpendingRolesSummary): Narrative | null {
+  const roleShares = summarizeSpendingRoleShares(summary);
+  if (roleShares.absence !== null) return null;
+
+  const parts = roleShares.shares.map((share): Narrative => [
+    prose(`${share.label.toLowerCase()} `),
+    ...describeShare(share.percentage),
+    ...(share.bucket === 'saving' ? savingsSplitClause(roleShares) : []),
+  ]);
+
+  let lead: Narrative;
+  if (roleShares.noIncome) {
+    lead = [prose('Nessuna entrata: '), figure(euro(summary.spending)), prose(' di spese tutti coperti dal patrimonio, ')];
+  } else if (roleShares.deficit > 0) {
+    lead = [
+      prose('Le spese superano le entrate di '),
+      figure(euro(roleShares.deficit)),
+      prose(', coperti dal patrimonio. Di quanto è uscito: '),
+    ];
+  } else {
+    lead = [prose('Delle entrate ('), figure(euro(summary.income)), prose('): ')];
+  }
+  return [...lead, ...joinClauses(parts, ', '), prose('. Il riferimento è 50/30/20.')];
+}
+
+// ─── Flusso on a phone ────────────────────────────────────────────────────────
+//
+// Below 640px the Flusso is a share bar and rows, not a Sankey (FlowShareMobile). Its caption, its
+// surplus note and its empty line are sentences, so they live here like every other Analisi word.
+
+/** « Nessuna entrata: tutto è coperto dal patrimonio.» — the no-income tail of both captions. */
+const NO_INCOME_TAIL: Narrative = [prose(' Nessuna entrata: tutto è coperto dal patrimonio.')];
+
+/** « Oltre la linea delle entrate: 400 € dal patrimonio.» — the deficit tail, beside the red line. */
+function deficitTail(deficit: number): Narrative {
+  return [prose(' Oltre la linea delle entrate: '), figure(euro(deficit)), prose(' dal patrimonio.')];
+}
+
+/**
+ * The line under the 50/30/20 bar: what the bar is a share of, the reference its ticks mark, and
+ * where the money beyond the income came from. Null when there is no flow (the caller prints
+ * `describeFlowAbsence` instead).
+ */
+export function describeSpendingRolesBar(roleShares: SpendingRoleShares): Narrative | null {
+  if (roleShares.absence !== null) return null;
+  const narrative: Narrative = [
+    prose('Quote di quanto è uscito ('),
+    figure(euro(roleShares.base)),
+    prose('); tacche a 50 e 80, il riferimento 50/30/20.'),
+  ];
+  if (roleShares.noIncome) return [...narrative, ...NO_INCOME_TAIL];
+  if (roleShares.deficit > 0) return [...narrative, ...deficitTail(roleShares.deficit)];
+  return narrative;
+}
+
+/**
+ * The line under the type bar: the bar is the SPENDING (the reading's own base for the type
+ * shares), then the deficit or the absence of income. «Nessuna spesa nel periodo.» when only
+ * income moved — the surplus note says the rest. Null when there is no flow.
+ */
+export function describeTypeFlowBar(breakdown: TypeFlowBreakdown): Narrative | null {
+  if (breakdown.absence !== null) return null;
+  if (breakdown.spending <= 0) return [prose('Nessuna spesa nel periodo.')];
+  const narrative: Narrative = [prose('Quote delle spese ('), figure(euro(breakdown.spending)), prose(').')];
+  if (breakdown.noIncome) return [...narrative, ...NO_INCOME_TAIL];
+  if (breakdown.deficit > 0) return [...narrative, ...deficitTail(breakdown.deficit)];
+  return narrative;
+}
+
+export interface FlowSurplusInput {
+  /** income − spending when positive (`TypeFlowBreakdown.surplus` / `SpendingRoleShares.surplus`). */
+  surplus: number;
+  /**
+   * The note closes a group that already lists rows (the roles view's Risparmi, when categories
+   * are classified as saving): it then opens on «Più», because the surplus comes on top of them.
+   */
+  afterRows: boolean;
+  /**
+   * The period's not-yet-happened slice (`summarizeScheduled` — AnalisiTab's `scheduled`, the
+   * one the verdict reads). A running year's surplus includes the calendar, so the note then
+   * carries the SAME clause Tracciamento and the verdict use.
+   */
+  scheduled: ScheduledSlice;
+  /** `describeAnalisiScheduledHorizon(period, today)` — how far that calendar reaches. */
+  horizon: string | null;
+}
+
+/**
+ * «600 € avanzati nel periodo.» under the savings group — plus «Nel totale ci sono ancora … già
+ * in calendario» when the period holds scheduled rows (owner's decision, 2026-09-27: the past
+ * tense stays, the calendar is declared, never a second wording). Null without a surplus.
+ */
+export function describeFlowSurplus({ surplus, afterRows, scheduled, horizon }: FlowSurplusInput): Narrative | null {
+  if (surplus <= 0) return null;
+  const singular = Math.round(surplus) === 1;
+  return [
+    ...(afterRows ? [prose('Più ')] : []),
+    figure(euro(surplus)),
+    prose(` ${singular ? 'avanzato' : 'avanzati'} nel periodo.`),
+    ...(scheduledSentence(scheduled, horizon) ?? []),
+  ];
+}
+
+/**
+ * The Flusso with nothing to draw, in the absence's own name (DESIGN.md → The
+ * Absence-Has-Three-Names Rule): nothing recorded, or rows that net to nothing. A failed read
+ * never reaches here — the page's `loadFailed` branch is checked first.
+ */
+export function describeFlowAbsence(absence: FlowAbsence): Narrative {
+  if (absence === 'missing') return [prose('Nessuna entrata né spesa registrata nel periodo.')];
+  return [prose('I movimenti del periodo fanno zero: nessun flusso da disegnare.')];
 }
 
 export interface EntityFocusInput {

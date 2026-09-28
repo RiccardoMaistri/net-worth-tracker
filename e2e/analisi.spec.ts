@@ -273,3 +273,63 @@ test('offers no subcategory breakdown once the focus IS a subcategory', async ({
   await expect(condYears.getByRole('button')).toHaveCount(0);
   await expect(condYears.getByText('Per sottocategoria')).toHaveCount(0);
 });
+
+// ── 50/30/20 roles (settings.spendingRolesEnabled) ─────────────────────────────────────────────
+//
+// The fixture's categories carry roles (scripts/seedAnalisiE2E.mts: Casa a need with Elettricità
+// overridden as a want, Alimentari unclassified), inert while the account's flag is off — which is
+// how every other test in this file sees the page. This block turns the flag on through the
+// emulator and back off, whatever happens in between.
+
+const FIRESTORE = 'http://127.0.0.1:8080/v1/projects/demo-net-worth/databases/(default)/documents';
+
+async function setSpendingRolesEnabled(enabled: boolean): Promise<void> {
+  const res = await fetch(`${FIRESTORE}/assetAllocationTargets/test-user-analisi?updateMask.fieldPaths=spendingRolesEnabled`, {
+    method: 'PATCH',
+    headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { spendingRolesEnabled: { booleanValue: enabled } } }),
+  });
+  expect(res.ok).toBe(true);
+}
+
+test.describe('Flusso by 50/30/20 role', () => {
+  test.beforeAll(async () => setSpendingRolesEnabled(true));
+  test.afterAll(async () => setSpendingRolesEnabled(false));
+
+  test('opens on «Per ruolo»: the roles reading and the roles Sankey, a split category once per role', async ({ page }) => {
+    await gotoAnalisi(page);
+    const flusso = page.getByRole('region', { name: 'Flusso', exact: true });
+
+    // The view switch is the tile-aside AsideToggle: a named group, ONE Tab stop on the pressed option.
+    const grouping = flusso.getByRole('group', { name: 'Raggruppa il flusso' });
+    await expect(grouping.getByRole('button', { name: 'Per ruolo' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(grouping.getByRole('button', { name: 'Per tipo' })).toHaveAttribute('aria-pressed', 'false');
+    await expect(grouping.getByRole('button', { name: 'Per ruolo' })).toHaveAttribute('tabindex', '0');
+    await expect(grouping.getByRole('button', { name: 'Per tipo' })).toHaveAttribute('tabindex', '-1');
+    // Current year: income 2000; Condominio 300 a need, Elettricità 80 a want, Alimentari 400
+    // unclassified; Risparmi is the 1220 surplus (no row classified as a saving, so no «di cui»
+    // clause). Shares of the 2000 that came in, in the order the Sankey draws the roles.
+    await expect(flusso).toContainText(
+      'Delle entrate (2000 €): necessità 15%, desideri 4%, da classificare 20%, risparmi 61%. Il riferimento è 50/30/20.'
+    );
+
+    const chart = flusso.getByRole('img');
+    for (const label of ['Necessità', 'Desideri', 'Da classificare', 'Risparmi', 'Casa (Necessità)', 'Casa (Desideri)']) {
+      await expect(chart.locator('text').filter({ hasText: new RegExp(`^${label.replace(/[()]/g, '\\$&')}$`) })).toHaveCount(1);
+    }
+    // No deficit in this period: nothing drawn as covered by the wealth.
+    await expect(chart.locator('text').filter({ hasText: 'Coperto dal patrimonio' })).toHaveCount(0);
+  });
+
+  test('«Per tipo» is one tap away and gives back today\'s view', async ({ page }) => {
+    await gotoAnalisi(page);
+    const flusso = page.getByRole('region', { name: 'Flusso', exact: true });
+
+    await flusso.getByRole('button', { name: 'Per tipo' }).click();
+    await expect(flusso.getByRole('button', { name: 'Per tipo' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(flusso).not.toContainText('50/30/20');
+    const chart = flusso.getByRole('img');
+    await expect(chart.locator('text').filter({ hasText: /^Spese Fisse$/ })).toHaveCount(1);
+    await expect(chart.locator('text').filter({ hasText: /^Necessità$/ })).toHaveCount(0);
+  });
+});

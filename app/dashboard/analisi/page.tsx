@@ -46,6 +46,7 @@ export default function AnalisiPage() {
   // must not fire until the DEFINITIVE floor is known — the restore is one-shot and
   // a wrong provisional floor would silently drop a valid bookmarked focus.
   const [settingsSettled, setSettingsSettled] = useState(false);
+  const [spendingRolesEnabled, setSpendingRolesEnabled] = useState(false);
 
   // Load cashflowHistoryStartYear — same pattern as cashflow/page.tsx. Literal copy intentional:
   // avoid a shared hook abstraction for a one-time read used in two places with the same logic.
@@ -57,6 +58,7 @@ export default function AnalisiPage() {
         if (settings?.cashflowHistoryStartYear !== undefined) {
           setCashflowHistoryStartYear(settings.cashflowHistoryStartYear);
         }
+        setSpendingRolesEnabled(settings?.spendingRolesEnabled ?? false);
       } catch (error) {
         // Non-fatal: trend charts will simply show data from currentYear-1 onward.
         console.error('Failed to load analisi settings, using fallback defaults', {
@@ -84,6 +86,7 @@ export default function AnalisiPage() {
         loading={loading}
         loadFailed={loadFailed}
         historyStartYear={cashflowHistoryStartYear}
+        spendingRolesEnabled={spendingRolesEnabled}
       />
     </PageContainer>
   );

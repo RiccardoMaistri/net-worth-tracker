@@ -8,7 +8,11 @@
  * `onNodeClick` with the node's DESCRIPTOR — the index says what a node is, the handler never
  * infers it from the id's shape.
  *
- * Colours stay hardcoded hex (react-spring cannot interpolate oklch — AGENTS.md → Recharts).
+ * Colours reach it as hex (react-spring cannot interpolate oklch — AGENTS.md → Recharts): the type
+ * view's are hardcoded, the 50/30/20 view's roles are theme tokens resolved by useCssColorTokens.
+ *
+ * Drawn from 640px only: below it the Flusso is a share bar and rows (FlowShareMobile), so there is
+ * one layout — labels outside, gradients on — and no reduced phone variant.
  *
  * Used by: components/cashflow/analisi/tiles/FlussoTile.tsx
  */
@@ -26,8 +30,6 @@ interface CashflowSankeyChartProps {
   view: SankeyView;
   /** Keyed on identity so switching views remounts the reveal animation. */
   viewKey: string;
-  /** Compact layout: labels inside, thinner nodes, no gradients. */
-  isMobile: boolean;
   /** The plot's height, from the view's widest column (`resolveSankeyHeight`) — never a fixed 500. */
   height: number;
   /** Inside a type's own view a type node is a no-op — the tooltip must not promise a drill. */
@@ -35,9 +37,25 @@ interface CashflowSankeyChartProps {
   /** The svg's accessible name: what is drawn, in the tile's words. */
   ariaLabel: string;
   onNodeClick: (descriptor: SankeyNodeDescriptor, color: string) => void;
+  /**
+   * 'input' keeps the builder's node order inside each column (the 50/30/20 view: a role's
+   * categories stay together instead of interleaving by value); 'auto' is d3-sankey's own.
+   */
+  nodeSort?: 'auto' | 'input';
 }
 
-export function CashflowSankeyChart({ view, viewKey, isMobile, height, drilled, ariaLabel, onNodeClick }: CashflowSankeyChartProps) {
+// The spacing is the floor under an 11px label: with 10px two tiny nodes' labels touched.
+const CHART_CONFIG = {
+  margin: { top: 40, right: 160, bottom: 40, left: 160 },
+  nodeThickness: 20,
+  nodeSpacing: 14,
+  nodeBorderWidth: 2,
+  enableLinkGradient: true,
+  labelPosition: 'outside' as const,
+  labelOffset: 12,
+};
+
+export function CashflowSankeyChart({ view, viewKey, height, drilled, ariaLabel, onNodeClick, nodeSort = 'auto' }: CashflowSankeyChartProps) {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === 'dark';
   const prefersReducedMotion = useReducedMotion();
@@ -51,27 +69,6 @@ export function CashflowSankeyChart({ view, viewKey, isMobile, height, drilled, 
     const budgetNodeId = view.nodes.find((node) => view.index.get(node.id)?.kind === 'budget')?.id;
     return view.links.reduce((sum, link) => (drilled || link.target === budgetNodeId ? sum + link.value : sum), 0);
   }, [view, drilled]);
-
-  // The spacing is the floor under an 11px label: with 10px two tiny nodes' labels touched.
-  const chartConfig = isMobile
-    ? {
-        margin: { top: 20, right: 60, bottom: 20, left: 60 },
-        nodeThickness: 15,
-        nodeSpacing: 10,
-        nodeBorderWidth: 1,
-        enableLinkGradient: false,
-        labelPosition: 'inside' as const,
-        labelOffset: 0,
-      }
-    : {
-        margin: { top: 40, right: 160, bottom: 40, left: 160 },
-        nodeThickness: 20,
-        nodeSpacing: 14,
-        nodeBorderWidth: 2,
-        enableLinkGradient: true,
-        labelPosition: 'outside' as const,
-        labelOffset: 12,
-      };
 
   if (view.nodes.length === 0 || view.links.length === 0) {
     return <p className="py-8 text-center text-[13px] text-muted-foreground">Nessun flusso nel periodo.</p>;
@@ -89,11 +86,12 @@ export function CashflowSankeyChart({ view, viewKey, isMobile, height, drilled, 
       >
         <ResponsiveSankey
           data={chartData}
-          margin={chartConfig.margin}
+          margin={CHART_CONFIG.margin}
           // `left`: a node sits at its depth from the sources, so a category without a
           // subcategory layer stays in the categories' column and the savings node beside
           // the types — `justify` pushed every leaf to the last column, 54 nodes deep.
           align="start"
+          sort={nodeSort}
           role="img"
           ariaLabel={ariaLabel}
           colors={{ datum: 'nodeColor' }}
@@ -102,21 +100,21 @@ export function CashflowSankeyChart({ view, viewKey, isMobile, height, drilled, 
           motionConfig="gentle"
           nodeOpacity={1}
           nodeHoverOpacity={0.84}
-          nodeThickness={chartConfig.nodeThickness}
-          nodeSpacing={chartConfig.nodeSpacing}
-          nodeBorderWidth={chartConfig.nodeBorderWidth}
+          nodeThickness={CHART_CONFIG.nodeThickness}
+          nodeSpacing={CHART_CONFIG.nodeSpacing}
+          nodeBorderWidth={CHART_CONFIG.nodeBorderWidth}
           nodeBorderColor={{ from: 'color', modifiers: [['darker', 0.8]] }}
           nodeBorderRadius={3}
           linkOpacity={isDark ? 0.68 : 0.42}
           linkHoverOpacity={isDark ? 0.88 : 0.62}
           linkContract={3}
-          enableLinkGradient={chartConfig.enableLinkGradient}
+          enableLinkGradient={CHART_CONFIG.enableLinkGradient}
           // No `|| node.id` fallback: ids are namespaced, and a missing label would put
           // "cat:fixed:aB3xK9" on screen. SankeyNode.label is required precisely so that
           // cannot happen; the cast is Nivo's accessor type omitting `label`.
           label={(node) => (node as unknown as SankeyNode).label}
-          labelPosition={chartConfig.labelPosition}
-          labelPadding={chartConfig.labelOffset}
+          labelPosition={CHART_CONFIG.labelPosition}
+          labelPadding={CHART_CONFIG.labelOffset}
           labelOrientation="horizontal"
           // One neutral per mode (see LABEL_TEXT_COLORS): a label is read, not coloured.
           labelTextColor={isDark ? LABEL_TEXT_COLORS.dark : LABEL_TEXT_COLORS.light}
@@ -143,10 +141,12 @@ export function CashflowSankeyChart({ view, viewKey, isMobile, height, drilled, 
                     <span className="text-xs italic text-muted-foreground">Click per aprire la scheda</span>
                   </>
                 )}
-                {!drilled && kind === 'expenseType' && (
+                {!drilled && (kind === 'expenseType' || kind === 'spendingRole') && (
                   <>
                     <br />
-                    <span className="text-xs italic text-muted-foreground">Click per il dettaglio per tipologia</span>
+                    <span className="text-xs italic text-muted-foreground">
+                      {kind === 'spendingRole' ? 'Click per il dettaglio per ruolo' : 'Click per il dettaglio per tipologia'}
+                    </span>
                   </>
                 )}
               </div>

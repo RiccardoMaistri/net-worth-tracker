@@ -18,6 +18,7 @@
 import type { Narrative, NarrativeSegment, PageVerdictModel, VerdictTone } from '@/lib/utils/narrative';
 import type { Period } from '@/lib/utils/period';
 import type {
+  CommonSpending,
   ExpenseSplitSummary,
   MemberBalance,
   SplitBasis,
@@ -61,20 +62,16 @@ function joinNames(names: string[]): string {
 // ─── The basis ────────────────────────────────────────────────────────────────
 
 /**
- * Labor income the shares could not use, because nobody the settings still know is named on it.
- * Empty when there is none.
+ * Income the shares could not use, because it was left «in comune». Empty when there is none.
  *
  * The spending side has always declared its orphans; until 2026-09-21 the income side — the one
  * that decides the percentages — declared nothing, so a split computed on part of the month's
- * salaries was printed with the confidence of one computed on all of them.
+ * income was printed with the confidence of one computed on all of it. What that income DOES
+ * (it pays the pool first) is the «In comune» tile's fact, said there and not here.
  */
-function unattributedSalaryClause(unattributedSalary: number): Narrative {
-  if (unattributedSalary <= 0) return [];
-  return [
-    prose(' Altri '),
-    figure(euro(unattributedSalary)),
-    prose(' di reddito da lavoro non sono intestati a nessuno e non entrano nelle quote.'),
-  ];
+function unattributedIncomeClause(unattributedIncome: number): Narrative {
+  if (unattributedIncome <= 0) return [];
+  return [prose(' Altri '), figure(euro(unattributedIncome)), prose(' di entrate sono in comune e non entrano nelle quote.')];
 }
 
 /**
@@ -85,21 +82,12 @@ function unattributedSalaryClause(unattributedSalary: number): Narrative {
  * (DESIGN.md → **The One-Tile-One-Question Rule**).
  */
 export function describeMissingBasis(basis: Extract<SplitBasis, { kind: 'unavailable' }>): Narrative {
-  const tail = unattributedSalaryClause(basis.unattributedSalary);
+  const tail = unattributedIncomeClause(basis.unattributedIncome);
   if (basis.reason === 'not-enough-members') {
     return [prose('Per dividere le spese servono almeno due persone.'), ...tail];
   }
-  if (basis.reason === 'no-labor-categories') {
-    return [prose('Nessuna categoria conta come reddito da lavoro, quindi non si sa quali entrate siano stipendi.'), ...tail];
-  }
-  const names = joinNames(basis.missingNames);
-  const plural = basis.missingNames.length > 1;
   return [
-    prose(
-      plural
-        ? `In questo periodo non risultano stipendi di ${names}: finché mancano, le quote non si calcolano.`
-        : `In questo periodo non risulta lo stipendio di ${names}: finché manca, le quote non si calcolano.`
-    ),
+    prose(`In questo periodo non risultano entrate di ${joinNames(basis.missingNames)}: finché mancano, le quote non si calcolano.`),
     ...tail,
   ];
 }
@@ -108,46 +96,44 @@ export function describeMissingBasis(basis: Extract<SplitBasis, { kind: 'unavail
  * What to DO about a missing basis, in the imperative — the Quota tile's reading, because that
  * tile is the one that would have held the shares. Each branch names the exact screen: a reading
  * that states an absence without a destination leaves the reader with nothing to do, and the
- * branch a real household actually hits (`missing-salary`) was the one naming none.
+ * branch a real household actually hits (`missing-income`) was the one naming none.
  */
 export function describeBasisRemedy(basis: Extract<SplitBasis, { kind: 'unavailable' }>): Narrative {
   if (basis.reason === 'not-enough-members') {
     return [prose('Aggiungi le persone che dividono le spese in Impostazioni → Preferenze → Famiglia.')];
-  }
-  if (basis.reason === 'no-labor-categories') {
-    return [prose('Scegli quali categorie sono reddito da lavoro in Impostazioni → Preferenze → Cashflow.')];
   }
   const names = joinNames(basis.missingNames);
   const plural = basis.missingNames.length > 1;
   return [
     prose(
       plural
-        ? `Registra gli stipendi di ${names} in Tracciamento e intestali a chi li ha ricevuti.`
-        : `Registra lo stipendio di ${names} in Tracciamento e intestaglielo.`
+        ? `Registra le entrate di ${names} in Tracciamento e intestale a chi le ha ricevute.`
+        : `Registra le entrate di ${names} in Tracciamento e intestagliele.`
     ),
   ];
 }
 
 /**
- * "Le quote vengono dagli stipendi del periodo: Giuseppe 2600 € (60%) e Marcella 1700 € (40%)."
+ * "Le quote vengono dalle entrate del periodo: Giuseppe 2600 € (60%) e Marcella 1700 € (40%)."
  * — the Quota tile's reading. It states the base out loud, because a percentage whose origin is
- * invisible is a number the reader has to take on faith.
+ * invisible is a number the reader has to take on faith. «Entrate», not «stipendi», since
+ * 2026-09-27: every income attributed to a person is in the base, whatever its category.
  */
 export function describeSplitBasis(basis: SplitBasis): Narrative {
   if (basis.kind === 'unavailable') return describeBasisRemedy(basis);
 
-  const segments: Narrative = [prose('Le quote vengono dagli stipendi del periodo: ')];
+  const segments: Narrative = [prose('Le quote vengono dalle entrate del periodo: ')];
   basis.members.forEach((entry, index) => {
     if (index > 0) segments.push(prose(index === basis.members.length - 1 ? ' e ' : ', '));
     segments.push(
       prose(`${entry.member.name} `),
-      figure(euro(entry.salary)),
+      figure(euro(entry.income)),
       prose(' ('),
       figure(formatPercentage(entry.share * 100, 0)),
       prose(')')
     );
   });
-  segments.push(prose('.'), ...unattributedSalaryClause(basis.unattributedSalary));
+  segments.push(prose('.'), ...unattributedIncomeClause(basis.unattributedIncome));
   return segments;
 }
 
@@ -162,6 +148,8 @@ export interface SplitVerdictInput {
 /**
  * Every judgement on this page reads the BOOKED residual, never the whole-period one: a month is
  * called short only on money that has actually left the account. See `MemberBalance.remainingBooked`.
+ * The headline says «le entrate» since 2026-09-27, because the base is every income attributed
+ * to the person, not the salary alone.
  */
 function bookedResiduals(summary: ExpenseSplitSummary): number[] {
   return summary.members
@@ -197,17 +185,49 @@ function resolveHeadline(summary: ExpenseSplitSummary, inPeriod: string, ongoing
     .filter((member) => member.remainingBooked !== null && member.remainingBooked < 0)
     .map((member) => member.member.name);
   if (shortNames.length === summary.members.length) {
-    return `${capitalise(inPeriod)} lo stipendio non ${ongoing ? 'basta' : 'è bastato'} a nessuno.`;
+    return `${capitalise(inPeriod)} le entrate non ${ongoing ? 'bastano' : 'sono bastate'} a nessuno.`;
   }
   if (shortNames.length > 0) {
-    return `${capitalise(inPeriod)} lo stipendio di ${joinNames(shortNames)} non ${ongoing ? 'basta' : 'è bastato'}.`;
+    return `${capitalise(inPeriod)} le entrate di ${joinNames(shortNames)} non ${ongoing ? 'bastano' : 'sono bastate'}.`;
   }
   return `${capitalise(inPeriod)} ${ongoing ? 'resta' : 'è restato'} qualcosa a tutti.`;
 }
 
 /**
- * "Ad agosto le spese in comune sono 2410 €: 1446 € a Giuseppe (60%) e 964 € a Marcella (40%).
- * A Giuseppe restano 754 € dei 2600 € di stipendio; a Marcella 436 € dei 1700 €."
+ * ", meno 300 € di entrate in comune: 2110 € da dividere" — what the income left «in comune» did
+ * to the pool, right after the gross has been printed; or ", coperte per intero dai 1300 € di
+ * entrate in comune: non c'è niente da dividere, e avanzano 300 €" when it covered the lot.
+ * Empty when no income was left in comune: then the gross IS the pool and the shares follow it
+ * as they always did.
+ *
+ * The order — gross, what came off, what was divided — is the point: the shares printed after
+ * it are visibly shares of the NET, and the surplus is said as a surplus, never handed out.
+ */
+function poolClause(common: CommonSpending): Narrative {
+  if (common.income <= 0) return [];
+  if (common.toSplit > 0) {
+    return [
+      prose(', meno '),
+      figure(euro(common.income)),
+      prose(' di entrate in comune: '),
+      figure(euro(common.toSplit)),
+      prose(' da dividere'),
+    ];
+  }
+  const segments: Narrative = [
+    prose(', coperte per intero dai '),
+    figure(euro(common.income)),
+    prose(" di entrate in comune: non c'è niente da dividere"),
+  ];
+  if (common.surplus > 0) segments.push(prose(', e avanzano '), figure(euro(common.surplus)));
+  return segments;
+}
+
+/**
+ * "Ad agosto le spese in comune sono 2410 €, meno 300 € di entrate in comune: 2110 € da
+ * dividere, 1266 € a Giuseppe (60%) e 844 € a Marcella (40%). A Giuseppe restano 754 € dei
+ * 2600 € di entrate; a Marcella 436 € dei 1700 €." — without the income clause when nothing
+ * was left in comune.
  *
  * The scheduled clause closes it exactly as on Tracciamento and Analisi, and for the same
  * reason: a running period's pool contains rows that have not been paid yet, and the amount is
@@ -226,21 +246,27 @@ export function buildSplitVerdict({ summary, period, now }: SplitVerdictInput): 
   const sentence: Narrative = [
     prose(`${opening} le spese in comune ${subject.ongoing ? 'sono' : 'sono state'} `),
     figure(euro(summary.common.total)),
+    ...poolClause(summary.common),
   ];
 
   if (summary.basis.kind === 'unavailable') {
     sentence.push(prose('. '), ...describeMissingBasis(summary.basis));
   } else {
-    sentence.push(prose(': '));
-    summary.members.forEach((member, index) => {
-      if (index > 0) sentence.push(prose(index === summary.members.length - 1 ? ' e ' : ', '));
-      sentence.push(
-        figure(euro(member.commonShare ?? 0)),
-        prose(` a ${member.member.name} (`),
-        figure(formatPercentage((member.share ?? 0) * 100, 0)),
-        prose(')')
-      );
-    });
+    // Over a pool the common income covered whole there is no share to name: a percentage of
+    // zero would be a form.
+    const covered = summary.common.income > 0 && summary.common.toSplit <= 0;
+    if (!covered) {
+      sentence.push(prose(summary.common.income > 0 ? ', ' : ': '));
+      summary.members.forEach((member, index) => {
+        if (index > 0) sentence.push(prose(index === summary.members.length - 1 ? ' e ' : ', '));
+        sentence.push(
+          figure(euro(member.commonShare ?? 0)),
+          prose(` a ${member.member.name} (`),
+          figure(formatPercentage((member.share ?? 0) * 100, 0)),
+          prose(')')
+        );
+      });
+    }
     sentence.push(prose('.'), ...remainingClause(summary.members));
   }
 
@@ -250,7 +276,7 @@ export function buildSplitVerdict({ summary, period, now }: SplitVerdictInput): 
 }
 
 /**
- * " A Giuseppe restano 754 € dei 2600 € di stipendio; a Marcella 436 € dei 1700 €."
+ * " A Giuseppe restano 754 € dei 2600 € di entrate; a Marcella 436 € dei 1700 €."
  *
  * On the BOOKED residual — what has already happened. Where the calendar takes it is
  * `calendarClause`, a separate sentence, because the two are different facts.
@@ -268,11 +294,11 @@ function remainingClause(members: MemberBalance[]): Narrative {
       prose(short ? 'mancano ' : 'restano '),
       signed(euro(remaining), short ? 'negative' : 'positive')
     );
-    // The base is named only once: repeating «di stipendio» on every clause reads as a form.
+    // The base is named only once: repeating «di entrate» on every clause reads as a form.
     if (index === 0) {
-      segments.push(prose(' dei '), figure(euro(member.salary)), prose(' di stipendio'));
+      segments.push(prose(' dei '), figure(euro(member.income)), prose(' di entrate'));
     } else {
-      segments.push(prose(' dei '), figure(euro(member.salary)));
+      segments.push(prose(' dei '), figure(euro(member.income)));
     }
   });
   segments.push(prose('.'));
@@ -310,21 +336,64 @@ function calendarClause(members: MemberBalance[]): Narrative {
 // ─── Tile readings ────────────────────────────────────────────────────────────
 
 /**
- * "47 voci in comune; 3 sono di una persona che non è più in Famiglia." — the common pool's
- * reading. The orphan clause exists so those euros are never silently missing from the split.
+ * "47 voci in comune; 2 entrate in comune per 300 € riducono quel che c'è da dividere; altre 3
+ * per 250 € sono di qualcuno che non è più in Famiglia, e restano fuori dalla divisione." — the
+ * common pool's reading: the spending rows, the income rows and what they did to the pool, and
+ * the orphans. The orphan clause exists so those euros are never silently missing from the
+ * split; since 2026-09-27 it covers the income rows too, because an income whose owner has left
+ * is somebody's and reduces nothing.
  */
 export function describeCommonSpending(summary: ExpenseSplitSummary): Narrative {
+  const { common, unassigned } = summary;
   const segments: Narrative = [
-    figure(String(summary.common.rowCount)),
-    prose(summary.common.rowCount === 1 ? ' voce in comune' : ' voci in comune'),
+    figure(String(common.rowCount)),
+    prose(common.rowCount === 1 ? ' voce in comune' : ' voci in comune'),
   ];
-  if (summary.unassigned.rowCount > 0) {
+
+  if (common.incomeRowCount > 0) {
+    const one = common.incomeRowCount === 1;
     segments.push(
-      prose('; altre '),
-      figure(String(summary.unassigned.rowCount)),
-      prose(' per '),
-      figure(euro(summary.unassigned.total)),
-      prose(" sono di qualcuno che non è più in Famiglia, e restano fuori dalla divisione")
+      prose('; '),
+      figure(String(common.incomeRowCount)),
+      prose(one ? ' entrata in comune per ' : ' entrate in comune per '),
+      figure(euro(common.income)),
+      prose(
+        common.toSplit > 0
+          ? one ? " riduce quel che c'è da dividere" : " riducono quel che c'è da dividere"
+          : one ? ' le copre per intero' : ' le coprono per intero'
+      )
+    );
+  }
+
+  const orphans: Narrative[] = [];
+  if (unassigned.rowCount > 0) {
+    orphans.push(
+      unassigned.rowCount === 1
+        ? [prose("un'altra per "), figure(euro(unassigned.total))]
+        : [prose('altre '), figure(String(unassigned.rowCount)), prose(' per '), figure(euro(unassigned.total))]
+    );
+  }
+  if (unassigned.incomeRowCount > 0) {
+    orphans.push([
+      figure(String(unassigned.incomeRowCount)),
+      prose(unassigned.incomeRowCount === 1 ? ' entrata per ' : ' entrate per '),
+      figure(euro(unassigned.income)),
+    ]);
+  }
+  if (orphans.length > 0) {
+    segments.push(prose('; '));
+    orphans.forEach((part, index) => {
+      if (index > 0) segments.push(prose(' e '));
+      segments.push(...part);
+    });
+    // The verb agrees with how many rows are orphaned, across both kinds.
+    const plural = unassigned.rowCount + unassigned.incomeRowCount > 1;
+    segments.push(
+      prose(
+        plural
+          ? ' sono di qualcuno che non è più in Famiglia, e restano fuori dalla divisione'
+          : ' è di qualcuno che non è più in Famiglia, e resta fuori dalla divisione'
+      )
     );
   }
   segments.push(prose('.'));
@@ -332,7 +401,17 @@ export function describeCommonSpending(summary: ExpenseSplitSummary): Narrative 
 }
 
 /**
- * "1446 € di spese in comune, 320 € di spese personali: dai 2600 € di stipendio restano 834 €."
+ * "Spese in comune 2410 €, meno 300 € di entrate in comune: 2110 € da dividere." — the pool in
+ * one tense-free line, for a surface with no hero to hang the two figures on (the monthly
+ * email). Null when no income was left in comune: then the line would only repeat the total.
+ */
+export function describeCommonIncome(summary: ExpenseSplitSummary): Narrative | null {
+  if (summary.common.income <= 0) return null;
+  return [prose('Spese in comune '), figure(euro(summary.common.total)), ...poolClause(summary.common), prose('.')];
+}
+
+/**
+ * "1446 € di spese in comune, 320 € di spese personali: dai 2600 € di entrate restano 834 €."
  * — one person's tile, in the owner's own phrasing. This is the sentence the page exists for.
  */
 export function describeMemberBalance(balance: MemberBalance): Narrative {
@@ -353,8 +432,8 @@ export function describeMemberBalance(balance: MemberBalance): Narrative {
     prose('), '),
     figure(euro(balance.personalSpending)),
     prose(' di spese personali: dai '),
-    figure(euro(balance.salary)),
-    prose(' di stipendio '),
+    figure(euro(balance.income)),
+    prose(' di entrate '),
     prose(short ? 'mancano ' : 'restano '),
     signed(euro(balance.remainingBooked), short ? 'negative' : 'positive'),
     prose('.'),
@@ -382,14 +461,14 @@ export function describeMemberCalendar(balance: MemberBalance): Narrative | null
 }
 
 /**
- * "Il 34% di quel che ha guadagnato" — how much of their salary the month took, under the
- * person's own figure. Null when there is no salary to measure against: a share of zero is a
+ * "Se ne va il 34% delle entrate." — how much of their income the month took, under the
+ * person's own figure. Null when there is no income to measure against: a share of zero is a
  * division by zero, not a 0%.
  */
-export function describeSalaryConsumed(balance: MemberBalance): Narrative | null {
-  if (balance.salary <= 0 || balance.commonShare === null) return null;
-  const consumedShare = (balance.commonShare + balance.personalSpending) / balance.salary;
-  return [prose('Se ne va '), ...percentWithArticle(consumedShare), prose(' dello stipendio.')];
+export function describeIncomeConsumed(balance: MemberBalance): Narrative | null {
+  if (balance.income <= 0 || balance.commonShare === null) return null;
+  const consumedShare = (balance.commonShare + balance.personalSpending) / balance.income;
+  return [prose('Se ne va '), ...percentWithArticle(consumedShare), prose(' delle entrate.')];
 }
 
 /**

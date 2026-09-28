@@ -22,6 +22,7 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
+  deleteField,
   query,
   where,
   orderBy
@@ -166,10 +167,17 @@ export async function updateCategory(
 
     const categoryRef = doc(db, CATEGORIES_COLLECTION, categoryId);
 
-    const cleanedUpdates = removeUndefinedFields({
+    const cleanedUpdates: Record<string, unknown> = removeUndefinedFields({
       ...updates,
       updatedAt: new Date(),
     });
+    // «Da classificare» is the ABSENCE of a role, so clearing it has to delete the stored field:
+    // removeUndefinedFields would drop the key and leave the old role in place. The key present
+    // with no value means "clear"; the key absent means "not edited" (a dialog opened while the
+    // 50/30/20 setting is off must not wipe a classification it never showed).
+    if ('spendingRole' in updates && updates.spendingRole === undefined) {
+      cleanedUpdates.spendingRole = deleteField();
+    }
 
     await updateDoc(categoryRef, cleanedUpdates);
   } catch (error) {

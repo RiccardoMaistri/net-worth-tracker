@@ -1,19 +1,31 @@
 /**
  * The numbers of Cashflow › Divisione: how a household's shared spending is split between the
- * people who live in it, and what is left of each person's salary once their share is paid.
+ * people who live in it, and what is left of each person's income once their share is paid.
  *
  * THE MODEL, in one paragraph. Every expense row is either the household's («in comune», the
  * default, which is what an absent `personalMemberId` means) or one person's. The common
- * spending is a pool. Each person carries a share of that pool proportional to the salary they
- * brought into the period, and what remains to them is `salary − share of the pool − their own
- * spending`. That last figure is the point of the page: it is the money that can go to a
- * personal investment account at the end of the month.
+ * spending is a pool, and the income left «in comune» pays it FIRST (owner's decision,
+ * 2026-09-27): what is split by the shares is `common spending − common income`, floored at zero,
+ * and whatever the common income earns beyond the spending is declared as a surplus, never
+ * distributed. Each person carries a share of that net pool proportional to the income
+ * attributed to them in the period, and what remains to them is `their income − share of the
+ * pool − their own spending`. That last figure is the point of the page: it is the money that
+ * can go to a personal investment account at the end of the month.
+ *
+ * WHICH INCOME IS WHOSE. Every income row not attributed to a person is the household's and
+ * reduces the pool — a refund on a shared bill, a gift to the couple, and a salary somebody
+ * forgot to attribute alike (that last one buys nobody a share, and the basis declares it: two
+ * facts about one row, both stated). Every income row attributed to a person is theirs and earns
+ * them a share, WHATEVER its category (owner's decision, 2026-09-27: until then only the labor
+ * categories counted, and a refund attributed to somebody was in neither the pool nor the
+ * residual). An income row whose owner has since left Famiglia is neither: the user said it was
+ * somebody's, so it reduces nothing, and it is declared with the spending orphans.
  *
  * THE SHARES ARE THE PERIOD'S, and that is a deliberate choice with a cost. Reading them off the
- * salaries actually received in the window is the most faithful answer to «how did THIS month
+ * income actually received in the window is the most faithful answer to «how did THIS month
  * go», and it is also the most volatile: a bonus or a thirteenth month moves the percentage, and
  * a salary not yet recorded would move it to 100/0. So the shares are never guessed. When one of
- * the people has no salary in the period, `resolveSplitBasis` returns `unavailable` naming who is
+ * the people has no income in the period, `resolveSplitBasis` returns `unavailable` naming who is
  * missing, and every figure that depends on the split disappears with it rather than being
  * invented — the same rule that makes an unknowable baseline `null` instead of `0` elsewhere in
  * this codebase.
@@ -47,11 +59,11 @@ export interface SplitMember {
   name: string;
 }
 
-/** One person's salary in the period, and the share of the common pool it earns them. */
+/** One person's income in the period, and the share of the common pool it earns them. */
 export interface MemberShare {
   member: SplitMember;
-  /** Labor income attributed to this person inside the period, positive. */
-  salary: number;
+  /** Every income row attributed to this person inside the period, positive, whatever its category. */
+  income: number;
   /** 0..1, summing to 1 across the members. */
   share: number;
 }
@@ -60,34 +72,40 @@ export interface MemberShare {
 export type SplitUnavailableReason =
   /** Fewer than two people configured under Impostazioni → Famiglia. */
   | 'not-enough-members'
-  /** No income category is marked as labor income, so no row can count as a salary. */
-  | 'no-labor-categories'
-  /** At least one person has no salary in this period — see `missingNames`. */
-  | 'missing-salary';
+  /** At least one person has no income attributed in this period — see `missingNames`. */
+  | 'missing-income';
 
 export type SplitBasis =
-  | { kind: 'computed'; members: MemberShare[]; totalSalary: number; unattributedSalary: number }
+  | { kind: 'computed'; members: MemberShare[]; totalIncome: number; unattributedIncome: number }
   | {
       kind: 'unavailable';
       reason: SplitUnavailableReason;
       missingNames: string[];
-      unattributedSalary: number;
+      unattributedIncome: number;
     };
 
-/** The household's shared spending over the period. */
+/** The household's shared spending over the period, and the shared income that pays it first. */
 export interface CommonSpending {
-  /** Positive magnitude, the `calculateTotalExpenses` convention. */
+  /** Spending left «in comune»: positive magnitude, the `calculateTotalExpenses` convention. */
   total: number;
+  /** Spending rows only; the income rows are `incomeRowCount`. */
   rowCount: number;
-  /** The part of `total` dated after today — inside it, never beside it. */
+  /** Income left «in comune», positive — every income type, a salary nobody attributed included. */
+  income: number;
+  incomeRowCount: number;
+  /** What the shares actually divide: `max(0, total − income)`. */
+  toSplit: number;
+  /** What the common income earned beyond the common spending: `max(0, income − total)`. Declared, never distributed. */
+  surplus: number;
+  /** The part of `total` AND of `income` dated after today — inside them, never beside them. */
   scheduled: ScheduledSlice;
 }
 
 /** What one person owes and what is left to them. */
 export interface MemberBalance {
   member: SplitMember;
-  /** Their labor income in the period, positive. */
-  salary: number;
+  /** Their income in the period, positive — the base of their share. */
+  income: number;
   /** 0..1, or null when the basis is unavailable. */
   share: number | null;
   /** Their slice of the common pool, positive; null when the basis is unavailable. */
@@ -96,7 +114,7 @@ export interface MemberBalance {
   personalSpending: number;
   /**
    * What is left once EVERY row of the period is counted, the ones still in the calendar
-   * included: salary − commonShare − personalSpending. Null when the basis is unavailable — a
+   * included: income − commonShare − personalSpending. Null when the basis is unavailable — a
    * residual computed without a share would be the whole pool charged to nobody.
    *
    * This is where the period ENDS, not where it stands. The figure a surface prints is
@@ -108,7 +126,7 @@ export interface MemberBalance {
    * prints and colours, and the one the verdict says «mancano» about.
    *
    * The two differ by the money the period still has ahead of it: this person's share of the
-   * common rows dated after today, their own rows dated after today, and any salary of theirs
+   * common rows dated after today, their own rows dated after today, and any income of theirs
    * not yet received. Before this existed the page charged an unpaid bill to a person as if it
    * had left their account — the whole of a deficit could be money still in the bank — which is
    * the same claim `resolveSplitBasis` refuses to make about a share (2026-09-21, Impeccable
@@ -124,9 +142,12 @@ export interface ExpenseSplitSummary {
   common: CommonSpending;
   /** One entry per configured member, in the order the settings list them. */
   members: MemberBalance[];
-  /** Rows whose owner no longer exists. Positive magnitude. */
-  unassigned: { total: number; rowCount: number };
-  /** The common rows, for the tile that ranks them by category. */
+  /**
+   * Rows whose owner no longer exists, spending (`total`) and income (`income`) apart, both
+   * positive. In neither the pool nor anyone's column: declared so the parts still add up.
+   */
+  unassigned: { total: number; rowCount: number; income: number; incomeRowCount: number };
+  /** The common SPENDING rows, for the tile that ranks them by category. */
   commonExpenses: Expense[];
 }
 
@@ -134,8 +155,6 @@ export interface ExpenseSplitInput {
   /** Already narrowed to the period the page is showing. */
   expenses: Expense[];
   members: FamilyMember[];
-  /** `AssetAllocationSettings.laborIncomeCategoryIds` — which income counts as a salary. */
-  laborIncomeCategoryIds: string[];
   now: Date;
 }
 
@@ -153,63 +172,54 @@ function isSpending(expense: Expense): boolean {
 /**
  * The share each person carries of the common pool, or the reason there is none.
  *
- * Shares come from labor income ONLY: a refund or a gift attributed to somebody is their money
- * but it is not what the household agreed to divide on, and every sentence built on this basis
- * says «stipendio» out loud.
+ * Shares come from EVERY income attributed to a person, whatever its category (owner's decision,
+ * 2026-09-27; until then only `laborIncomeCategoryIds` counted and the sentences said
+ * «stipendio» — they now say «entrate»). The household divides on what each brought in.
  *
- * `unattributedSalary` rides on BOTH outcomes because it is a fact about the window, not about
- * the split: labor income nobody is named on — a salary row left «in comune», or one whose owner
- * has since left Famiglia — cannot earn anybody a share, and used to vanish here behind two mute
- * `continue`s. The spending side has always declared its orphans out loud; the income side, the
+ * `unattributedIncome` rides on BOTH outcomes because it is a fact about the window, not about
+ * the split: income nobody is named on — a row left «in comune» — cannot earn anybody a share
+ * (it pays the pool instead, see `summarizeExpenseSplit`), and used to vanish here behind a mute
+ * `continue`. The spending side has always declared its orphans out loud; the income side, the
  * one that DECIDES the percentages, declared nothing, so a 60/40 computed on 80% of the month's
- * salaries was printed with full confidence (2026-09-21, Impeccable critique).
+ * income was printed with full confidence (2026-09-21, Impeccable critique). A row whose owner
+ * has since left Famiglia is NOT here: it is declared with the spending orphans, once.
  *
  * @param incomeRows Income-type rows already narrowed to the period.
  */
-export function resolveSplitBasis(
-  incomeRows: Expense[],
-  members: FamilyMember[],
-  laborIncomeCategoryIds: string[]
-): SplitBasis {
-  const laborCategories = new Set(laborIncomeCategoryIds);
+export function resolveSplitBasis(incomeRows: Expense[], members: FamilyMember[]): SplitBasis {
   const knownIds = new Set(members.map((member) => member.id));
-  const salaryByMember = new Map<string, number>(members.map((member) => [member.id, 0]));
-  let unattributedSalary = 0;
+  const incomeByMember = new Map<string, number>(members.map((member) => [member.id, 0]));
+  let unattributedIncome = 0;
 
   for (const row of incomeRows) {
     if (row.type !== 'income') continue;
-    if (!laborCategories.has(row.categoryId)) continue;
-    // Labor income that belongs to nobody the settings still know: named, never counted.
-    if (!row.personalMemberId || !knownIds.has(row.personalMemberId)) {
-      unattributedSalary += row.amount;
-      continue;
-    }
-    salaryByMember.set(row.personalMemberId, (salaryByMember.get(row.personalMemberId) ?? 0) + row.amount);
+    const owner = resolveOwnerId(row, knownIds);
+    // Income left «in comune»: named here, counted by the pool.
+    if (owner === null) unattributedIncome += row.amount;
+    if (owner === null || owner === SPLIT_UNASSIGNED_LABEL) continue;
+    incomeByMember.set(owner, (incomeByMember.get(owner) ?? 0) + row.amount);
   }
 
   if (members.length < 2) {
-    return { kind: 'unavailable', reason: 'not-enough-members', missingNames: [], unattributedSalary };
-  }
-  if (laborIncomeCategoryIds.length === 0) {
-    return { kind: 'unavailable', reason: 'no-labor-categories', missingNames: [], unattributedSalary };
+    return { kind: 'unavailable', reason: 'not-enough-members', missingNames: [], unattributedIncome };
   }
 
   // A person with nothing recorded cannot be given a share of 0: that would silently hand the
   // whole pool to the other one. The window is declared incomplete instead.
   const missingNames = members
-    .filter((member) => (salaryByMember.get(member.id) ?? 0) <= 0)
+    .filter((member) => (incomeByMember.get(member.id) ?? 0) <= 0)
     .map((member) => member.name);
   if (missingNames.length > 0) {
-    return { kind: 'unavailable', reason: 'missing-salary', missingNames, unattributedSalary };
+    return { kind: 'unavailable', reason: 'missing-income', missingNames, unattributedIncome };
   }
 
-  const totalSalary = members.reduce((sum, member) => sum + (salaryByMember.get(member.id) ?? 0), 0);
+  const totalIncome = members.reduce((sum, member) => sum + (incomeByMember.get(member.id) ?? 0), 0);
   const shares: MemberShare[] = members.map((member) => {
-    const salary = salaryByMember.get(member.id) ?? 0;
-    return { member: { id: member.id, name: member.name }, salary, share: salary / totalSalary };
+    const income = incomeByMember.get(member.id) ?? 0;
+    return { member: { id: member.id, name: member.name }, income, share: income / totalIncome };
   });
 
-  return { kind: 'computed', members: shares, totalSalary, unattributedSalary };
+  return { kind: 'computed', members: shares, totalIncome, unattributedIncome };
 }
 
 /**
@@ -253,42 +263,40 @@ export function allocateByShare(total: number, shares: MemberShare[]): Map<strin
  * as income and a reversed salary as spending. Transfers are skipped whole: they are net-zero,
  * and the money one person moves to the joint account is plumbing, not a cost.
  */
-export function summarizeExpenseSplit({
-  expenses,
-  members,
-  laborIncomeCategoryIds,
-  now,
-}: ExpenseSplitInput): ExpenseSplitSummary {
+export function summarizeExpenseSplit({ expenses, members, now }: ExpenseSplitInput): ExpenseSplitSummary {
   const knownIds = new Set(members.map((member) => member.id));
 
   const commonExpenses: Expense[] = [];
+  const commonIncomeRows: Expense[] = [];
   /** `total` is the whole period; `booked` is the part of it dated today or earlier. */
   const personalByMember = new Map<string, { total: number; booked: number; rowCount: number }>(
     members.map((member) => [member.id, { total: 0, booked: 0, rowCount: 0 }])
   );
-  const bookedSalaryByMember = new Map<string, number>(members.map((member) => [member.id, 0]));
-  const unassigned = { total: 0, rowCount: 0 };
+  const bookedIncomeByMember = new Map<string, number>(members.map((member) => [member.id, 0]));
+  const unassigned = { total: 0, rowCount: 0, income: 0, incomeRowCount: 0 };
   const incomeRows: Expense[] = [];
-  const laborCategories = new Set(laborIncomeCategoryIds);
 
   for (const expense of expenses) {
     if (expense.type === 'transfer') continue;
     const scheduled = isScheduledRow(expense, now);
+    const owner = resolveOwnerId(expense, knownIds);
     if (expense.type === 'income') {
       incomeRows.push(expense);
-      // A salary still to be paid props up a residual exactly as an unpaid bill deflates one.
-      if (!scheduled && expense.personalMemberId && knownIds.has(expense.personalMemberId) && laborCategories.has(expense.categoryId)) {
-        bookedSalaryByMember.set(
-          expense.personalMemberId,
-          (bookedSalaryByMember.get(expense.personalMemberId) ?? 0) + expense.amount
-        );
+      if (owner === null) {
+        // The household's: it pays the pool first, whatever its category.
+        commonIncomeRows.push(expense);
+      } else if (owner === SPLIT_UNASSIGNED_LABEL) {
+        unassigned.income += expense.amount;
+        unassigned.incomeRowCount += 1;
+      } else if (!scheduled) {
+        // An income still to come props up a residual exactly as an unpaid bill deflates one.
+        bookedIncomeByMember.set(owner, (bookedIncomeByMember.get(owner) ?? 0) + expense.amount);
       }
       continue;
     }
     if (!isSpending(expense)) continue;
 
     const magnitude = Math.abs(expense.amount);
-    const owner = resolveOwnerId(expense, knownIds);
     if (owner === null) {
       commonExpenses.push(expense);
     } else if (owner === SPLIT_UNASSIGNED_LABEL) {
@@ -303,22 +311,30 @@ export function summarizeExpenseSplit({
   }
 
   const commonTotal = commonExpenses.reduce((sum, expense) => sum + Math.abs(expense.amount), 0);
+  const commonIncome = commonIncomeRows.reduce((sum, expense) => sum + expense.amount, 0);
+  const scheduled = summarizeScheduled([...commonExpenses, ...commonIncomeRows], now);
   const common: CommonSpending = {
     total: commonTotal,
     rowCount: commonExpenses.length,
-    scheduled: summarizeScheduled(commonExpenses, now),
+    income: commonIncome,
+    incomeRowCount: commonIncomeRows.length,
+    toSplit: Math.max(0, commonTotal - commonIncome),
+    surplus: Math.max(0, commonIncome - commonTotal),
+    scheduled,
   };
-  const commonBooked = commonTotal - common.scheduled.expenses;
+  // The booked pool is net of the income already RECEIVED, by the same calendar-day rule: a
+  // refund dated next week has paid nothing yet.
+  const bookedToSplit = Math.max(0, commonTotal - scheduled.expenses - (commonIncome - scheduled.income));
 
-  const basis = resolveSplitBasis(incomeRows, members, laborIncomeCategoryIds);
+  const basis = resolveSplitBasis(incomeRows, members);
   const shareByMember = new Map<string, MemberShare>(
     basis.kind === 'computed' ? basis.members.map((entry) => [entry.member.id, entry]) : []
   );
   const computedShares = basis.kind === 'computed' ? basis.members : [];
-  const allocation = allocateByShare(commonTotal, computedShares);
+  const allocation = allocateByShare(common.toSplit, computedShares);
   // The booked pool is allocated through the SAME rule, so Σ(booked shares) is the booked pool to
   // the cent — a residual derived by subtracting one allocation from another would not close.
-  const bookedAllocation = allocateByShare(commonBooked, computedShares);
+  const bookedAllocation = allocateByShare(bookedToSplit, computedShares);
 
   const balances: MemberBalance[] = members.map((member) => {
     const personal = personalByMember.get(member.id) ?? { total: 0, booked: 0, rowCount: 0 };
@@ -327,14 +343,14 @@ export function summarizeExpenseSplit({
     const bookedShare = entry ? (bookedAllocation.get(member.id) ?? 0) : null;
     return {
       member: { id: member.id, name: member.name },
-      salary: entry?.salary ?? 0,
+      income: entry?.income ?? 0,
       share: entry?.share ?? null,
       commonShare,
       personalSpending: personal.total,
-      remaining: entry && commonShare !== null ? entry.salary - commonShare - personal.total : null,
+      remaining: entry && commonShare !== null ? entry.income - commonShare - personal.total : null,
       remainingBooked:
         entry && bookedShare !== null
-          ? (bookedSalaryByMember.get(member.id) ?? 0) - bookedShare - personal.booked
+          ? (bookedIncomeByMember.get(member.id) ?? 0) - bookedShare - personal.booked
           : null,
     };
   });

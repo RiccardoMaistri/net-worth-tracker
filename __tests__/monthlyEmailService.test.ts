@@ -1431,7 +1431,7 @@ describe('buildExpenseSplitTile', () => {
     remainingBooked: number
   ) => ({
     member: { id: `m-${name.toLowerCase()}`, name },
-    salary: 2000,
+    income: 2000,
     share: 0.5,
     commonShare: 500,
     personalSpending: 100,
@@ -1440,7 +1440,7 @@ describe('buildExpenseSplitTile', () => {
   });
 
   /** Only `expenseSplit` and the period fields are read; the rest of the payload is not. */
-  const dataWith = (members: ReturnType<typeof member>[]) =>
+  const dataWith = (members: ReturnType<typeof member>[], commonIncome = 0) =>
     ({
       periodType: 'monthly',
       year: 2026,
@@ -1448,13 +1448,21 @@ describe('buildExpenseSplitTile', () => {
       expenseSplit: {
         basis: {
           kind: 'computed',
-          totalSalary: 4000,
-          unattributedSalary: 0,
-          members: members.map((entry) => ({ member: entry.member, salary: entry.salary, share: entry.share! })),
+          totalIncome: 4000,
+          unattributedIncome: 0,
+          members: members.map((entry) => ({ member: entry.member, income: entry.income, share: entry.share! })),
         },
-        common: { total: 1000, rowCount: 4, scheduled: { expenses: 400, income: 0, count: 1, throughMonth: null } },
+        common: {
+          total: 1000,
+          rowCount: 4,
+          income: commonIncome,
+          incomeRowCount: commonIncome > 0 ? 1 : 0,
+          toSplit: Math.max(0, 1000 - commonIncome),
+          surplus: Math.max(0, commonIncome - 1000),
+          scheduled: { expenses: 400, income: 0, count: 1, throughMonth: null },
+        },
         members,
-        unassigned: { total: 0, rowCount: 0 },
+        unassigned: { total: 0, rowCount: 0, income: 0, incomeRowCount: 0 },
         commonExpenses: [],
       },
     }) as unknown as MonthlyEmailData;
@@ -1499,5 +1507,17 @@ describe('buildExpenseSplitTile', () => {
   it('adds no calendar sentence when nothing is scheduled', () => {
     const html = buildExpenseSplitTile(dataWith([member('Ghiandaia', 1400, 1400), member('Tarsio', 100, 100)]));
     expect(html).not.toContain('Con le spese ancora in calendario');
+  });
+
+  // The page shows the net under its hero; the email has no hero, so the reading carries it
+  // (2026-09-27) — and says nothing when no income was left in comune.
+  it('says how the common income reduced the pool, in the reading', () => {
+    // The figures sit in their own mono `<span>`s: read the text, not the markup.
+    const plain = (html: string) => html.replace(/<[^>]+>/g, '').replace(/ /g, ' ');
+    const netted = buildExpenseSplitTile(dataWith([member('Ghiandaia', 1400, 1400), member('Tarsio', 100, 100)], 300));
+    expect(plain(netted)).toContain('Spese in comune 1000 €, meno 300 € di entrate in comune: 700 € da dividere.');
+
+    const gross = buildExpenseSplitTile(dataWith([member('Ghiandaia', 1400, 1400), member('Tarsio', 100, 100)]));
+    expect(plain(gross)).not.toContain('da dividere');
   });
 });

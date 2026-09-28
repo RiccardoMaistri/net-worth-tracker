@@ -23,6 +23,7 @@ import { resolveRitaUnlockAge, DEFAULT_INPS_RETIREMENT_AGE } from '@/lib/utils/p
 import { MONTH_NAMES } from '@/lib/constants/months';
 import { CHECKING_ACCOUNT_STAMP_DUTY_EUR, CHECKING_ACCOUNT_STAMP_DUTY_THRESHOLD_EUR } from '@/lib/constants/stampDuty';
 import type { ExpenseType } from '@/types/expenses';
+import type { CategoryClassificationCounts } from '@/lib/utils/spendingRoles';
 import type { AssetClass } from '@/types/assets';
 import { ASSET_CLASS_LABELS } from '@/lib/utils/allocationUtils';
 import type { TargetProblem } from '@/lib/utils/allocationTargetValidation';
@@ -562,6 +563,45 @@ export function describeClassTargets({ classCount, withSubcategories, problem }:
 
 // ─── Spese ────────────────────────────────────────────────────────────────────
 
+export interface SpendingRolesSettingInput {
+  enabled: boolean;
+  // From summarizeCategoryClassification — the roles live on the categories, so the reading can
+  // only be honest about the Flusso by saying how many of them carry one.
+  classification: CategoryClassificationCounts;
+  /** The categories were NOT read: their roles are unknown, never «0 classified». */
+  categoriesUnread?: boolean;
+}
+
+/**
+ * Ruoli 50/30/20 (Spese) — whether Analisi's Flusso can be read by role, and how far the
+ * classification has got. Names what is still unclassified, because those categories land in
+ * «Da classificare» on the Flusso rather than in any of the three roles.
+ */
+export function describeSpendingRolesSetting({ enabled, classification, categoriesUnread = false }: SpendingRolesSettingInput): Narrative {
+  if (!enabled) {
+    return [prose('Spenti: il flusso di Analisi si legge solo per tipo di spesa. I ruoli già assegnati restano sulle categorie.')];
+  }
+  if (categoriesUnread) {
+    return [prose('Attivi; i ruoli delle categorie non sono stati letti.')];
+  }
+  const { spending, classified } = classification;
+  if (spending === 0) {
+    return [prose('Attivi, ma non c’è ancora nessuna categoria di spesa da classificare.')];
+  }
+  if (classified === spending) {
+    if (spending === 1) return [prose('Attivi: l’unica categoria di spesa ha un ruolo.')];
+    return [prose('Attivi: tutte le '), figure(String(spending)), prose(' categorie di spesa hanno un ruolo.')];
+  }
+  const missing = spending - classified;
+  return [
+    prose('Attivi: '),
+    figure(String(classified)),
+    prose(classified === 1 ? ` categoria di spesa su ${spending} ha un ruolo; ` : ` categorie di spesa su ${spending} hanno un ruolo; `),
+    figure(String(missing)),
+    prose(missing === 1 ? ' finisce in «Da classificare».' : ' finiscono in «Da classificare».'),
+  ];
+}
+
 export interface DefaultAccountsInput {
   debitName?: string;
   creditName?: string;
@@ -788,16 +828,34 @@ export interface BrokerConnectionsInput {
   holdingsCount?: number;
   /** Residual cash from the last overview, EUR. */
   cashBalance?: number;
+  /** Trade Republic savings plans («Sparpläne») as last read. */
+  savingsPlanCount?: number;
 }
 
-/** Collegamenti broker — what the last Scalable sync brought in, in words. */
-export function describeBrokerConnections({
-  lastSyncAt,
-  holdingsCount,
-  cashBalance,
-}: BrokerConnectionsInput): Narrative {
+/**
+ * Collegamenti broker — what the last sync brought in, in words, PER BROKER.
+ *
+ * The closing clause is broker-specific and must stay so: Scalable publishes a quote with every
+ * position, so «i prezzi si aggiornano» is true there. Trade Republic's portfolio payload carries
+ * NO price at all, so the same words would be a claim the sync does not make — the price arrives
+ * through the ordinary Yahoo path instead. The Narrative Honesty Rule applies: a clause is dropped
+ * when the input that justifies it is absent, and here that input is the broker.
+ */
+export function describeBrokerConnections(
+  broker: 'scalable' | 'traderepublic',
+  { lastSyncAt, holdingsCount, cashBalance, savingsPlanCount }: BrokerConnectionsInput
+): Narrative {
+  const isTradeRepublic = broker === 'traderepublic';
+  const brokerName = isTradeRepublic ? 'Trade Republic' : 'Scalable';
+
   if (!lastSyncAt) {
-    return [prose('Nessun broker collegato: la sincronizzazione legge posizioni e liquidità da Scalable, in sola lettura.')];
+    return [
+      prose(
+        isTradeRepublic
+          ? 'Nessuna sincronizzazione Trade Republic: la sincronizzazione legge posizioni, liquidità e piani di accumulo, in sola lettura.'
+          : 'Nessuna sincronizzazione Scalable: la sincronizzazione legge posizioni e liquidità, in sola lettura.'
+      ),
+    ];
   }
   const when = (() => {
     const date = new Date(lastSyncAt);
@@ -805,11 +863,19 @@ export function describeBrokerConnections({
   })();
   const positions =
     holdingsCount === 1 ? '1 posizione' : `${holdingsCount ?? 0} posizioni`;
-  const cash =
-    cashBalance !== undefined ? ` e liquidità ${euro(cashBalance)}` : '';
+  const cash = cashBalance !== undefined ? ` e liquidità ${euro(cashBalance)}` : '';
+  const plans =
+    isTradeRepublic && savingsPlanCount !== undefined && savingsPlanCount > 0
+      ? ` e ${savingsPlanCount === 1 ? '1 piano di accumulo' : `${savingsPlanCount} piani di accumulo`}`
+      : '';
+
   return [
-    prose(`Ultima lettura ${when}: `),
-    figure(`${positions}${cash}`),
-    prose(' — i prezzi si aggiornano, le quantità restano del Registro.'),
+    prose(`Ultima lettura ${when} da ${brokerName}: `),
+    figure(`${positions}${cash}${plans}`),
+    prose(
+      isTradeRepublic
+        ? ' — le quantità restano del Registro, i prezzi arrivano da Yahoo.'
+        : ' — i prezzi si aggiornano, le quantità restano del Registro.'
+    ),
   ];
 }

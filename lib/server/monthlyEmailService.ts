@@ -86,7 +86,12 @@ import { type Expense, type ExpenseType, EXPENSE_TYPE_LABELS } from '@/types/exp
 import { summarizeExpenseSplit, type ExpenseSplitSummary } from '@/lib/utils/expenseSplitSummary';
 import { summarizePeriodSales, type PeriodSalesSummary } from '@/lib/utils/periodSales';
 import { getAssetTransactionsAdmin, getUserAssetsAdmin } from '@/lib/server/assetAdminRepository';
-import { describeMemberBalance, describeMemberCalendar, describeSplitBasis } from '@/lib/utils/expenseSplitNarrative';
+import {
+  describeCommonIncome,
+  describeMemberBalance,
+  describeMemberCalendar,
+  describeSplitBasis,
+} from '@/lib/utils/expenseSplitNarrative';
 import { narrativeToText } from '@/lib/utils/narrative';
 import type { Narrative } from '@/lib/utils/narrative';
 import { getUserSnapshotsAdmin } from '@/lib/server/assetAdminRepository';
@@ -622,21 +627,36 @@ function formatExpenseSplitForPrompt(emailData: MonthlyEmailData, label: string)
   const summary = emailData.expenseSplit;
   if (!summary || summary.basis.kind !== 'computed') return [];
 
+  // The pool the shares divide is NET of the income left «in comune» (2026-09-27): a model told
+  // the gross alone would add the shares up to the wrong total.
+  const { common } = summary;
+  const poolLine =
+    common.income > 0
+      ? `Spese in comune del periodo: ${formatEur(common.total)}, meno ${formatEur(common.income)} di entrate in comune: ` +
+        (common.toSplit > 0
+          ? `${formatEur(common.toSplit)} da dividere.`
+          : `niente da dividere${common.surplus > 0 ? `, avanzano ${formatEur(common.surplus)}` : ''}.`)
+      : `Spese in comune del periodo: ${formatEur(common.total)}.`;
   const lines = [
     `--- DIVISIONE DELLE SPESE IN COMUNE (${label}) ---`,
-    `Spese in comune del periodo: ${formatEur(summary.common.total)}. Le quote sono proporzionali agli stipendi dello stesso periodo.`,
-    'Per ogni persona: «resta» = stipendio − quota di spese in comune − spese personali.',
+    `${poolLine} Le quote sono proporzionali alle entrate intestate a ciascuno nello stesso periodo.`,
+    'Per ogni persona: «resta» = entrate − quota di spese in comune − spese personali.',
   ];
   for (const balance of summary.members) {
     if (balance.remaining === null || balance.share === null || balance.commonShare === null) continue;
     lines.push(
-      `- ${balance.member.name}: stipendio ${formatEur(balance.salary)}, quota in comune ${formatEur(balance.commonShare)} ` +
+      `- ${balance.member.name}: entrate ${formatEur(balance.income)}, quota in comune ${formatEur(balance.commonShare)} ` +
         `(${Math.round(balance.share * 100)}%), spese personali ${formatEur(balance.personalSpending)}, resta ${formatEur(balance.remaining)}.`
     );
   }
   if (summary.unassigned.rowCount > 0) {
     lines.push(
       `Fuori dalla divisione: ${formatEur(summary.unassigned.total)} su ${summary.unassigned.rowCount} voci intestate a una persona non più configurata.`
+    );
+  }
+  if (summary.unassigned.incomeRowCount > 0) {
+    lines.push(
+      `Fuori dalla divisione: ${formatEur(summary.unassigned.income)} di entrate su ${summary.unassigned.incomeRowCount} voci intestate a una persona non più configurata.`
     );
   }
   lines.push('');
@@ -1315,12 +1335,7 @@ async function buildExpenseSplitForPeriod(
       } as Expense;
     });
 
-    return summarizeExpenseSplit({
-      expenses,
-      members,
-      laborIncomeCategoryIds: settings.laborIncomeCategoryIds ?? [],
-      now,
-    });
+    return summarizeExpenseSplit({ expenses, members, now });
   } catch (error) {
     // Never block an email on this section, like every other optional block here.
     console.error('Failed to build the expense split section', { userId, error });
@@ -1584,10 +1599,13 @@ export function buildExpenseSplitTile(data: MonthlyEmailData): string {
     });
   if (rows.length === 0) return '';
 
+  // The page shows what the common income took off the pool as two rows under its hero; the
+  // email has no hero, so the reading carries it — absent when nothing was left in comune.
+  const commonIncome = describeCommonIncome(summary);
   return emailTile({
     eyebrow: 'Spese in comune',
     scope: periodScopeLabel(emailPeriodOf(data)),
-    reading: describeSplitBasis(summary.basis),
+    reading: [...describeSplitBasis(summary.basis), ...(commonIncome ? [{ text: ' ' }, ...commonIncome] : [])],
     body: emailRankedRows(rows),
   });
 }

@@ -22,7 +22,9 @@ import { narrativeToText, type Narrative } from '@/lib/utils/narrative';
 import type { PeriodCashflowTotals, ScheduledSlice } from '@/lib/utils/tracciamentoSummary';
 import type { CategoryDeltaRow, TotalsPacing } from '@/lib/utils/comparisonDeltas';
 import type { SpendingAnomaly } from '@/lib/utils/cashflowComposition';
-import type { AnalisiPeriod, FlowSummary, SpendingPoint, TopExpenses } from '@/lib/utils/analisiSummary';
+import type { AnalisiPeriod, FlowSummary, SpendingPoint, TopExpenses, TypeFlowBreakdown } from '@/lib/utils/analisiSummary';
+import { summarizeSpendingRoleShares, type SpendingRolesSummary } from '@/lib/utils/spendingRoles';
+import { scheduledSentence } from '@/lib/utils/cashflowNarrative';
 import {
   buildAnalisiVerdict,
   describeAnalisiSubject,
@@ -33,8 +35,14 @@ import {
   describeComparisonSummary,
   describeEntityFocus,
   describeFlow,
+  describeFlowAbsence,
+  describeFlowSurplus,
   describeMissingBaseline,
+  describeShareCompact,
   describePeriodScope,
+  describeSpendingRolesBar,
+  describeSpendingRolesFlow,
+  describeTypeFlowBar,
   describeSpendingChart,
   describeSpendingChartFooter,
   describeTopExpenses,
@@ -384,11 +392,37 @@ describe('describeFlow', () => {
     expensesTotal: 31200,
     categoryCount: 10,
     typeShares: [
-      { type: 'fixed', label: 'Fisse', amount: 18100, percentage: 58 },
-      { type: 'variable', label: 'Variabili', amount: 11540, percentage: 37 },
-      { type: 'debt', label: 'Debiti', amount: 1560, percentage: 5 },
+      { type: 'fixed', label: 'Fisse', amount: 18100, percentage: 58, printedPercentage: 58 },
+      { type: 'variable', label: 'Variabili', amount: 11540, percentage: 37, printedPercentage: 37 },
+      { type: 'debt', label: 'Debiti', amount: 1560, percentage: 5, printedPercentage: 5 },
     ],
   };
+
+  it('should print the shares summarizeFlow rounded, so three equal types add up to 100', () => {
+    const third = 100 / 3;
+    const flow: FlowSummary = {
+      ...FLOW,
+      expensesTotal: 3000,
+      typeShares: [
+        { type: 'fixed', label: 'Fisse', amount: 1000, percentage: third, printedPercentage: 34 },
+        { type: 'variable', label: 'Variabili', amount: 1000, percentage: third, printedPercentage: 33 },
+        { type: 'debt', label: 'Debiti', amount: 1000, percentage: third, printedPercentage: 33 },
+      ],
+    };
+    expect(plain(describeFlow(flow, 20))).toContain('Fisse 34%, variabili 33%, debiti 33%.');
+  });
+
+  it('should write a type that holds money but rounds to zero as «meno dell’1%», never «0%»', () => {
+    const flow: FlowSummary = {
+      ...FLOW,
+      expensesTotal: 10000,
+      typeShares: [
+        { type: 'fixed', label: 'Fisse', amount: 9960, percentage: 99.6, printedPercentage: 100 },
+        { type: 'debt', label: 'Debiti', amount: 40, percentage: 0.4, printedPercentage: 0 },
+      ],
+    };
+    expect(plain(describeFlow(flow, 20))).toContain("Fisse 100%, debiti meno dell'1%.");
+  });
 
   it('should describe the flow from the sources to the types and categories, with the savings share', () => {
     expect(plain(describeFlow(FLOW, 20.81))).toBe('Da 4 fonti (39.400 €) a 3 tipi di spesa e 10 categorie; il 21% resta come risparmio. Fisse 58%, variabili 37%, debiti 5%.');
@@ -403,6 +437,163 @@ describe('describeFlow', () => {
   it('should describe spending without income, and return null with nothing', () => {
     expect(plain(describeFlow({ ...FLOW, incomeTotal: 0, incomeSources: 0 }, null))).toBe('Nessuna entrata: 31.200 € di spese in 10 categorie. Fisse 58%, variabili 37%, debiti 5%.');
     expect(describeFlow({ incomeTotal: 0, incomeSources: 0, expensesTotal: 0, categoryCount: 0, typeShares: [] }, null)).toBeNull();
+  });
+});
+
+/** A roles summary built from bucket totals — the words depend on nothing else. */
+const rolesSummary = (overrides: {
+  income: number;
+  need?: number;
+  want?: number;
+  saving?: number;
+  unclassified?: number;
+  rowCount?: number;
+}): SpendingRolesSummary => {
+  const bucket = (total = 0) => ({ total, categories: [] });
+  const spending = (overrides.need ?? 0) + (overrides.want ?? 0) + (overrides.saving ?? 0) + (overrides.unclassified ?? 0);
+  const surplus = Math.max(0, overrides.income - spending);
+  return {
+    income: overrides.income,
+    incomeCategories: [],
+    spending,
+    byBucket: { need: bucket(overrides.need), want: bucket(overrides.want), saving: bucket(overrides.saving), unclassified: bucket(overrides.unclassified) },
+    surplus,
+    deficit: Math.max(0, spending - overrides.income),
+    savings: (overrides.saving ?? 0) + surplus,
+    rowCount: overrides.rowCount ?? 1,
+  };
+};
+
+describe('describeSpendingRolesFlow', () => {
+  const summary = rolesSummary;
+
+  it('reads the three roles as shares of the income when something is left', () => {
+    // Risparmi is the surplus: 10.000 − 5.700 − 2.100 = 2.200.
+    expect(plain(describeSpendingRolesFlow(summary({ income: 10000, need: 5700, want: 2100 })))).toBe(
+      'Delle entrate (10.000 €): necessità 57%, desideri 21%, risparmi 22%. Il riferimento è 50/30/20.'
+    );
+  });
+
+  it('names the deficit first and reads the shares of what left, with no risparmi', () => {
+    // 10.300 € left against 10.000 € in: the shares are of the 10.300.
+    expect(plain(describeSpendingRolesFlow(summary({ income: 10000, need: 5600, want: 4700 })))).toBe(
+      'Le spese superano le entrate di 300 €, coperti dal patrimonio. Di quanto è uscito: necessità 54%, desideri 46%. Il riferimento è 50/30/20.'
+    );
+  });
+
+  it('names what is still unclassified, in the order the flow draws it — before risparmi', () => {
+    expect(plain(describeSpendingRolesFlow(summary({ income: 2000, need: 1000, unclassified: 500 })))).toBe(
+      'Delle entrate (2000 €): necessità 50%, da classificare 25%, risparmi 25%. Il riferimento è 50/30/20.'
+    );
+  });
+
+  it('prints shares that add up to 100, the rounding carried by risparmi', () => {
+    // Three thirds would print 33 + 33 + 33; risparmi is the remainder by definition.
+    expect(plain(describeSpendingRolesFlow(summary({ income: 3000, need: 1000, want: 1000 })))).toBe(
+      'Delle entrate (3000 €): necessità 33%, desideri 33%, risparmi 34%. Il riferimento è 50/30/20.'
+    );
+  });
+
+  it('writes a role that holds money but rounds to zero as «meno dell’1%», never «0%»', () => {
+    // Found on the owner's tour (2026-09-27): 40 € of 10.000 printed «necessità 0%» over a role
+    // that was not empty. The other shares still add up to 100 with this one counted as zero.
+    expect(plain(describeSpendingRolesFlow(summary({ income: 10000, need: 40, want: 1100, unclassified: 7400 })))).toBe(
+      "Delle entrate (10.000 €): necessità meno dell'1%, desideri 11%, da classificare 74%, risparmi 15%. Il riferimento è 50/30/20."
+    );
+  });
+
+  it('prints the same share in a legend as «<1%», where there is no room for words', () => {
+    expect(describeShareCompact(0)).toBe('<1%');
+    expect(describeShareCompact(15)).toBe('15%');
+  });
+
+  it('splits risparmi into what was put aside and what was left over when rows are classified as saving', () => {
+    expect(plain(describeSpendingRolesFlow(summary({ income: 3000, need: 1500, saving: 600 })))).toBe(
+      'Delle entrate (3000 €): necessità 50%, risparmi 50% (di cui 600 € accantonati e 900 € avanzati). Il riferimento è 50/30/20.'
+    );
+  });
+
+  it('says risparmi were all put aside when nothing was left over', () => {
+    expect(plain(describeSpendingRolesFlow(summary({ income: 1000, need: 800, saving: 200 })))).toBe(
+      'Delle entrate (1000 €): necessità 80%, risparmi 20% (tutti accantonati). Il riferimento è 50/30/20.'
+    );
+  });
+
+  it('reads spending without income, and returns null with nothing', () => {
+    expect(plain(describeSpendingRolesFlow(summary({ income: 0, want: 300 })))).toBe(
+      'Nessuna entrata: 300 € di spese tutti coperti dal patrimonio, desideri 100%. Il riferimento è 50/30/20.'
+    );
+    expect(describeSpendingRolesFlow(summary({ income: 0 }))).toBeNull();
+    // A lone reversal of income is no flow either, not a division by zero.
+    expect(describeSpendingRolesFlow(summary({ income: -200 }))).toBeNull();
+  });
+});
+
+describe('the Flusso on a phone', () => {
+  const breakdown = (overrides: Partial<TypeFlowBreakdown>): TypeFlowBreakdown => ({
+    blocks: [],
+    spending: 2000,
+    income: 3000,
+    surplus: 1000,
+    deficit: 0,
+    incomeEdge: null,
+    noIncome: false,
+    absence: null,
+    ...overrides,
+  });
+  const IN_CALENDAR: ScheduledSlice = { count: 4, expenses: 1850, income: 2000, throughMonth: 12 };
+
+  it('captions the roles bar with its base and the 50/30/20 ticks', () => {
+    expect(plain(describeSpendingRolesBar(summarizeSpendingRoleShares(rolesSummary({ income: 3000, need: 1500, want: 900 }))))).toBe(
+      'Quote di quanto è uscito (3000 €); tacche a 50 e 80, il riferimento 50/30/20.'
+    );
+  });
+
+  it('adds where the money beyond the income came from, or that there was no income', () => {
+    expect(plain(describeSpendingRolesBar(summarizeSpendingRoleShares(rolesSummary({ income: 1000, need: 1250 }))))).toBe(
+      'Quote di quanto è uscito (1250 €); tacche a 50 e 80, il riferimento 50/30/20. Oltre la linea delle entrate: 250 € dal patrimonio.'
+    );
+    expect(plain(describeSpendingRolesBar(summarizeSpendingRoleShares(rolesSummary({ income: 0, want: 300 }))))).toBe(
+      'Quote di quanto è uscito (300 €); tacche a 50 e 80, il riferimento 50/30/20. Nessuna entrata: tutto è coperto dal patrimonio.'
+    );
+    expect(describeSpendingRolesBar(summarizeSpendingRoleShares(rolesSummary({ income: 0, rowCount: 0 })))).toBeNull();
+  });
+
+  it('captions the type bar as a share of the spending, deficit and no-income included', () => {
+    expect(plain(describeTypeFlowBar(breakdown({})))).toBe('Quote delle spese (2000 €).');
+    expect(plain(describeTypeFlowBar(breakdown({ income: 1500, surplus: 0, deficit: 500, incomeEdge: 75 })))).toBe(
+      'Quote delle spese (2000 €). Oltre la linea delle entrate: 500 € dal patrimonio.'
+    );
+    expect(plain(describeTypeFlowBar(breakdown({ income: 0, surplus: 0, deficit: 2000, noIncome: true })))).toBe(
+      'Quote delle spese (2000 €). Nessuna entrata: tutto è coperto dal patrimonio.'
+    );
+    expect(plain(describeTypeFlowBar(breakdown({ spending: 0 })))).toBe('Nessuna spesa nel periodo.');
+    expect(describeTypeFlowBar(breakdown({ spending: 0, surplus: 0, absence: 'missing' }))).toBeNull();
+  });
+
+  it('notes the surplus in the past tense, «Più» after listed rows, and nothing without one', () => {
+    expect(plain(describeFlowSurplus({ surplus: 600, afterRows: false, scheduled: NOTHING_SCHEDULED, horizon: 'a fine anno' }))).toBe(
+      '600 € avanzati nel periodo.'
+    );
+    expect(plain(describeFlowSurplus({ surplus: 600, afterRows: true, scheduled: NOTHING_SCHEDULED, horizon: 'a fine anno' }))).toBe(
+      'Più 600 € avanzati nel periodo.'
+    );
+    expect(plain(describeFlowSurplus({ surplus: 1, afterRows: false, scheduled: NOTHING_SCHEDULED, horizon: null }))).toBe('1 € avanzato nel periodo.');
+    expect(describeFlowSurplus({ surplus: 0, afterRows: false, scheduled: IN_CALENDAR, horizon: 'a fine anno' })).toBeNull();
+  });
+
+  it('declares the calendar a running year still holds, with the verdict’s own clause', () => {
+    const note = describeFlowSurplus({ surplus: 600, afterRows: false, scheduled: IN_CALENDAR, horizon: 'a fine anno' });
+    expect(plain(note)).toBe(
+      '600 € avanzati nel periodo. Nel totale ci sono ancora 1850 € di spese e 2000 € di entrate già in calendario da qui a fine anno.'
+    );
+    // The SAME words as the verdict's closing sentence, not a second wording.
+    expect(plain(note)!.endsWith(plain(scheduledSentence(IN_CALENDAR, 'a fine anno'))!)).toBe(true);
+  });
+
+  it('names an empty flow by its absence', () => {
+    expect(plain(describeFlowAbsence('missing'))).toBe('Nessuna entrata né spesa registrata nel periodo.');
+    expect(plain(describeFlowAbsence('zero'))).toBe('I movimenti del periodo fanno zero: nessun flusso da disegnare.');
   });
 });
 

@@ -1,0 +1,546 @@
+/**
+ * Trade Republic read-only bridge — the pure layer behind Impostazioni → Collegamenti.
+ *
+ * Mirrors `scalableImport.ts` (parse → map → plan, no I/O, no server-only import) but the wire is
+ * a different animal in three ways that shaped every decision below.
+ *
+ * 1. **THE PORTFOLIO CARRIES NO PRICE.** `compactPortfolioByType` returns
+ *    `{ isin, averageBuyIn, netSize, virtualSize, status, instrumentType, name }` and nothing
+ *    quotable — Trade Republic quotes a security as `ticker` on `ISIN.EXCHANGE`, and the exchange
+ *    suffix is not in the portfolio payload. So the bridge does NOT fetch a price: new assets are
+ *    born with `autoUpdatePrice: TRUE` and the existing Yahoo path prices them like any other
+ *    asset. Guessing an exchange suffix would put a wrong price on a real asset, which is worse
+ *    than a price that arrives one cron later. Consequently the plan has NO price branch at all.
+ * 2. **CASH IS A REAL BALANCE, NOT A RESIDUAL.** Scalable's cash is `valuation − securities −
+ *    crypto` because that is all its overview exposes; Trade Republic publishes the cash account
+ *    itself (`cash` topic, amounts in MAJOR units — the SDK's `projectCash` maps `amount`
+ *    verbatim, no minor-unit division). Nothing is subtracted and nothing can go negative by
+ *    arithmetic accident, so there is no residual to declare.
+ * 3. **THE SAVINGS PLANS ARE A RULE, NOT A FACT.** A Sparplan ("buy €200 of VWCE on the 1st")
+ *    is standing-order state at the broker: it is not a position, not a transaction, and no
+ *    `Asset` field holds it. They are DECLARED in the preview and never written — the same
+ *    posture the Scalable deposit's interest rate takes (`doc/guide/collegamenti.md`).
+ *
+ * The `savingsPlans` amount unit is the one figure here that could not be verified against a
+ * live account: the SDK passes the topic value through untouched (no `projectMoney` equivalent,
+ * unlike `cash`), and Trade Republic's web client sends it in minor units. It is therefore read
+ * through ONE named constant, and the preview prints the computed figure so a wrong assumption
+ * is visible rather than plausible. Do not inline a `100` anywhere else.
+ *
+ * Quantity rule (unchanged from Scalable, and the ledger owns it): for ledger types
+ * (stock/etf/bond/crypto/commodity) `quantity`/`averageCost` are replay-derived and are NEVER
+ * written by the sync. A mismatch is a drift warning to reconcile with a Registro adjustment.
+ */
+
+import type { Asset, AssetClass, AssetFormData, AssetType } from '@/types/assets';
+import { isLedgerAssetType } from '@/types/assetTransactions';
+
+// ─── Input shapes (what the three topics hold) ───────────────────────────────
+
+export interface TrHoldingInput {
+  isin: string;
+  name: string;
+  /** Raw `instrumentType` from the broker, as sent (e.g. "etf"). */
+  rawType: string;
+  /** Raw `categoryType` of the enclosing bucket — the fallback when `instrumentType` is unknown. */
+  rawCategory: string;
+  /** Units actually held (`netSize`). `virtualSize` also counts pending orders and is NOT this. */
+  quantity: number;
+  /** Broker average buy-in, per unit, native currency (`averageBuyIn`). */
+  averageCost?: number;
+  /**
+   * Current quote per unit, filled in by the READ ROUTE from the ordinary Yahoo price service —
+   * NOT by the broker, which publishes no quote with the position. Absent when that lookup failed,
+   * and the plan then WARNS rather than creating the asset silently worthless.
+   */
+  price?: number;
+  /** Broker status string (`status`), e.g. "active". */
+  status: string;
+  currency: string;
+}
+
+export interface TrCashInput {
+  /** MAJOR units (euros, not cents) — see the header. */
+  balance: number;
+  currency: string;
+  accountNumber: string;
+}
+
+export interface TrSavingsPlanInput {
+  id: string;
+  /** `ISIN.EXCHANGE` as the broker sends it; the ISIN is the part before the dot. */
+  instrumentId: string;
+  isin?: string;
+  /** The plan's instalment, in euros, derived from `rawAmount` through the divisor below. */
+  amount: number;
+  /** The value as the broker sent it, kept so a wrong divisor is visible and not merely wrong. */
+  rawAmount: number;
+  /** `monthly` | `weekly` | … as sent. */
+  interval: string;
+  nextExecutionDate?: string;
+  paused: boolean;
+  createdAt?: string;
+}
+
+/**
+ * `savingsPlans[].amount` arrives in MINOR units (cents) while `cash[].amount` arrives in major
+ * ones — the same API, two conventions, and the SDK only normalizes the second. Unverified
+ * against a live account; the preview prints the computed figure so the assumption is checkable
+ * at a glance. One constant, never an inline literal.
+ */
+export const SAVINGS_PLAN_MINOR_UNIT_DIVISOR = 100;
+
+// ─── Tolerant readers ─────────────────────────────────────────────────────────
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * German-decimal tolerant number read. Trade Republic sends `netSize`/`averageBuyIn` as STRINGS
+ * and the decimal separator is not guaranteed to be a dot, so `parseFloat` alone silently reads
+ * `1.234,56` as `1.234`.
+ */
+function toNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().replace(/\s/g, '').replace(',', '.');
+    if (normalized === '') return undefined;
+    // A thousands separator would leave a second dot; keep only the last as the decimal point.
+    const lastDot = normalized.lastIndexOf('.');
+    const cleaned =
+      lastDot === -1
+        ? normalized
+        : `${normalized.slice(0, lastDot).replace(/\./g, '')}${normalized.slice(lastDot)}`;
+    const parsed = Number.parseFloat(cleaned);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function toText(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  return undefined;
+}
+
+function toIsoDate(value: unknown): string | undefined {
+  const text = toText(value);
+  if (!text) return undefined;
+  // A bare `YYYY-MM-DD` is a calendar day, not an instant: `new Date` would read it as UTC
+  // midnight and print the previous day in Rome. Keep the day as written.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}
+
+/** User-facing parse failure: the message is shown verbatim in the tile's reading line. */
+export class TrParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TrParseError';
+  }
+}
+
+// ─── Holdings ────────────────────────────────────────────────────────────────
+
+/**
+ * Parse a `compactPortfolioByType` payload into held positions.
+ *
+ * A row is kept when it has an ISIN, a POSITIVE `netSize` and an active status — the same
+ * `isHeld` gate the rest of the app uses (`quantity > 0`). `virtualSize` is deliberately not
+ * read: it counts orders that have not settled, so a pending sell would otherwise read as a
+ * position the user no longer holds.
+ */
+export function parseTrHoldings(payload: unknown): { holdings: TrHoldingInput[]; skipped: number } {
+  const categories = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload['categories'])
+      ? (payload['categories'] as unknown[])
+      : null;
+  if (!categories) {
+    throw new TrParseError('Nessuna posizione trovata nella risposta del broker.');
+  }
+
+  const holdings: TrHoldingInput[] = [];
+  const seen = new Set<string>();
+  let skipped = 0;
+
+  for (const category of categories) {
+    if (!isRecord(category)) {
+      skipped += 1;
+      continue;
+    }
+    const rawCategory = toText(category['categoryType']) ?? '';
+    const positions = Array.isArray(category['positions']) ? (category['positions'] as unknown[]) : [];
+    for (const position of positions) {
+      if (!isRecord(position)) {
+        skipped += 1;
+        continue;
+      }
+      const isin = toText(position['isin'])?.toUpperCase();
+      if (!isin) {
+        skipped += 1;
+        continue;
+      }
+      // A duplicated ISIN keeps its first row: two rows for one instrument would otherwise
+      // produce two «new» assets in the same preview.
+      if (seen.has(isin)) {
+        skipped += 1;
+        continue;
+      }
+      const quantity = toNumber(position['netSize']) ?? 0;
+      const status = (toText(position['status']) ?? '').toLowerCase();
+      if (quantity <= 0 || (status !== '' && !isHeldStatus(status))) {
+        skipped += 1;
+        continue;
+      }
+      seen.add(isin);
+      holdings.push({
+        isin,
+        name: toText(position['name']) ?? isin,
+        rawType: toText(position['instrumentType']) ?? '',
+        rawCategory,
+        quantity,
+        averageCost: toNumber(position['averageBuyIn']),
+        status,
+        currency: 'EUR',
+      });
+    }
+  }
+
+  return { holdings, skipped };
+}
+
+/**
+ * A position is held when the broker says so. Anything that is not an explicit inactive marker
+ * counts as held: an UNRECOGNIZED status must not silently delete a position from the preview,
+ * because the worst outcome here is a real holding quietly missing from the user's net worth.
+ */
+function isHeldStatus(status: string): boolean {
+  return !/(inactive|sold|closed|deleted|archived|draft)/.test(status);
+}
+
+// ─── Cash ────────────────────────────────────────────────────────────────────
+
+/**
+ * Parse the `cash` topic. Trade Republic returns one entry per (account, currency) pair.
+ *
+ * A LIST, not a single balance, and deliberately not a sum: an account holding a cash deposit
+ * reports it beside the settleable cash, and `doc/guide/col Connections` learned the hard way on
+ * Scalable that two balances at one broker are two accounts, never one figure. The plan tracks the
+ * first and WARNS about the rest by amount — a sum would quietly merge them.
+ *
+ * A foreign-currency balance is skipped and counted rather than converted: the payload carries no
+ * rate, and inventing one is how a euro figure becomes a wrong euro figure.
+ */
+export function parseTrCash(payload: unknown): { balances: TrCashInput[]; skipped: number } {
+  const rows = Array.isArray(payload) ? payload : null;
+  if (!rows) {
+    throw new TrParseError('Nessun saldo di liquidità nella risposta del broker.');
+  }
+  const balances: TrCashInput[] = [];
+  let skipped = 0;
+  for (const row of rows) {
+    if (!isRecord(row)) {
+      skipped += 1;
+      continue;
+    }
+    const currency = (toText(row['currencyId']) ?? 'EUR').toUpperCase();
+    const amount = toNumber(row['amount']);
+    if (amount === undefined || currency !== 'EUR') {
+      skipped += 1;
+      continue;
+    }
+    balances.push({ balance: amount, currency, accountNumber: toText(row['accountNumber']) ?? '' });
+  }
+  return { balances, skipped };
+}
+
+// ─── Savings plans (Sparpläne) ───────────────────────────────────────────────
+
+/** Parse the `savingsPlans` topic. Never throws on an empty list: no plan is a real reading. */
+export function parseTrSavingsPlans(payload: unknown): TrSavingsPlanInput[] {
+  const rows =
+    Array.isArray(payload) ? payload : isRecord(payload) && Array.isArray(payload['savingsPlans'])
+      ? (payload['savingsPlans'] as unknown[])
+      : [];
+  const plans: TrSavingsPlanInput[] = [];
+  for (const row of rows) {
+    if (!isRecord(row)) continue;
+    const id = toText(row['id']);
+    const instrumentId = toText(row['instrumentId']);
+    if (!id || !instrumentId) continue;
+    const rawAmount = toNumber(row['amount']);
+    if (rawAmount === undefined) continue;
+    // `ISIN.EXCHANGE`: the ISIN is what the app matches on, the exchange suffix is broker-local.
+    const [isin] = instrumentId.split('.');
+    plans.push({
+      id,
+      instrumentId,
+      ...(isin ? { isin: isin.toUpperCase() } : {}),
+      amount: rawAmount / SAVINGS_PLAN_MINOR_UNIT_DIVISOR,
+      rawAmount,
+      interval: toText(row['interval']) ?? 'monthly',
+      nextExecutionDate: toIsoDate(row['nextExecutionDate']),
+      paused: row['paused'] === true,
+      createdAt: toIsoDate(row['createdAt']),
+    });
+  }
+  return plans;
+}
+
+/** The securities account number, needed to ask for savings plans at all. */
+export function parseTrSecuritiesAccountNumber(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+  const accounts = Array.isArray(payload['accounts']) ? (payload['accounts'] as unknown[]) : [];
+  for (const account of accounts) {
+    if (!isRecord(account)) continue;
+    const number = toText(account['securitiesAccountNumber']);
+    if (number) return number;
+  }
+  return null;
+}
+
+// ─── Broker type → AssetType/AssetClass ──────────────────────────────────────
+
+/**
+ * Best-effort mapping of Trade Republic's `instrumentType`, falling back to the enclosing
+ * `categoryType`. The broker vocabulary is not contractual, so an unknown value falls back to
+ * ETF/equity AND is flagged `typeUncertain` — the preview names it and the user corrects it on
+ * Patrimonio. Same rule as `mapScalableType`, deliberately not a shared map: the two brokers
+ * publish different vocabularies and merging them would make one broker's string fix the other's.
+ */
+const TR_TYPE_MAP: Record<string, { type: AssetType; assetClass: AssetClass }> = {
+  STOCK: { type: 'stock', assetClass: 'equity' },
+  EQUITY: { type: 'stock', assetClass: 'equity' },
+  SHARE: { type: 'stock', assetClass: 'equity' },
+  ETF: { type: 'etf', assetClass: 'equity' },
+  FUND: { type: 'etf', assetClass: 'equity' },
+  MUTUALFUND: { type: 'etf', assetClass: 'equity' },
+  BOND: { type: 'bond', assetClass: 'bonds' },
+  FIXEDINCOME: { type: 'bond', assetClass: 'bonds' },
+  CRYPTO: { type: 'crypto', assetClass: 'crypto' },
+  COIN: { type: 'crypto', assetClass: 'crypto' },
+  CERTIFICATE: { type: 'commodity', assetClass: 'commodity' },
+  COMMODITY: { type: 'commodity', assetClass: 'commodity' },
+  DERIVATIVE: { type: 'commodity', assetClass: 'commodity' },
+};
+
+export interface MappedTrType {
+  type: AssetType;
+  assetClass: AssetClass;
+  typeUncertain: boolean;
+}
+
+export function mapTrType(rawType: string, rawCategory = ''): MappedTrType {
+  for (const candidate of [rawType, rawCategory]) {
+    const key = candidate.toUpperCase().replace(/[^A-Z]/g, '');
+    if (!key) continue;
+    const mapped = TR_TYPE_MAP[key];
+    if (mapped) return { ...mapped, typeUncertain: false };
+  }
+  return { type: 'etf', assetClass: 'equity', typeUncertain: true };
+}
+
+/** Italian 26% on gains, 12.5% on bonds — the same defaults the dialogs suggest. */
+export function defaultTrTaxRateFor(type: AssetType): number {
+  return type === 'bond' ? 12.5 : 26;
+}
+
+/**
+ * A fresh `AssetFormData` for a Trade Republic position not yet tracked.
+ *
+ * `autoUpdatePrice: TRUE` — the opposite of the Scalable bridge, and the reason is in the header:
+ * this broker publishes no quote with the position, so the price comes from the ordinary Yahoo
+ * path, both now (filled in by the read route) and on every later refresh.
+ *
+ * `currentPrice` falls back to 0 when the quote lookup failed, and the plan pairs that with a
+ * warning naming the position. A created asset at 0 is visible and fixable; a position missing
+ * from the portfolio is neither.
+ */
+export function mapTrHoldingToAssetFormData(holding: TrHoldingInput): AssetFormData {
+  const { type, assetClass } = mapTrType(holding.rawType, holding.rawCategory);
+  return {
+    ticker: holding.isin,
+    displayTicker: holding.name,
+    name: holding.name,
+    type,
+    assetClass,
+    currency: holding.currency,
+    quantity: holding.quantity,
+    ...(holding.averageCost !== undefined && holding.averageCost > 0
+      ? { averageCost: holding.averageCost }
+      : {}),
+    taxRate: defaultTrTaxRateFor(type),
+    currentPrice: holding.price ?? 0,
+    isLiquid: true,
+    autoUpdatePrice: true,
+    isin: holding.isin,
+    exchange: 'Trade Republic',
+  };
+}
+
+// ─── Import plan (the preview) ───────────────────────────────────────────────
+
+/**
+ * No `price-update` kind, unlike Scalable: this bridge has no price to compare (§1 of the
+ * header). The plan is therefore `new` / `drift-only` / `unchanged`.
+ */
+export type TrHoldingDiffKind = 'new' | 'drift-only' | 'unchanged';
+
+export interface TrHoldingDiff {
+  kind: TrHoldingDiffKind;
+  holding: TrHoldingInput;
+  /** Creation payload for `kind === 'new'`. */
+  formData: AssetFormData;
+  existingAssetId?: string;
+  existingName?: string;
+  /** Broker quantity minus tracked quantity — a number to reconcile, never an auto-write. */
+  quantityDrift: number;
+  typeUncertain: boolean;
+}
+
+export interface TrCashPlan {
+  balance: number;
+  currency: string;
+  accountNumber: string;
+}
+
+export interface TrSavingsPlanRow {
+  plan: TrSavingsPlanInput;
+  /** The tracked asset the plan buys, when one matches the ISIN — the number a reader wants. */
+  trackedAssetId?: string;
+  trackedAssetName?: string;
+}
+
+export interface TrImportPlan {
+  holdings: TrHoldingDiff[];
+  /** Null when the cash read produced nothing usable: positions sync without a balance. */
+  cash: TrCashPlan | null;
+  /** Always an array: no savings plan is a real reading, and a declared one, never a write. */
+  savingsPlans: TrSavingsPlanRow[];
+  warnings: string[];
+  stats: {
+    holdingCount: number;
+    newCount: number;
+    driftCount: number;
+    unchangedCount: number;
+    skippedCount: number;
+    savingsPlanCount: number;
+  };
+}
+
+const QTY_EPS = 1e-6;
+
+export type TrExistingAsset = Pick<Asset, 'id' | 'name' | 'isin' | 'type' | 'quantity'>;
+
+/**
+ * Diff broker positions against the tracked assets (matched by ISIN). Only two things can come
+ * out of it: a position to create, and a quantity mismatch to reconcile. There is no price write
+ * and there is no quantity write — the ledger owns both.
+ */
+export function buildTrImportPlan(
+  holdings: TrHoldingInput[],
+  cashBalances: TrCashInput[],
+  savingsPlans: TrSavingsPlanInput[],
+  existingAssets: TrExistingAsset[]
+): TrImportPlan {
+  const byIsin = new Map<string, TrExistingAsset>();
+  for (const asset of existingAssets) {
+    const isin = asset.isin?.trim().toUpperCase();
+    if (isin && !byIsin.has(isin)) byIsin.set(isin, asset);
+  }
+
+  const warnings: string[] = [];
+  const diffs: TrHoldingDiff[] = holdings.map((holding) => {
+    const existing = byIsin.get(holding.isin);
+    const formData = mapTrHoldingToAssetFormData(holding);
+    const typeUncertain = mapTrType(holding.rawType, holding.rawCategory).typeUncertain;
+    if (!existing) {
+      if (typeUncertain) {
+        warnings.push(
+          `«${holding.name}»: tipo broker «${holding.rawType || holding.rawCategory || 'sconosciuto'}» non riconosciuto, proposto come ETF azionario — verifica su Patrimonio.`
+        );
+      }
+      // A position born at 0 would silently shrink the net worth by its whole value, so the
+      // missing quote is named instead. The asset is still created: it is a real holding, and
+      // `autoUpdatePrice` will fill the price on the next refresh.
+      if (holding.price === undefined) {
+        warnings.push(
+          `«${holding.name}»: prezzo non trovato, la posizione entra a 0 e si aggiornerà alla prossima quotazione.`
+        );
+      }
+      return {
+        kind: 'new',
+        holding,
+        formData,
+        quantityDrift: 0,
+        typeUncertain,
+      } satisfies TrHoldingDiff;
+    }
+    const drift = holding.quantity - existing.quantity;
+    // The drift gate is the ledger's, not the broker's: a cash or realestate asset matched by
+    // ISIN is not replay-derived, so a mismatch there is a coincidence, not a reconciliation.
+    const hasDrift = isLedgerAssetType(existing.type) && Math.abs(drift) > QTY_EPS;
+    if (hasDrift) {
+      warnings.push(
+        `«${existing.name}»: il broker riporta ${holding.quantity} quote contro ${existing.quantity} nel Registro — la quantità non viene toccata (riconcilia con una rettifica).`
+      );
+    }
+    return {
+      kind: hasDrift ? 'drift-only' : 'unchanged',
+      holding,
+      formData,
+      existingAssetId: existing.id,
+      existingName: existing.name,
+      quantityDrift: hasDrift ? drift : 0,
+      typeUncertain,
+    } satisfies TrHoldingDiff;
+  });
+
+  const savingsPlanRows: TrSavingsPlanRow[] = savingsPlans.map((plan) => {
+    const tracked = plan.isin ? byIsin.get(plan.isin) : undefined;
+    return {
+      plan,
+      ...(tracked ? { trackedAssetId: tracked.id, trackedAssetName: tracked.name } : {}),
+    } satisfies TrSavingsPlanRow;
+  });
+
+  // The first EUR balance is the one to track; the others are DECLARED, never merged. A cash
+  // deposit reported beside the settleable cash is a different account at the broker, and the
+  // Scalable bridge already paid for assuming otherwise.
+  const [primary, ...extraBalances] = cashBalances;
+  for (const extra of extraBalances) {
+    warnings.push(
+      `Trade Republic segnala un secondo saldo EUR di ${extra.balance} ${extra.currency} (conto ${extra.accountNumber || 'senza numero'}): non viene sommato a quello tracciato, creane uno conto a parte se ti serve.`
+    );
+  }
+
+  return {
+    holdings: diffs,
+    cash: primary
+      ? { balance: primary.balance, currency: primary.currency, accountNumber: primary.accountNumber }
+      : null,
+    savingsPlans: savingsPlanRows,
+    warnings,
+    stats: {
+      holdingCount: holdings.length,
+      newCount: diffs.filter((d) => d.kind === 'new').length,
+      driftCount: diffs.filter((d) => d.kind === 'drift-only').length,
+      unchangedCount: diffs.filter((d) => d.kind === 'unchanged').length,
+      skippedCount: 0,
+      savingsPlanCount: savingsPlanRows.length,
+    },
+  };
+}
+
+/** Suggested cash-account name for a Trade Republic account that has none yet. */
+export const TR_CASH_ACCOUNT_NAME = 'Trade Republic — Liquidità';
+
+/**
+ * The ticker the sync WRITES on the Trade Republic cash account: the stable identity a re-sync
+ * matches on. The user may rename the account, so matching by name (or by the shared
+ * `exchange: 'Trade Republic'`) would create a duplicate on the next sync — the same rule the
+ * Scalable cash and deposit tickers exist for.
+ */
+export const TR_CASH_TICKER = 'TR-EUR';

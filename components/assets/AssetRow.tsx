@@ -18,7 +18,7 @@ import type { useRovingFocus } from '@/lib/hooks/useRovingFocus';
 import { Checkbox } from '@/components/ui/checkbox';
 import { getAssetClassCssVar } from '@/lib/constants/colors';
 import { ASSET_CLASS_LABELS } from '@/lib/utils/allocationUtils';
-import { resolveDisplayAssetClass } from '@/lib/utils/assetDisplayClass';
+import { describeAssetClassChip, type AssetClassChipModel } from '@/lib/utils/assetDisplayClass';
 import { getAssetDisplayTicker } from '@/lib/utils/assetDisplay';
 import { getMetricValueColor } from '@/lib/utils/metricColors';
 import type { AssetPerformanceData } from '@/lib/utils/assetPerformanceDeltas';
@@ -60,6 +60,71 @@ export function AssetClassChip({ assetClass, className }: { assetClass: string; 
       }}
     >
       {ASSET_CLASS_LABELS[assetClass] ?? assetClass}
+    </span>
+  );
+}
+
+/** Hard-stop gradient of the chip's segments at `mix`% of each class's chart slot. */
+function segmentGradient(segments: AssetClassChipModel['segments'], mix: number): string {
+  let start = 0;
+  const stops = segments.map(({ assetClass, share }) => {
+    const end = start + share;
+    const stop = `color-mix(in srgb, var(${getAssetClassCssVar(assetClass)}) ${mix}%, transparent) ${start}% ${end}%`;
+    start = end;
+    return stop;
+  });
+  return `linear-gradient(to right, ${stops.join(', ')})`;
+}
+
+/**
+ * The class chip of ONE instrument row (desktop table and phone row). A single-class asset gets the
+ * plain `AssetClassChip`; a composite one (a 60/40 fund) splits into one segment per leg, each as
+ * wide as its share and tinted like that class's own chip: a 15% fill, and a 30% ring that is the
+ * same segment gradient masked down to its outer 1px. The ring is an OVERLAY, not a CSS border: a
+ * gradient on the border box sits under the translucent 15% fill, shows through it and doubles the
+ * tint of every segment, so the chip has no border at all and the overlay draws the ring on top,
+ * following the rounded ends. The visible label is short («Azioni · Obbl.», «Misto»); the shares are
+ * `sr-only` text, not an `aria-label`, because the chip's content IS the information (AGENTS.md).
+ * The group header keeps `AssetClassChip`: it names the group, not an instrument.
+ */
+export function InstrumentClassChip({ asset }: { asset: Pick<Asset, 'assetClass' | 'composition'> }) {
+  const chip = describeAssetClassChip(asset);
+  if (chip.accessibleName === null) return <AssetClassChip assetClass={chip.segments[0].assetClass} />;
+  return (
+    <span
+      data-composite-chip
+      // No CSS border: the plain chip's 1px border becomes 1px of padding (px-[9px] py-[3px] = px-2
+      // py-0.5 + 1px), and the ring is the overlay below — a border-box gradient would show through
+      // the translucent fill and double its tint. From two segments on, a minimum width in the desktop
+      // table only: there the chips stand in the Classe column and the proportions compare down it.
+      // On the phone row each chip starts after a ticker of its own width, so there is no column to
+      // compare down, and a floor would only push the chip under the amount on a long ticker.
+      className={cn(
+        'relative inline-flex items-center justify-center whitespace-nowrap rounded-full px-[9px] py-[3px] text-[11px] font-medium text-foreground',
+        chip.segments.length > 1 && 'desktop:min-w-[112px]',
+      )}
+      style={{ background: segmentGradient(chip.segments, 15) }}
+    >
+      {/* The ring: the 30% gradient masked down to its outer 1px (the padding box minus the content
+          box), like the plain chip's border drawn over its own fill. The prefixed pair comes FIRST
+          and the standard `mask` last: an engine that treats `-webkit-mask` as an alias of `mask`
+          resets `mask-composite` with that shorthand, so a standard declaration placed before it
+          would lose its `exclude`; declared last, the standard shorthand wins wherever it is
+          understood, and older WebKit keeps the prefixed `xor`. */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 rounded-full p-px"
+        style={{
+          background: segmentGradient(chip.segments, 30),
+          WebkitMask: 'linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+          WebkitMaskComposite: 'xor',
+          mask: 'linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0)',
+        }}
+      />
+      <span aria-hidden="true" data-chip-label className="relative">
+        {chip.label}
+      </span>
+      <span className="sr-only">{chip.accessibleName}</span>
     </span>
   );
 }
@@ -160,7 +225,6 @@ export function AssetRow({
   }, [armed, announce, asset.name]);
 
   const value = calculateAssetValue(asset);
-  const displayAssetClass = resolveDisplayAssetClass(asset);
   // A hand-VALUED holding keeps its value in `quantity` at price 1: those cells describe the
   // storage, so the details say the value and when it was typed instead.
   const isHandValued = !hasMarketPrice(asset.type, asset.subCategory);
@@ -245,7 +309,7 @@ export function AssetRow({
             {showTicker && <span className="font-mono text-[11px] text-muted-foreground">{getAssetDisplayTicker(asset)}</span>}
             {showTicker && asset.exchange && <span className="truncate text-[11px] text-muted-foreground">· {asset.exchange}</span>}
             {!showTicker && asset.exchange && <span className="truncate text-[11px] text-muted-foreground">{asset.exchange}</span>}
-            <AssetClassChip assetClass={displayAssetClass} />
+            <InstrumentClassChip asset={asset} />
           </span>
           {subLine && <span className="truncate text-[11px] text-muted-foreground">{subLine}</span>}
         </div>

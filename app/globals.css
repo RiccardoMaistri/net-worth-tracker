@@ -105,6 +105,16 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  /* Analisi's 50/30/20 flow (settings.spendingRolesEnabled): Necessità, Desideri, Risparmi, «Da
+     classificare» and «Coperto dal patrimonio». Declared ONCE, here, as aliases of what every theme
+     already defines — the alias resolves on the root element, so each theme block's slots flow
+     through without the block naming a role. A theme may declare its own later. Read by the Sankey
+     through useCssColorTokens (resolved to hex) and by the phone's bar as var() directly. */
+  --role-need: var(--chart-1);
+  --role-want: var(--chart-4);
+  --role-saving: var(--chart-2);
+  --role-unclassified: var(--muted-foreground);
+  --role-deficit: var(--destructive);
 }
 
 .dark {

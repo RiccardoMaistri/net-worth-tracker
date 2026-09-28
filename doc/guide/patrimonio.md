@@ -6,6 +6,7 @@
 
 Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
 
+- **Composite class chip** (2026-09-26): `InstrumentClassChip` in `components/assets/AssetRow.tsx` (desktop `Classe` column and phone row; the group header keeps `AssetClassChip`), pure `describeAssetClassChip` + `rankedClassLegs` + `SHORT_CLASS_LABELS` in `lib/utils/assetDisplayClass.ts`; tests `__tests__/assetDisplayClass.test.ts`, `e2e/assets.composite-chip.spec.ts` (1440: the 112px floor, «Andamento» without sideways scroll, the grouped header's plain chip; 390: the chip ends before the amount after a 12-character ticker, `main` does not scroll)
 - **Mutuo tile** (2026-09-25): `components/assets/tiles/MutuoTile.tsx`, pure `lib/utils/mortgageSummary.ts` (`summarizeMortgage`, `projectPayoff`, `interestPaidOf`), words `describeMortgage*` in `patrimonioNarrative.ts`, reader `getMortgageInstalments` + `lib/hooks/useMortgageInstalments.ts`; tests `__tests__/mortgageSummary.test.ts`, `e2e/cashflow.mortgage.spec.ts`
 - **Patrimonio**: `app/dashboard/assets/page.tsx` (owns every dialog), `components/assets/*` (+ `PatrimonioTile`/`ComposizioneTile` reused from the overview), pure `lib/utils/{patrimonioNarrative,patrimonioSummary,assetPerformanceDeltas,costBasisEur}.ts` (`costBasisPerUnitEur`/`unitPriceEur` = EUR against EUR, fees included), `lib/utils/bondPricing.ts` (`resolveBondPrice` = the ONE Borsa Italiana quote → euro per unit, nominal 1 € by default, BTP€i coefficient; `toBorsaItalianaQuote` the inverse; shared with `lib/helpers/priceUpdater.ts`), `lib/utils/bondDetailsForm.ts` (`buildBondDetailsFromForm`, a rate of 0 is a zero coupon); `lib/services/assetService.ts`, `types/assets.ts`; spec `e2e/assets.bond.spec.ts`
 
@@ -127,6 +128,27 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
 - **Below `desktop:` the rows are `AssetRow`, flat and expandable** (CSS `grid-rows-[0fr] → [1fr]` with `inert`
   on the closed panel): a card per row inside the Strumenti tile would be a card inside a card. Class chips take
   their label from `ASSET_CLASS_LABELS` (Italian); `lib/utils/assetUtils.ts` with its English map is gone.
+- **A composite instrument is ONE row with a split chip** (2026-09-26): a 60/40 fund stays one row, grouped and sorted
+  under its prevailing class, but its chip (`InstrumentClassChip`) has one segment per composition leg, as wide as the
+  leg's share of the market value (`leverageRatio` never widens a segment), each tinted like that class's own chip.
+  Two segments read «Azioni · Obbl.» (fixed short forms, `SHORT_CLASS_LABELS` — the sixth label map,
+  doc/guide/allocazione.md), three or more «Misto»; a leg under 5 % (`MIN_CHIP_SEGMENT_PCT`) gets no segment and no
+  word (a 97/3 fund reads «Azioni» at plain width) but stays in the `sr-only` shares («Azioni 97%, Liquidità 3%») —
+  text, not an `aria-label`, since the chip's content is the information. **The 5 % floor reads the share AS
+  PRINTED** (one decimal, `formatPercentageIt`): a 4,96 % leg is heard as «5%» and keeps its segment, a 4,94 % one is
+  heard as «4,9%» and has none — the chip never drops a leg the screen reader announces at 5 % or more. The widths are
+  normalised over the visible legs; the spoken shares are the stored ones, unscaled. **From two segments the chip is
+  at least 112px wide in the desktop table only** (`desktop:min-w-[112px]`, owner's decision 2026-09-27): there the
+  chips stand in the Classe column and the proportions compare down it; on the phone row each chip starts after a
+  ticker of its own width, so there is no column, and a floor would push the chip under the amount on a long ticker. **One
+  ranking for group and chip** (`rankedClassLegs`: one leg per class, largest first, ties to the first in the
+  composition): a class named twice is summed before ranking, so the first segment IS the group. **The ring is an
+  overlay, not a CSS border**: a `border-box` gradient under a translucent `padding-box` fill shows through and doubled
+  the tint (seen in the browser, 2026-09-26); the overlay is the 30% gradient masked to its outer 1px
+  (`mask-composite: exclude`), and the chip's 1px of padding stands in for the plain chip's border, so both measure
+  the same. In the inline style the `-webkit-mask` pair is declared BEFORE the standard `mask`: an engine that aliases
+  the prefixed shorthand to `mask` would otherwise reset the `exclude`. The ring itself is asserted by no test (the
+  spec reads the fill's stops only) — look at it in the browser when touching the mask.
 - **«Andamento» is a VIEW, not four more columns** (2026-09-14, the page's first Impeccable critique): with the
   toggle on, Quantità · Prezzo · PMC · TER leave the table and the three Δ windows take their place, so at 1440
   nothing scrolls and the actions never leave sight (appended, the Δ columns pushed the actions column 202px out of
@@ -218,6 +240,9 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
 ## Per-page blind spots
 
 - **Patrimonio**: Δ columns are empty for pension funds and cash accounts by design; the Rendimento tile ranks only within the overview's `topAssets` (15 largest); «Movimenti del mese» reads the whole ledger and filters in memory; **«Andamento» hides Quantità/Prezzo/PMC/TER while it is on** (a view, not a bug — the footer says so); a hand-valued row shows «—» for quantity, price and PMC and has no G/P (its PMC is its price); `text-muted-foreground` on the tile surface measures 4,48:1 in light on the owner's named theme (0,02 under AA; the default theme passes — a theme issue, doc/guide/temi.md, not touched); **a foreign-currency position has no G/P, no YOC and no PMC in euro until its ledger has projected `averageCostEur`** (the backfill runs on the first visit to Patrimonio; before it, the Panoramica's «Asset principali» and the PDF print no return for it — never the old dollar-against-euro figure); a EUR position measured against the native PMC before the backfill reads a G/P higher by its purchase fees; `AssetDialog.tsx` carries 7 pre-existing `react-hooks` errors. **Two accepted side effects of the optional Sottocategoria** (2026-08-30; neither is new — without the asterisk they are only less signalled): a cash account without the «conti correnti» subcategory loses the 5.000 € stamp-duty threshold AND the flat fee — it pays the securities' rate on its balance (`calculateStampDuty`, a rule Impostazioni already states), and changing Tipo or Classe does not clear `subCategory`, so an out-of-class value can survive invisibly — Radix shows the placeholder because the value is not among the items. **The checking-account duty is a flat 34,20 € above 5.000 €** (`lib/constants/stampDuty.ts`, fixed 2026-09-24: until then the account paid `balance × 0,2%` while the comment beside it said the flat rule and the test pinned the wrong figure — 12 € on 6.000 €, 2.000 € on a million); the threshold reads TODAY's balance, while the law reads the year's average balance, which the app does not keep — an account that dips under 5.000 € on the day the Costi tile is read shows no duty.
+- **Composite chip**: sorting by «Classe» and the group headers still read the PREVALENT class only — a 60/40 fund
+  sorts and groups with pure «Azioni» (one instrument, one row; the split lives in the chip); the chip's segments are
+  the stored `composition`, never re-read from the market, so a fund whose mix drifted shows its last saved split.
 - **Mutuo**: the interest counts from the first instalment the app settled, never before the link; the projected end assumes monthly instalments of the latest linked amount at today's TAN (a variable rate moves it); the tile appears only for a property with a linked instalment, so a mortgage tracked without the link has no tile; the «Per anno» table appears from the second measured year.
 - **FX** depends on Frankfurter with a 24h in-memory cache (no fallback on a cold instance). Pre-migration non-EUR assets without `currentPriceEur` show the native price as EUR until the first update; one with `autoUpdatePrice: false` never self-heals until re-saved. (moved from `CLAUDE.md` → Known Issues on 2026-09-19)
 - **Bonds saved before 2026-09-11 with the nominal empty or 1 keep a wrong PMC and opening trade** (the raw quote as

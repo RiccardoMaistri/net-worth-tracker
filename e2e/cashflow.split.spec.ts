@@ -6,7 +6,7 @@
  * screen in front of a browser for the first time and these are the three things it found that
  * only a browser can see or that only the whole data path can prove.
  *
- * WHAT IS DELIBERATELY NOT HERE: the wording of every state. `missing-salary`, the empty period
+ * WHAT IS DELIBERATELY NOT HERE: the wording of every state. `missing-income`, the empty period
  * and each reading are pinned sentence by sentence in `__tests__/expenseSplitNarrative.test.ts`,
  * where they cost milliseconds instead of a page load. A browser is spent here only on layout
  * geometry, on the accessibility wiring, and on the ONE reading whose value crosses the whole
@@ -66,19 +66,20 @@ test.describe('Cashflow › Divisione', () => {
   });
 
   /**
-   * THE HONESTY DEFECT. Tarsio's rows leave him +100 € today and −100 € once the 500 € still in
+   * THE HONESTY DEFECT. Tarsio's rows leave him +500 € today and −100 € once the 1500 € still in
    * the calendar is paid. The page used to print the −100 € in the destructive token and headline
    * «lo stipendio di Tarsio non basta» — over money still in the account. The figure must be the
    * booked one, the colour must follow it, and the calendar must be its own clause.
    *
    * This asserts through the whole path (Firestore → summary → tile), which is what the unit
-   * tests cannot do.
+   * tests cannot do. The HERO is read, not the whole tile: «1100 € di spese personali» in the
+   * reading would satisfy a `100 €` match on the region.
    */
   test('prints what has happened, and says separately where the calendar takes it', async ({ page }) => {
     await openDivisione(page);
 
     const tarsio = page.getByRole('region', { name: 'Quanto resta a Tarsio' });
-    await expect(tarsio).toContainText(euro('100'));
+    await expect(tarsio.locator('p.font-mono').first()).toHaveText(euro('500'));
     await expect(tarsio).toContainText(/Con le spese ancora in calendario mancano\s*100[\s ]*€/);
 
     // The hero figure is the booked one and wears the positive token, not the destructive one.
@@ -93,18 +94,43 @@ test.describe('Cashflow › Divisione', () => {
   });
 
   /**
-   * Labor income nobody is named on cannot earn a share, and the page must SAY so: 1000 € of the
-   * fixture's salaries are left «in comune», so 60/40 is computed on 4000 € of 5000 €. The
+   * Income nobody is named on cannot earn a share, and the page must SAY so: 1000 € of the
+   * fixture's income is left «in comune», so 60/40 is computed on 4000 € of 5000 €. The
    * spending side always declared its orphans; the income side declared nothing.
    */
-  test('declares the labor income the shares could not use, and the rows that lost their owner', async ({ page }) => {
+  test('declares the income the shares could not use, and the rows that lost their owner', async ({ page }) => {
     await openDivisione(page);
 
     await expect(page.getByRole('region', { name: 'Quota' })).toContainText(
-      /Altri\s*1000[\s ]*€ di reddito da lavoro non sono intestati a nessuno/
+      /Altri\s*1000[\s ]*€ di entrate sono in comune e non entrano nelle quote/
     );
     await expect(page.getByRole('region', { name: 'In comune' })).toContainText(
-      /sono di qualcuno che non è più in Famiglia/
+      /è di qualcuno che non è più in Famiglia/
+    );
+  });
+
+  /**
+   * The income left «in comune» pays the common spending FIRST (2026-09-27): the fixture's
+   * 1000 € of unattributed salary is also the household's, so the tile shows what it took off
+   * the 2500 € pool and the verdict says it in the one sentence, before the shares. Asserted
+   * through the whole path because the two figures come from different modules — the tile from
+   * `CommonSpending`, the verdict from `poolClause` — and only the page shows them together.
+   */
+  test('shows what the common income took off the pool, and the verdict divides the net', async ({ page }) => {
+    await openDivisione(page);
+
+    const comune = page.getByRole('region', { name: 'In comune' });
+    // The hero stays the spending; the arithmetic sits under it, the «−» being U+2212.
+    await expect(comune.locator('p.font-mono').first()).toHaveText(euro('2500'));
+    const rows = comune.getByRole('definition');
+    await expect(rows.nth(0)).toHaveText(euro('^−1000'));
+    await expect(rows.nth(1)).toHaveText(euro('^1500'));
+    await expect(comune.getByRole('term').nth(0)).toHaveText('Entrate in comune');
+    await expect(comune.getByRole('term').nth(1)).toHaveText('Da dividere');
+
+    const verdict = page.getByRole('region', { name: 'Verdetto sulla divisione' });
+    await expect(verdict).toContainText(
+      /le spese in comune sono\s*2500[\s ]*€, meno\s*1000[\s ]*€ di entrate in comune:\s*1500[\s ]*€ da dividere,\s*900[\s ]*€ a Ghiandaia/
     );
   });
 

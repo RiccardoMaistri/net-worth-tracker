@@ -6,14 +6,14 @@
 
 Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
 
-- **Impostazioni**: `app/dashboard/settings/page.tsx` (`COLOR_THEME_SWATCHES`, `THEME_MODES`, `DeclarationRow`, `CategoryRow`, `SyncDividendsButton`, `targetFieldId`), `components/settings/{ExpenseImportSection,AccountSharingSection}.tsx`, pure `lib/utils/{settingsNarrative,equityBondsAutoTargets,allocationTargetValidation}.ts`, `lib/services/assetAllocationService.ts` (`getSettings`/`setSettings`, the FIVE places); browser `e2e/settings{,.mobile}.spec.ts`
+- **Impostazioni**: `app/dashboard/settings/page.tsx` (`COLOR_THEME_SWATCHES`, `THEME_MODES`, `DeclarationRow`, `CategoryRow`, `SyncDividendsButton`, `targetFieldId`), `components/settings/{ExpenseImportSection,AccountSharingSection}.tsx`, pure `lib/utils/{settingsNarrative,spendingRoles,equityBondsAutoTargets,allocationTargetValidation}.ts`, `lib/services/assetAllocationService.ts` (`getSettings`/`setSettings`, the FIVE places); browser `e2e/settings{,.mobile,.roles}.spec.ts`
 
 ## Impostazioni — tessere senza verdetto (`app/dashboard/settings/page.tsx`, `lib/utils/settingsNarrative.ts`)
 
 - **The page has NO verdict and must not grow one.** A configuration page measures nothing, so there is no question for
   a sentence to answer; what it keeps is the CADENCE — compact header + `PageTabBar`, then a 12-column grid where every
   group of settings is a `Tile`: eyebrow = the group, ONE reading line stating the current state in words, controls
-  below. `settingsNarrative.ts` therefore exports 21 `describe*` functions and NO `build*Verdict`.
+  below. `settingsNarrative.ts` therefore exports 23 `describe*` functions (counted 2026-09-27, `describeSpendingRolesSetting` the newest) and NO `build*Verdict`.
 - **A reading declares the effect DOWNSTREAM, not the control under it.** «Base gestita: fondi pensione e asset esclusi
   restano fuori» beats «due interruttori»: the reader is deciding, and a setting they cannot place is one they will not
   trust. The Narrative Honesty Rule holds — a missing input drops its clause and says what stalls without it («senza il
@@ -57,6 +57,23 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
   dialog IS the confirmation, without them the row arms), dividend sync (`SyncDividendsButton`, armed in the primary
   tint: it writes, it does not destroy) and the revoke of an access (`MemberRow`, the row says what is taken away).
   One live region per list.
+- **«Ruoli 50/30/20» is its own tile in Spese**, under the two the expense form reads — not a row of Categorie,
+  because that tile gives way to an `ErrorNotice` when the categories fail, and the switch and its reading must not.
+  The reading (`describeSpendingRolesSetting`) counts the classified spending categories
+  (`summarizeCategoryClassification`) and says «non letti» on a failed read, never «0 classificate». Its spec builds
+  the expected sentence from the counts it reads off the emulator at the assertion: the base account is shared, and
+  other specs plant spending categories of their own. With the switch
+  on, each `CategoryRow` badge wears its role's colour (`categoryRoleColor`: income `--positive`, a transfer its saved
+  hue), and the category dialog shows the role picker. The flag's dirty snapshot is Spese's.
+- **A category write invalidates what Analisi reads, where the write happens** (2026-09-27): the page keeps its own
+  category list (`loadExpenseCategories`), but Analisi reads `queryKeys.expenses.categories` under the global
+  5-minute staleTime, so a role set here reached its Flusso minutes later. `invalidateCategoryCaches`
+  (`components/expenses/CategoryManagementDialog.tsx`) invalidates `expenses.categories` after the dialog's create or
+  update — the dialog is also what `ExpenseDialog`, `CategoryMoveDialog` and `CategoryDeleteConfirmDialog` mount — and
+  `expenses.all` too when the rows were rewritten: a rename or a type change (the cascades inside `updateCategory`), a
+  subcategory's move or reassignment. The page's own move and delete handlers call it with the rows rewritten (the
+  armed zero-row delete without). Pinned in the browser by `e2e/settings.roles.spec.ts` (Analisi reached client-side,
+  back, the role saved, forward: the node is there).
 - **`ExpenseImportSection` and `AccountSharingSection` render their own `Tile`** — the page places them in a grid cell
   and passes nothing but their props. Their reading lines come from the same pure module, so the wizard's phase
   («142 voci da importare, 6 righe scartate, 3 categorie da creare») and the grant list are stated in words before the

@@ -13,22 +13,28 @@ Next.js app for Italian investors: net worth, assets, cashflow, dividends, perfo
 
 ## Current Status
 - Stack: Next.js 16, React 19, TypeScript 5, Tailwind v4, Firebase, Vitest, Framer Motion, Recharts, Yahoo Finance, Borsa Italiana scraping, Anthropic.
-- `tsc` clean; **185 files / 4327 tests** green in `Europe/Rome` + **37 Playwright spec files** (130 tests, incl. 6 auth setups; last full run 2026-09-25 in the cloud container: 123 of 128 green, the 5 reds environmental or the known `modal.origin` — doc/guide/e2e-emulatori.md). Run Vitest under `TZ=Europe/Rome` too — every date fixture sits at noon, which structurally hides timezone bugs.
-- Latest (2026-09-25, bis): **Patrimonio › «Mutuo» — quanto costa il mutuo, in interessi, anno per anno.** Dopo le
-  rate che riducono il debito per la quota capitale (stessa giornata, PR precedente), ogni rata regolata salva anche gli
-  INTERESSI pagati (`debtInterestPaid`, accanto a `debtPrincipalRepaid`, nei tre punti: salvataggio, modifica, job
-  serale). Una tessera «Mutuo» a tutta larghezza tra Rendimento e Strumenti, per ogni immobile con rate collegate: la
-  lettura dice interessi e capitale delle rate PAGATE dell'anno e quando si chiude il piano, i KPI debito · interessi
-  dell'anno · capitale dell'anno · fine prevista (ammortamento alla francese, `projectPayoff`), e dal secondo anno
-  misurato una tabella «Per anno» (il primo anno «da settembre», quello in corso «finora»). Scelte del proprietario:
-  solo Patrimonio, e gli interessi contano SOLO dalle rate regolate dall'app — il passato non si ricostruisce e il
-  footer dice da quando. Letture: una query per immobile (`userId` + `debtAssetId`, nessun indice composto), chiave
-  sotto `assets.all`, `staleTime: 0`. **Verifica**: `tsc`, lint 0, Vitest 185 file / 4327 in `Europe/Rome`
-  (`mortgageSummary`, `patrimonioNarrative`, stamp degli interessi nel job server e nel piano); Playwright
-  `e2e/cashflow.mortgage.spec.ts` 6 test (+2: la tessera legge 600 € di interessi e 412 € di capitale; la tabella con
-  due anni e le didascalie), più le spec Commissioni, Conti e Patrimonio verdi; a 390 e 1440 nessuno sforamento né di
-  `main` né dentro la tessera. Falsificati e visti rossi: lo stamp lato server (Vitest), lo stamp lato client (E2E su
-  Firestore), la soglia della tabella. Un atteso sbagliato nel test («124 rate») era mio: il conto a mano dà 122,998 → 123.
+- `tsc` clean; **190 files / 4481 tests** green in `Europe/Rome` + **39 Playwright spec files** (144 tests, incl. 6 auth setups; last full run 2026-09-27 on the Windows laptop: 143 green, the one red the known `modal.origin`, green alone right after — doc/guide/e2e-emulatori.md). Run Vitest under `TZ=Europe/Rome` too — every date fixture sits at noon, which structurally hides timezone bugs.
+- Latest (2026-09-27): **Three external PRs integrated with changes (#400, #401, #403, by Ciocc128), the open
+  proposal #402 turned into a spec, and Divisione's pool netted of the common income.** Analisi › Flusso reads by 50/30/20 role (opt-in, the role lives on the category)
+  and below 640px draws a share bar and rows instead of the Sankey; Strumenti splits the class chip of a composite
+  instrument. What the review changed: every phone sentence and share moved into `analisiNarrative.ts` /
+  `spendingRoles.ts`, printed shares that add up to 100, signed income in the roles summary, a category write that
+  invalidates what Analisi reads, `useCssColorTokens` gated by `enabled`, the dead phone-Sankey path deleted, the inert
+  E2E assertions rewritten (overflow on `main`, an absence with its anchor). #402 is `doc/perf/PERF-00`, to implement
+  BEFORE PERF-01; nine PERF and six MOB specs amended to the code as it is; the owner's decisions in the two READMEs
+  § 9. **Verified** (final code): `tsc`, lint 0, Vitest 190 / 4481 in both timezones, Playwright 143 of 144 (the red
+  the known `modal.origin`, green alone right after), `npm run build` green before the Divisione change; six E2E
+  falsifications seen red. The owner's tour on the mirror (five points, all passed) found three defects no fixture
+  could show, each now a Vitest case: two same-named categories labelled alike under one role, the Sankey's shades
+  fading to black past the seventh node, «0%» printed over a role that holds money. Same session, owner's request:
+  **Divisione — income left «in comune» pays the common spending FIRST**, the shares divide the net, a surplus is
+  declared and never distributed, and the base is EVERY income attributed to a person, whatever its category (the
+  sentences say «entrate», `laborIncomeCategoryIds` is no longer read); the «In comune» tile shows «Entrate in comune
+  −X €» and «Da dividere Y €» under its hero, the verdict says it in the one sentence, the email in its reading
+  (doc/guide/cashflow-divisione.md; +13 Vitest, +1 E2E seen red). The two dossiers this work sits between are
+  `doc/perf/README.md` (fourteen specs, PERF-00 and PERF-01 first, 2026-09-26) and `doc/mobile/README.md` (nine specs,
+  implemented AFTER the PERF ones, 2026-09-27); the owner's decisions are in each README § 9.
+
 ## Architecture Snapshot
 - App Router; protected pages under `app/dashboard/*`.
 - `lib/services/*` (service layer) → pure `lib/utils/*` → `lib/server/*` (server-only). React Query for caching/invalidation.
@@ -38,13 +44,21 @@ Next.js app for Italian investors: net worth, assets, cashflow, dividends, perfo
 ## Key Features (Active)
 One line per area: the question it answers, then where it is described. *What the user sees* → README.md; *repo-wide rules* → AGENTS.md; *an area's rules, files and blind spots* → `doc/guide/<tema>.md`; *the aesthetic* → DESIGN.md.
 
+- **Periodic emails · budget email · PDF export**: rule-generated verdict first, AI comment second; every hex from `printTokens.ts`. doc/guide/email-pdf.md; DESIGN → The Out-Of-DOM Token Rule.
+- **Collegamenti broker**: sync in sola lettura da due broker, ognuno con la sua sessione e i suoi limiti (Impostazioni → Collegamenti). **Scalable Capital**: il server locale esegue solo `broker holdings/overview --json`, l'anteprima propone creazioni e prezzi ma mai quantità ledger (scostamenti come avvisi), la liquidità è il residuo dei totali. **Trade Republic**: sessione via QR approvata nell'app del broker, sopravvive al riavvio (`brokerSessions/{ownerId}`, solo Admin SDK) e si rinnova da sola; il portafoglio NON porta prezzi, quindi gli asset nascono con `autoUpdatePrice: true` e li quota Yahoo, la cassa è un saldo reale (`cash`) e non un residuo, e gli Sparpläne sono dichiarati e mai scritti. Sincronizzare è sempre e solo leggere: whitelist di argv per Scalable, whitelist di topic per Trade Republic. Metadati per broker in `brokerConnections/{ownerId}/brokers/{broker}`. doc/guide/collegamenti.md.
 - **Themes**: twelve theme blocks × nine chart slots through `useChartColors`, every block held to the distinctness floor by `__tests__/chartPaletteDistinctness.test.ts`. doc/guide/temi.md.
-- **Collegamenti broker**: sync in sola lettura da Scalable Capital (Impostazioni → Collegamenti) — il server locale esegue solo `broker holdings/overview --json`, l'anteprima propone creazioni e prezzi ma mai quantità ledger (scostamenti come avvisi), la liquidità è il residuo dei totali; persistono solo i metadati in `brokerConnections/{ownerId}`. doc/guide/collegamenti.md.
+- **Collegamenti broker**: sync in sola lettura da due broker, ognuno con la sua sessione e i suoi limiti (Impostazioni → Collegamenti). **Scalable Capital**: il server locale esegue solo `broker holdings/overview --json`, l'anteprima propone creazioni e prezzi ma mai quantità ledger (scostamenti come avvisi), la liquidità è il residuo dei totali. **Trade Republic**: sessione via QR approvata nell'app del broker, sopravvive al riavvio (`brokerSessions/{ownerId}`, solo Admin SDK) e si rinnova da sola; il portafoglio NON porta prezzi, quindi gli asset nascono con `autoUpdatePrice: true` e li quota Yahoo, la cassa è un saldo reale (`cash`) e non un residuo, e gli Sparpläne sono dichiarati e mai scritti. Sincronizzare è sempre e solo leggere: whitelist di argv per Scalable, whitelist di topic per Trade Republic. Metadati per broker in `brokerConnections/{ownerId}/brokers/{broker}`. doc/guide/collegamenti.md.
 
 ## Testing
 - Vitest: `npx vitest run <file>`, `npm test -- <file>`, `npx tsc --noEmit`. New tests in `__tests__/`; prefer pure functions over Firestore-coupled code.
 - **Phantom `tsc` errors** clustered in `e2e/` and `lib/utils/expenseImport.ts` after a branch switch: run `npm install` first (AGENTS → *Commands*).
 - **Dev/test without production data**: Firebase Emulator Suite (`npm run emulators` + `emulators:seed` + `dev:emulator`), requires a JDK. SETUP.md → Step 6. **The owner's real data for a tour**: `npm run mirror:seed -- <email>` (production read-only → emulators as `mirror@example.com`, nothing on disk) and `npm run mirror:remove` at the end — the account is the standard, the data is re-read every time (WORKFLOW.md § 3).
+- **Performance**: baseline (cold/warm per page, bundle per route), method and the specs in `doc/perf/README.md` —
+  PERF-00 (the new Esposizione, issue #402) first, then the fourteen; the benchmark lands in repo with PERF-01
+  (`npm run perf:bench` / `perf:budget`).
+- **Mobile composition**: the small-screen census (19 surfaces × 390/768/1024), the chosen direction, the nine specs and
+  the owner's decisions in `doc/mobile/README.md`; the census script in `doc/mobile/reference/` (MOB-01 ports it to
+  `npm run mobile:census` / `mobile:budget`). Implemented after `doc/perf/`.
 - **Browser (E2E)**: Playwright, `npm run test:e2e` with the emulators up (needs **Java ≥ 21**); app on :3100 with an isolated build dir. Accounts and fixtures: SETUP.md → Step 7; gotchas: doc/guide/e2e-emulatori.md § Browser-Driven E2E (Playwright).
 
 ## Data & Integrations

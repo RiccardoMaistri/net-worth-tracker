@@ -14,6 +14,7 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
 
 - **Cashflow services**: services `lib/services/{budgetService,costCenterService,cashBalanceReconciliation,expenseImportService}.ts`, `lib/utils/expenseImport.ts`; the settlement rule `lib/utils/cashSettlement.ts` (pure) + `lib/server/cashSettlement.ts` (the server half, run by `/api/portfolio/snapshot`), «Collega la serie» (to an account or to a mortgage) in `components/expenses/LinkSeriesDialog.tsx`
 - **Transfer fee** (2026-09-25): `lib/utils/transferFee.ts` (pure), `createTransferWithFee` / `saveTransferFee` / `getTransferFeeOf` / `deleteExpenseRows` in `lib/services/expenseService.ts`; tests `__tests__/transferFee.test.ts`, `e2e/cashflow.transfer-fee.spec.ts`
+- **50/30/20 roles**: pure `lib/utils/spendingRoles.ts` (resolution, summary, the printed shares `summarizeSpendingRoleShares`, classification counts, the badge colour), the bucket → `--role-*` token map `lib/constants/spendingRoleColors.ts`, the `deleteField()` in `updateCategory` (`lib/services/expenseCategoryService.ts`), the picker and the cache invalidation (`invalidateCategoryCaches`) in `components/expenses/CategoryManagementDialog.tsx`; tests `__tests__/{spendingRoles,expenseCategoryService}.test.ts`, `e2e/settings.roles.spec.ts`
 - **Mortgage instalment → property debt** (2026-09-25): `lib/utils/mortgageRepayment.ts` (pure), `lib/services/debtRepaymentService.ts` (client transactions), the server half inside `lib/server/cashSettlement.ts`; tests `__tests__/{mortgageRepayment,serverCashSettlement,updateAssetDebtFields}.test.ts`, `e2e/cashflow.mortgage.spec.ts`
 
 ## Expense Grouping: key by id, label by name (`lib/utils/expenseGrouping.ts`)
@@ -132,6 +133,41 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
 - **The type belongs inside the category id** (`cat:{tipo}:{chiave}`), because without that prefix an income and an
   expense category of the same name close a cycle through Budget and `computeNodeDepths` throws `"circular link"`,
   blanking the chart. **Ids are opaque**: `index` is the only sanctioned way to ask what a node is.
+
+## Ruoli 50/30/20: Necessità · Desideri · Risparmi (`lib/utils/spendingRoles.ts`)
+- **Opt-in** (`settings.spendingRolesEnabled`, default off, Impostazioni › Spese › «Ruoli 50/30/20», the five write
+  places) and meant for Analisi's Flusso only (doc/guide/cashflow-analisi.md): no 50/30/20 tile, no budget per role,
+  nothing in emails, PDF or the assistant. Off, the app is exactly what it was — the role colours are not even read
+  (`useCssColorTokens` disabled), and the Flusso renders once at mount. (The phone's Flusso is a bar and rows for
+  everyone since #401; the flag only adds the roles view to it.)
+- **The role lives on the category, never on the row**: `ExpenseCategory.spendingRole`, with an optional per-subcategory
+  override (`ExpenseSubCategory.spendingRole`, WiFi = need inside a want-classified Abbonamenti). Rows carry
+  `categoryId`, so a reclassification is retroactive on every period with no bulk update. **`resolveSpendingRole` is the
+  ONE resolution**: override → category → `null` («Da classificare»); a missing category and a non-spending one (income,
+  transfer — a role left behind by a type change) are `null` too.
+- **Risparmi is not a category total**: `summarizeSpendingRoles` gives savings = saving-classified rows + the period's
+  surplus. When spending exceeds income the surplus is 0 and the gap becomes `deficit`, drawn on the income side as
+  «Coperto dal patrimonio» — a Sankey has no negative width. Invariant, tested: `income + deficit = need + want +
+  unclassified + saving + surplus`. **Income is SIGNED** (a negative income row is a reversal, as in `summarizeFlow`
+  and Periodo, so «Delle entrate (X €)» is Periodo's X), spending a magnitude; the row's own type decides the side,
+  transfers skip. The roles Sankey takes its income nodes from the same summary, net per category (a category at ≤ 0
+  is left out: a link has no negative width), and balances Budget on the right side's money, `max(spending, income)`:
+  the sources carry `max(income, 0)` — a left-out category's reversal comes off the largest sources — and «Coperto dal
+  patrimonio» carries `spending − max(income, 0)`, never `summary.deficit`, which with income net negative would count
+  the reversals a second time (tested: a lone 600 reversal against 100 in, and a category holding only a reversal).
+- **The printed shares have ONE source, `summarizeSpendingRoleShares`**: the reading and the phone bar both read it, in
+  `SPENDING_ROLE_FLOW_ORDER` (necessità, desideri, da classificare, risparmi — the Sankey's order). Each share is
+  rounded to a whole percent and the drift goes to the bucket that is a remainder by definition — Risparmi with a
+  surplus, else «Da classificare», else the largest — so the printed list adds up to 100. The income edge of a
+  deficit is clamped to 0–100, and there is none when income is ≤ 0.
+- **A category write reaches Analisi at once**: Analisi reads the roles off `queryKeys.expenses.categories`, so every
+  category write invalidates it where it happens (`invalidateCategoryCaches`, doc/guide/impostazioni.md) — and
+  `expenses.all` when the rows were rewritten too.
+- **Clearing a role must delete the field**: «Da classificare» is the absence of `spendingRole`, and
+  `removeUndefinedFields` would drop the key and keep the old role. `updateCategory` writes `deleteField()` when the key
+  is present with `undefined`; the key absent means "not edited". **The dialog writes the role only when it showed it**
+  (setting on), so a category saved with the setting off keeps its classification; a category moved to income or
+  transfer sheds its roles.
 
 ## Per-page blind spots
 

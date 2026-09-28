@@ -109,6 +109,11 @@ the rules permitting the writes, real `Timestamp` values surviving `removeUndefi
   «1100 €», so four specs whose regex reads an ungrouped four-digit amount are red there and only there
   (`analisi.spec.ts`, `cashflow.centri.spec.ts`, `cashflow.split.spec.ts`, `pension.spec.ts` — green on the Mac on
   2026-09-24). Not a regression: read the received text before touching code. A new spec takes both (`1\.?012,00`).
+- **A `toContainText` on a tile's region also reads the sentence under its eyebrow** (2026-09-27):
+  `cashflow.split.spec.ts` asserted Tarsio's «100 €» on the whole region and was satisfied by «1100 € di spese
+  personali» in the reading, so the hero could have printed anything. Assert a figure on the hero
+  (`locator('p.font-mono').first()` with `toHaveText`) and keep `toContainText` for a sentence. A spec line that holds
+  a literal no-break space inside a regex defeats the Edit tool's matching: patch it with a node one-liner.
 - **A red spec you did not touch: read the fixture in the emulator before the code** (2026-09-20). `.emulator-data`
   persists across sessions, so the base seed DRIFTS: `seed-btp` had lost its `taxRate` a week earlier and the two
   Dividendi specs proposed the 26% fallback instead of the instrument's 12,5% — it read as a regression of the

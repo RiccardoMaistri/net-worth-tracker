@@ -64,7 +64,9 @@ interface CategoryFixture {
   id: string;
   name: string;
   type: string;
-  subCategories: Array<{ id: string; name: string }>;
+  /** The 50/30/20 role — inert while the account's spendingRolesEnabled is off (the default). */
+  spendingRole?: 'need' | 'want' | 'saving';
+  subCategories: Array<{ id: string; name: string; spendingRole?: 'need' | 'want' | 'saving' }>;
 }
 
 const CATEGORIES: CategoryFixture[] = [
@@ -72,11 +74,14 @@ const CATEGORIES: CategoryFixture[] = [
     id: 'e2e-cat-casa',
     name: 'Casa',
     type: 'fixed',
+    // A need, except Elettricità, overridden as a want: the roles spec reads Casa split in two.
+    spendingRole: 'need',
     subCategories: [
       { id: 'e2e-sub-cond', name: 'Condominio' },
-      { id: 'e2e-sub-elet', name: 'Elettricità' },
+      { id: 'e2e-sub-elet', name: 'Elettricità', spendingRole: 'want' },
     ],
   },
+  // No role on purpose: the roles spec's «Da classificare».
   { id: 'e2e-cat-alimentari', name: 'Alimentari', type: 'variable', subCategories: [] },
   // Only previous-year spending: the 'gone' row of the Confronto delta ranking.
   { id: 'e2e-cat-palestra', name: 'Palestra', type: 'variable', subCategories: [] },
@@ -136,6 +141,7 @@ async function seedCategories(): Promise<void> {
         userId: UID,
         name: category.name,
         type: category.type,
+        ...(category.spendingRole ? { spendingRole: category.spendingRole } : {}),
         subCategories: category.subCategories,
         createdAt: now,
         updatedAt: now,

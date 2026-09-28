@@ -355,6 +355,11 @@ export interface AssetAllocationSettings {
   // (which income is a salary) — it adds no configuration of its own. Also read SERVER-side by the
   // monthly email, so it lives in the settings mapper of dashboardOverviewService.ts too.
   expenseSplitEnabled?: boolean;
+  // When true, the category dialog offers the 50/30/20 role (Necessità / Desideri / Risparmi) and
+  // Analisi's Flusso can split spending by it. The roles themselves live on the category documents
+  // (ExpenseCategory.spendingRole), so turning this off hides them without erasing them. Read only
+  // client-side: not in the server settings mappers.
+  spendingRolesEnabled?: boolean;
   monthlyEmailEnabled?: boolean; // When true, a summary email is sent on the last day of each month
   quarterlyEmailEnabled?: boolean; // When true, a summary email is sent on the last day of each quarter (Mar/Jun/Sep/Dec)
   semiAnnualEmailEnabled?: boolean; // When true, a summary email is sent on the last day of each half-year (Jun 30 / Dec 31)

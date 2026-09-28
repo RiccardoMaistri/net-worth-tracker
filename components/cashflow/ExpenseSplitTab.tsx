@@ -39,8 +39,8 @@ import {
   buildSplitVerdict,
   describeCommonSpending,
   describeMemberBalance,
+  describeIncomeConsumed,
   describeMemberCalendar,
-  describeSalaryConsumed,
   describeSplitAside,
   describeSplitBasis,
 } from '@/lib/utils/expenseSplitNarrative';
@@ -60,19 +60,25 @@ const SKELETON_CELLS = [
 interface ExpenseSplitTabProps {
   allExpenses: Expense[];
   familyMembers: FamilyMember[];
-  laborIncomeCategoryIds: string[];
   loading: boolean;
   /** The queries behind `allExpenses`/`categories` failed: say so, never render zeros. */
   loadFailed: boolean;
 }
 
-export function ExpenseSplitTab({
-  allExpenses,
-  familyMembers,
-  laborIncomeCategoryIds,
-  loading,
-  loadFailed,
-}: ExpenseSplitTabProps) {
+/**
+ * One line of the pool's arithmetic under the hero: «Entrate in comune −1000 €», «Da dividere
+ * 1500 €». The same row Centri di Costo's Ciclo tile draws, so the two read as one primitive.
+ */
+function PoolRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-[9px]">
+      <dt className="text-[13px] text-muted-foreground">{label}</dt>
+      <dd className="m-0 font-mono text-[13px] tabular-nums text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+export function ExpenseSplitTab({ allExpenses, familyMembers, loading, loadFailed }: ExpenseSplitTabProps) {
   const [period, setPeriod] = useState<Period>(() => currentMonthPeriod());
   // ONE `now` per mount, like every other tab: a page whose clock moves under it would move its
   // own figures between two renders.
@@ -87,8 +93,8 @@ export function ExpenseSplitTab({
   const expenses = useMemo(() => filterExpensesByPeriod(allExpenses, period), [allExpenses, period]);
 
   const summary = useMemo(
-    () => summarizeExpenseSplit({ expenses, members: familyMembers, laborIncomeCategoryIds, now }),
-    [expenses, familyMembers, laborIncomeCategoryIds, now]
+    () => summarizeExpenseSplit({ expenses, members: familyMembers, now }),
+    [expenses, familyMembers, now]
   );
 
   const verdict = useMemo(() => buildSplitVerdict({ summary, period, now }), [summary, period, now]);
@@ -169,6 +175,19 @@ export function ExpenseSplitTab({
                 {cachedFormatCurrencyEUR(summary.common.total, true)}
               </p>
             )}
+            {/* What the income left «in comune» took off the pool, and what the shares actually
+                divide (owner's decision, 2026-09-27): the hero stays the spending, the arithmetic
+                sits under it. Absent when no income was left in comune — then the hero IS the
+                pool. The «−» is U+2212, the sign the KPI trio prints (DESIGN.md → The Comma Rule). */}
+            {summary.common.rowCount > 0 && summary.common.income > 0 && (
+              <dl className="mt-3 flex flex-col divide-y divide-border" aria-label="Entrate in comune e quota da dividere">
+                <PoolRow label="Entrate in comune" value={`−${cachedFormatCurrencyEUR(summary.common.income, true)}`} />
+                <PoolRow label="Da dividere" value={cachedFormatCurrencyEUR(summary.common.toSplit, true)} />
+                {summary.common.surplus > 0 && (
+                  <PoolRow label="Avanzano" value={cachedFormatCurrencyEUR(summary.common.surplus, true)} />
+                )}
+              </dl>
+            )}
             {commonRows.length > 0 && (
               <div className="mt-5">
                 {/* The scope belongs on screen, not only in the list's accessible name: the same
@@ -192,7 +211,7 @@ export function ExpenseSplitTab({
           </Tile>
         </div>
 
-        {/* Quota — the split, and the salaries it comes from */}
+        {/* Quota — the split, and the income it comes from */}
         <div className={cn(TILE_CELL_CLASS, 'tablet:col-span-2 desktop:col-span-7')}>
           <Tile
             eyebrow="Quota"
@@ -205,7 +224,7 @@ export function ExpenseSplitTab({
                   <div key={entry.member.id} className="min-w-0">
                     <p className={TILE_SUB_EYEBROW_CLASS}>{entry.member.name}</p>
                     <p className="mt-1 font-mono text-[22px] leading-none tracking-tight">
-                      {cachedFormatCurrencyEUR(entry.salary, true)}
+                      {cachedFormatCurrencyEUR(entry.income, true)}
                     </p>
                   </div>
                 ))}
@@ -218,7 +237,7 @@ export function ExpenseSplitTab({
             people stand beside each other and the 12 columns close (see `memberColumns`). */}
         <div className={cn('tablet:col-span-2 desktop:col-span-7', 'grid grid-cols-1 gap-3 tablet:grid-cols-2', memberColumns)}>
           {summary.members.map((balance) => {
-            const consumed = describeSalaryConsumed(balance);
+            const consumed = describeIncomeConsumed(balance);
             const calendar = describeMemberCalendar(balance);
             return (
               <div key={balance.member.id} className={TILE_CELL_CLASS}>

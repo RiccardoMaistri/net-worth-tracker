@@ -98,7 +98,6 @@ export default function CashflowPage() {
   // async flip from false, moves the tab bar under the reader's cursor.
   const [expenseSplitEnabled, setExpenseSplitEnabled] = useState<boolean | null>(null);
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([]);
-  const [laborIncomeCategoryIds, setLaborIncomeCategoryIds] = useState<string[]>([]);
 
   // React Query hooks for expenses and categories
   const { data: allExpenses = [], isLoading: expensesLoading, isError: expensesError } =
@@ -184,7 +183,6 @@ export default function CashflowPage() {
         setCostCentersEnabled(settings?.costCentersEnabled ?? false);
         setExpenseSplitEnabled(settings?.expenseSplitEnabled ?? false);
         setFamilyMembers(settings?.familyMembers ?? []);
-        setLaborIncomeCategoryIds(settings?.laborIncomeCategoryIds ?? []);
       } catch (error) {
         // Settings bootstrap is non-fatal for the page: keep safe defaults and log explicitly.
         console.error('Failed to load cashflow settings, using fallback defaults', {
@@ -474,7 +472,6 @@ export default function CashflowPage() {
               <ExpenseSplitTab
                 allExpenses={allExpenses}
                 familyMembers={familyMembers}
-                laborIncomeCategoryIds={laborIncomeCategoryIds}
                 loading={loading}
                 loadFailed={loadFailed}
               />
