@@ -51,14 +51,48 @@ export class ScalableCliError extends Error {
   }
 }
 
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+
+/** Ensure config.toml exists with file-based session backend for headless environments */
+export function ensureScalableConfigFile(): void {
+  const configDir = process.env.XDG_CONFIG_HOME
+    ? path.join(process.env.XDG_CONFIG_HOME, 'scalable-cli')
+    : path.join(os.homedir(), '.config', 'scalable-cli');
+  const configFile = path.join(configDir, 'config.toml');
+  try {
+    if (!fs.existsSync(configFile)) {
+      fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(configFile, '[auth]\nsession_backend = "file"\n', { mode: 0o600 });
+    }
+  } catch (error) {
+    console.warn('[scalableCli] Failed to ensure config.toml:', error);
+  }
+}
+
 /** Override the binary location with `SCALABLE_CLI_PATH`; defaults to `sc` on PATH. */
 export function scalableCliPath(): string {
   const configured = process.env.SCALABLE_CLI_PATH?.trim();
   return configured && configured !== '' ? configured : 'sc';
 }
 
-function isLoginFailure(stderr: string): boolean {
-  return /not logged in|login|unauthori|session|auth/i.test(stderr);
+function isLoginFailure(text: string): boolean {
+  return /not logged in|login|unauthori|session|auth|no_session|platform failure/i.test(text);
+}
+
+function extractErrorMessage(stdout: string, stderr: string): string {
+  if (stdout) {
+    try {
+      const doc = JSON.parse(stdout);
+      if (typeof doc === 'object' && doc !== null && typeof doc.error?.message === 'string') {
+        return doc.error.message;
+      }
+    } catch {
+      // not json
+    }
+  }
+  return (stderr || stdout).trim().slice(0, 300);
 }
 
 /**
@@ -79,7 +113,7 @@ function assertBrokerOk(stdout: string): void {
   ) {
     throw new ScalableCliError(
       401,
-      'Sessione Scalable scaduta o assente: esegui `sc login` nel terminale (consigliato: `sc login --local-read-only`) e riprova.'
+      'Sessione Scalable scaduta o assente: clicca su «Collega con codice» in Impostazioni › Collegamenti e riprova.'
     );
   }
 }
@@ -91,6 +125,7 @@ function assertBrokerOk(stdout: string): void {
  * gone (refresh with `sc login`), 504 on timeout, 502 on any other broker failure.
  */
 export async function runScalableReadCommand(command: ScalableReadCommand): Promise<string> {
+  ensureScalableConfigFile();
   const bin = scalableCliPath();
   try {
     const { stdout } = await execFileAsync(bin, READ_COMMAND_ARGS[command], {
@@ -110,14 +145,16 @@ export async function runScalableReadCommand(command: ScalableReadCommand): Prom
     if (err?.killed) {
       throw new ScalableCliError(504, 'La lettura da Scalable ha impiegato troppo tempo: riprova.');
     }
+    const stdout = typeof err?.stdout === 'string' ? err.stdout : '';
     const stderr = typeof err?.stderr === 'string' ? err.stderr : '';
-    if (isLoginFailure(stderr)) {
+    const combined = `${stdout}\n${stderr}`;
+    if (isLoginFailure(combined)) {
       throw new ScalableCliError(
         401,
-        'Sessione Scalable scaduta o assente: esegui `sc login` nel terminale (consigliato: `sc login --local-read-only`) e riprova.'
+        'Sessione Scalable scaduta o assente: clicca su «Collega con codice» in Impostazioni › Collegamenti e riprova.'
       );
     }
-    const detail = stderr.trim().slice(0, 300);
+    const detail = extractErrorMessage(stdout, stderr);
     throw new ScalableCliError(
       502,
       detail !== '' ? `Scalable ha risposto con un errore: ${detail}` : 'Lettura da Scalable non riuscita: riprova.'

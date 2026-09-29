@@ -26,7 +26,7 @@
 
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { SCALABLE_LOGIN_ARGS, scalableCliPath } from '@/lib/server/scalableCli';
+import { SCALABLE_LOGIN_ARGS, scalableCliPath, ensureScalableConfigFile } from '@/lib/server/scalableCli';
 
 export type ScalableLoginStatus = 'pending' | 'approved' | 'failed' | 'expired';
 
@@ -137,6 +137,7 @@ export function publicLoginView(
  */
 export function startScalableLogin(ownerId: string): ScalableLoginSession {
   assertLongLivedHost();
+  ensureScalableConfigFile();
   const now = Date.now();
   prune(now);
 
