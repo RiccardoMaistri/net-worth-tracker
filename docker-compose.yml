@@ -24,6 +24,8 @@ services:
         NEXT_PUBLIC_ASSISTANT_AI_ENABLED: ${NEXT_PUBLIC_ASSISTANT_AI_ENABLED:-true}
     ports:
       - "${PORT:-9091}:3000"
+    volumes:
+      - scalable_session:/home/nextjs/.config/scalable-cli
     # Server-side secrets — injected at runtime, not baked into the image.
     # Copy .env.local.example to .env.local and fill in your values.
     env_file:
@@ -37,4 +39,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+volumes:
+  scalable_session:
+
 

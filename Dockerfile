@@ -56,18 +56,47 @@ RUN npm run build
 
 # -----------------------------------------------------------------------
 
-FROM node:22-alpine AS runner
+FROM ubuntu:24.04 AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 # Disable Next.js telemetry in production containers
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Run as non-root for security — the node image already has a `node` user
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nextjs
+# Install runtime utilities & certificates
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates tar && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy static assets and standalone server in one layer
+# Copy Node.js 22 runtime from official node image
+COPY --from=node:22 /usr/local /usr/local
+
+# Install official Scalable Capital CLI (sc) for automated broker sync
+ARG SCALABLE_CLI_VERSION=v1.1.0
+RUN set -eux; \
+    ARCH=$(uname -m); \
+    case "$ARCH" in \
+      x86_64) SC_ARCH="x86_64" ;; \
+      aarch64|arm64) SC_ARCH="aarch64" ;; \
+      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/ScalableCapital/scalable-cli/releases/download/${SCALABLE_CLI_VERSION}/sc-${SCALABLE_CLI_VERSION}-linux-${SC_ARCH}-gnu.tar.gz" -o /tmp/sc.tar.gz; \
+    tar -xzf /tmp/sc.tar.gz -C /usr/local/bin --strip-components=1 "sc-${SCALABLE_CLI_VERSION}-linux-${SC_ARCH}-gnu/sc"; \
+    chmod 755 /usr/local/bin/sc; \
+    rm -f /tmp/sc.tar.gz
+
+# Run as non-root nextjs user
+RUN groupadd --system --gid 1001 nodejs && \
+    useradd --system --uid 1001 --gid 1001 -m nextjs
+
+# Configure sc CLI for file-backed sessions in headless server environments
+RUN mkdir -p /home/nextjs/.config/scalable-cli && \
+    printf '[auth]\nsession_backend = "file"\n' > /home/nextjs/.config/scalable-cli/config.toml && \
+    chown -R nextjs:nodejs /home/nextjs && \
+    chmod 700 /home/nextjs/.config/scalable-cli && \
+    chmod 600 /home/nextjs/.config/scalable-cli/config.toml
+
+# Copy static assets and standalone server
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
@@ -76,6 +105,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 RUN chmod -R a+rX /app
 
 USER nextjs
+ENV HOME=/home/nextjs
+ENV XDG_CONFIG_HOME=/home/nextjs/.config
 
 EXPOSE 3000
 ENV PORT=3000
