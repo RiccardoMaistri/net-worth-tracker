@@ -4,7 +4,7 @@ set -eu
 ROOT_DIR=$(CDPATH='' cd "$(dirname "$0")" && pwd)
 ENV_FILE=${ENV_FILE:-"$ROOT_DIR/.env.local"}
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
-export NEXT_PUBLIC_APP_URL='http://100.104.108.25:9090'
+
 
 usage() {
   cat <<'EOF'
@@ -66,6 +66,7 @@ validate_env() {
     NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET \
     NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID \
     NEXT_PUBLIC_FIREBASE_APP_ID \
+    NEXT_PUBLIC_APP_URL \
     CRON_SECRET
   do
     require_value "$key"
@@ -93,7 +94,8 @@ create_env() {
 deploy() {
   validate_env
   compose up -d --build --remove-orphans
-  printf 'Deployment ready at %s\n' "$NEXT_PUBLIC_APP_URL"
+  app_url="${NEXT_PUBLIC_APP_URL:-$(value_for NEXT_PUBLIC_APP_URL)}"
+  printf 'Deployment ready at %s\n' "${app_url:-http://localhost:3000}"
 }
 
 command=${1:-help}

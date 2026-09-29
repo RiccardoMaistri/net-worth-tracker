@@ -23,7 +23,7 @@ services:
         NEXT_PUBLIC_ENABLE_TEST_SNAPSHOTS: ${NEXT_PUBLIC_ENABLE_TEST_SNAPSHOTS:-false}
         NEXT_PUBLIC_ASSISTANT_AI_ENABLED: ${NEXT_PUBLIC_ASSISTANT_AI_ENABLED:-true}
     ports:
-      - "3000:3000"
+      - "${PORT:-9091}:3000"
     # Server-side secrets — injected at runtime, not baked into the image.
     # Copy .env.local.example to .env.local and fill in your values.
     env_file:
@@ -32,8 +32,9 @@ services:
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+

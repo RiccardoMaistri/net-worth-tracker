@@ -3,6 +3,9 @@ node_modules
 
 # Build output — rebuilt inside the container
 .next
+.next-*
+build
+out
 
 # Git history — not needed at runtime
 .git
@@ -20,19 +23,32 @@ node_modules
 .vscode
 .idea
 
-# Test artifacts
+# Test and e2e artifacts
 coverage
 __tests__
+e2e
+test-results
+playwright-report
 
 # Documentation
 *.md
 !README.md
 
-# Firebase emulator data
+# Firebase emulator data, keys and logs
 .firebase
-firebase-debug.log
-firestore-debug.log
+.emulator-data
+firebase-export-*
+firebase-admin-key.json
+*.log
+*.log*
+
+# Local tool directories
+.agents
+.antigravitycli
+skills-lock.json
+.vercel
 
 # TypeScript incremental build info
 *.tsbuildinfo
 next-env.d.ts
+
