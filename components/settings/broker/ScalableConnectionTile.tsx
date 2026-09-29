@@ -477,7 +477,7 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
               {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               {syncing ? 'Lettura…' : 'Sincronizza'}
             </Button>
-            {connection && !login && (
+            {!login && (
               <Button
                 variant="outline"
                 onClick={handleStartLogin}
@@ -485,7 +485,7 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
                 className="h-10"
               >
                 {linking && <Loader2 className="h-4 w-4 animate-spin" />}
-                {linking ? 'Preparo…' : 'Ricollega Scalable'}
+                {linking ? 'Preparo…' : connection ? 'Ricollega Scalable' : 'Collega Scalable'}
               </Button>
             )}
             {disabled && (
