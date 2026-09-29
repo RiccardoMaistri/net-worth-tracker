@@ -34,11 +34,7 @@ const READ_COMMAND_ARGS: Record<ScalableReadCommand, string[]> = {
  *
  * It is not a broker write: it writes a session into THIS machine's OS keyring and reads
  * nothing from the account. `--local-read-only` is not optional here — it is what keeps the
- * stored session from being able to place orders, so a stolen session can only READ.
- *
- * The `login.human_only` flag in `sc capabilities` is about the APPROVAL, not the terminal:
- * measured with stdout piped and stdin closed, the CLI prints the verification URL and the
- * user code, then waits — so a server can show that link. Fixed argv, no caller input, ever.
+ * stored session from being able to place orders, so a stored session can only READ.
  */
 export const SCALABLE_LOGIN_ARGS: readonly string[] = ['login', '--local-read-only'];
 
@@ -56,8 +52,10 @@ import path from 'node:path';
 import os from 'node:os';
 
 /** Ensure config.toml exists with file-based session backend for headless environments */
-export function ensureScalableConfigFile(): void {
-  const configDir = process.env.XDG_CONFIG_HOME
+export function ensureScalableConfigFile(configDirOverride?: string): void {
+  const configDir = configDirOverride
+    ? path.join(configDirOverride, 'scalable-cli')
+    : process.env.XDG_CONFIG_HOME
     ? path.join(process.env.XDG_CONFIG_HOME, 'scalable-cli')
     : path.join(os.homedir(), '.config', 'scalable-cli');
   const configFile = path.join(configDir, 'config.toml');
@@ -118,19 +116,26 @@ function assertBrokerOk(stdout: string): void {
   }
 }
 
+export interface RunScalableReadOptions {
+  env?: Record<string, string | undefined>;
+}
+
 /**
  * Run one whitelisted READ command and return its stdout.
- *
- * @throws ScalableCliError 503 when the binary is missing, 401 when the CLI session is
- * gone (refresh with `sc login`), 504 on timeout, 502 on any other broker failure.
+ * Accepts options to pass a profile-specific environment without mutating global process.env.
  */
-export async function runScalableReadCommand(command: ScalableReadCommand): Promise<string> {
-  ensureScalableConfigFile();
+export async function runScalableReadCommand(
+  command: ScalableReadCommand,
+  options?: RunScalableReadOptions
+): Promise<string> {
+  ensureScalableConfigFile(options?.env?.XDG_CONFIG_HOME);
   const bin = scalableCliPath();
+  const env = options?.env ? { ...process.env, ...options.env } : undefined;
   try {
     const { stdout } = await execFileAsync(bin, READ_COMMAND_ARGS[command], {
       timeout: 60_000,
       maxBuffer: 10 * 1024 * 1024,
+      ...(env ? { env } : {}),
     });
     assertBrokerOk(stdout);
     return stdout;
