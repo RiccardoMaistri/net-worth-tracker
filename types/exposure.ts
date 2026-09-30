@@ -38,18 +38,6 @@ export interface ExposureSector {
   }>;
 }
 
-// An ETF issuer/fund family and the user's total exposure to it.
-export interface ExposureIssuer {
-  family: string; // e.g. "iShares", "Vanguard"
-  exposureEur: number;
-  exposurePct: number;
-  assets: Array<{
-    name: string;
-    ticker: string;
-    valueEur: number;
-  }>;
-}
-
 // One area of world, and how much me have there.
 export interface ExposureRegion {
   key: GeographicArea; // area name, never country name
@@ -88,7 +76,6 @@ export interface ExposureDirectStock {
 export interface PortfolioExposureData {
   topHoldings: ExposureHolding[];  // top 15 companies by exposureEur
   sectors: ExposureSector[];       // all sectors, sorted by exposureEur desc
-  issuers: ExposureIssuer[];       // all ETF issuers, sorted by exposureEur desc
   regions?: ExposureRegion[];      // macro-regions, sorted by exposureEur desc
   /**
    * How many asset carry an area and so go into `regions`.

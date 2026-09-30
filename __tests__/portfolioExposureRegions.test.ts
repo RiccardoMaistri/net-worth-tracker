@@ -47,7 +47,6 @@ const QUOTES: Record<string, Record<string, unknown>> = {
       ],
       sectorWeightings: [],
     },
-    fundProfile: { family: 'iShares' },
   },
   WORLDFUND: {
     topHoldings: {
@@ -60,7 +59,6 @@ const QUOTES: Record<string, Record<string, unknown>> = {
       ],
       sectorWeightings: [],
     },
-    fundProfile: { family: 'Vanguard' },
   },
   BTP2035: { assetProfile: { sector: null, country: 'Italy' } },
   ENI: { assetProfile: { sector: 'Energy', country: 'Italy' } },
@@ -209,7 +207,7 @@ describe('computePortfolioExposure — the geographic cut', () => {
 
   it('says nothing about a fund Yahoo has no positions for', async () => {
     yahoo.answer = (ticker) => {
-      if (ticker === 'SP500') return { fundProfile: { family: 'Fondo Sconosciuto' } };
+      if (ticker === 'SP500') return { topHoldings: null };
       throw new Error(`no quote for ${ticker}`);
     };
     const exposure = await computePortfolioExposure([asset({ id: 'SP500', quantity: 100 })]);

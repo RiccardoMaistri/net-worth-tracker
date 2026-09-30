@@ -597,10 +597,6 @@ describe('summarizeExposure', () => {
       { key: 'technology', label: 'Tecnologia', exposureEur: 59535, exposurePct: 0.243, sources: [] },
       { key: 'financial', label: 'Finanza', exposureEur: 30000, exposurePct: 0.122, sources: [] },
     ],
-    issuers: [
-      { family: 'iShares', exposureEur: 100000, exposurePct: 0.408, assets: [] },
-      { family: 'Vanguard', exposureEur: 64000, exposurePct: 0.261, assets: [] },
-    ],
     regions: [
       {
         key: 'northAmerica',
@@ -632,7 +628,7 @@ describe('summarizeExposure', () => {
     ]);
     expect(view.remainder).toEqual({ label: 'Resto del portafoglio', amount: 245000 - 10045 - 9310, percentage: 92.1 });
     expect(summarizeExposure(exposure, 'sectors', 5).rows[0]).toMatchObject({ key: 'technology', label: 'Tecnologia' });
-    expect(summarizeExposure(exposure, 'issuers', 5).remainder?.label).toBe('Resto del portafoglio');
+    expect(summarizeExposure(exposure, 'regions', 5).remainder?.label).toBe('Resto del portafoglio');
   });
 
   it('has no residual when the rows cover the portfolio, and keeps drill-down sources', () => {
@@ -652,14 +648,13 @@ describe('summarizeExposure', () => {
     expect(summarizeExposure({ ...exposure, regions: undefined }, 'regions', 5).rows).toEqual([]);
   });
 
-  it('extracts the highlights the reading names, with the issuer share of the ETFs', () => {
+  it('extracts the highlights the reading names', () => {
     expect(summarizeExposureHighlights(exposure)).toEqual({
       topHolding: { name: 'Apple', pct: 4.1, sourceCount: 2 },
       topSector: { label: 'Tecnologia', pct: 24.3 },
-      topIssuer: { family: 'iShares', etfShare: 61 },
       topRegion: { label: 'Nord America', pct: 40.8 },
     });
-    expect(summarizeExposureHighlights({ ...exposure, topHoldings: [], sectors: [], issuers: [], regions: [] })).toEqual({ topHolding: null, topSector: null, topIssuer: null, topRegion: null });
+    expect(summarizeExposureHighlights({ ...exposure, topHoldings: [], sectors: [], regions: [] })).toEqual({ topHolding: null, topSector: null, topRegion: null });
   });
 });
 

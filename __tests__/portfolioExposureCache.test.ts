@@ -26,7 +26,6 @@ vi.mock('yahoo-finance2', () => ({
       bag.yahooCalls.push(ticker);
       return Promise.resolve({
         topHoldings: { holdings: [{ symbol: 'AAPL', holdingName: 'Apple', holdingPercent: 0.6 }], sectorWeightings: [] },
-        fundProfile: { family: 'iShares' },
         assetProfile: { country: 'United States' },
       });
     }

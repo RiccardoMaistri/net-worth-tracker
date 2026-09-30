@@ -20,7 +20,7 @@ async function fetchPortfolioExposure(
 }
 
 /**
- * Lazily fetches portfolio exposure breakdown (top holdings, sectors, ETF issuers).
+ * Lazily fetches portfolio exposure breakdown (top holdings, sectors, geographic areas).
  *
  * `enabled` gates the fetch; the Esposizione tile passes true on mount (the server's 24h cache
  * absorbs the Yahoo Finance cost), a caller that renders on demand can pass false until then.

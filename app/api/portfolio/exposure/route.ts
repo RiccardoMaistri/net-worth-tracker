@@ -15,8 +15,7 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
  *
  * Returns a breakdown of the user's portfolio exposure by:
  * - Top company holdings (cross-ETF aggregated, direct stocks at 100%)
- * - Sector weights (from Yahoo Finance topHoldings)
- * - ETF fund families/issuers
+ * - Sector weights, and geographic macro-regions (from Yahoo Finance topHoldings)
  *
  * Data is computed server-side from Yahoo Finance quoteSummary and cached
  * in Firestore `exposure-cache/{userId}` for 24h (Admin SDK write only).

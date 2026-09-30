@@ -2,8 +2,9 @@
  * Portfolio Exposure Service
  *
  * Computes cross-ETF and direct-stock exposure breakdown for a user's portfolio.
- * Uses Yahoo Finance quoteSummary with topHoldings (company + sector data)
- * and fundProfile (ETF issuer/family) modules.
+ * Uses Yahoo Finance quoteSummary with the topHoldings module — company, sector, and, through each
+ * position's country, the geographic area. One module, three cuts: the fundProfile module that fed
+ * the removed «Emittenti» view went with it.
  *
  * The geographic cut is a LOOK-THROUGH on the same payload: a fund's macro-region comes from the
  * countries of its top holdings, never from its ISIN prefix (which is its domicile — an Irish
@@ -20,7 +21,6 @@ import {
   ExposureDirectStock,
   ExposureHolding,
   ExposureSector,
-  ExposureIssuer,
   ExposureRegion,
   PortfolioExposureData,
 } from '@/types/exposure';
@@ -119,7 +119,7 @@ export function buildExposureCacheKey(assets: Asset[]): string {
  * Compute portfolio exposure breakdown from Yahoo Finance topHoldings data.
  *
  * @param assets - All user assets fetched via Admin SDK
- * @returns Aggregated exposure by company, sector, and ETF issuer
+ * @returns Aggregated exposure by company, sector, and geographic macro-region
  */
 export async function computePortfolioExposure(
   assets: Asset[]
@@ -136,7 +136,7 @@ export async function computePortfolioExposure(
     0
   );
 
-  // Only ETFs and direct stocks are meaningful for company/sector/issuer analysis
+  // Only ETFs and direct stocks are meaningful for company/sector/area analysis
   const etfAssets = activeAssets.filter((a) => a.type === 'etf');
   const stockAssets = activeAssets.filter(
     (a) => a.type === 'stock' && a.assetClass === 'equity'
@@ -150,7 +150,6 @@ export async function computePortfolioExposure(
       holdings: Array<{ symbol: string; holdingName: string; holdingPercent: number }>;
       sectorWeightings: Array<Record<string, number>>;
     } | null;
-    fundFamily: string | null;
   };
 
   type StockResult = {
@@ -165,10 +164,9 @@ export async function computePortfolioExposure(
       etfAssets.map(async (asset): Promise<YFResult> => {
         try {
           const summary = await yahooFinance.quoteSummary(asset.ticker, {
-            modules: ['topHoldings', 'fundProfile'],
+            modules: ['topHoldings'],
           });
           const holdings = summary.topHoldings ?? null;
-          const family = (summary.fundProfile as { family?: string | null } | null)?.family ?? null;
           return {
             asset,
             topHoldings: holdings
@@ -181,10 +179,9 @@ export async function computePortfolioExposure(
                   sectorWeightings: (holdings.sectorWeightings ?? []) as Array<Record<string, number>>,
                 }
               : null,
-            fundFamily: family,
           };
         } catch {
-          return { asset, topHoldings: null, fundFamily: null };
+          return { asset, topHoldings: null };
         }
       })
     ),
@@ -380,37 +377,6 @@ export async function computePortfolioExposure(
     }))
     .sort((a, b) => b.exposureEur - a.exposureEur);
 
-  // --- Aggregate ETF issuers ---
-  const issuerMap = new Map<
-    string,
-    { exposureEur: number; assets: ExposureIssuer['assets'] }
-  >();
-
-  for (const { asset, fundFamily } of etfData) {
-    const assetValue = assetValues.get(asset.id) ?? 0;
-    // «Emittente non riconosciuto», not «Altro»: the tile already closes its list with «Resto del
-    // portafoglio», and two rows both called some flavour of "other" — one a ranked issuer, one
-    // the residual — read as the same bucket counted twice (2026-09-21).
-    const family = fundFamily ?? 'Emittente non riconosciuto';
-    const existing = issuerMap.get(family);
-    const entry = { name: asset.name, ticker: asset.ticker, valueEur: assetValue };
-    if (existing) {
-      existing.exposureEur += assetValue;
-      existing.assets.push(entry);
-    } else {
-      issuerMap.set(family, { exposureEur: assetValue, assets: [entry] });
-    }
-  }
-
-  const issuers: ExposureIssuer[] = Array.from(issuerMap.entries())
-    .map(([family, { exposureEur, assets }]) => ({
-      family,
-      exposureEur,
-      exposurePct: totalPortfolioValue > 0 ? exposureEur / totalPortfolioValue : 0,
-      assets,
-    }))
-    .sort((a, b) => b.exposureEur - a.exposureEur);
-
   // --- Me gather all area together ---
   // Only thing that HAVE a place go in the list. Strongest word win:
   //   1. what USER say on asset. They know fund better than Yahoo can look inside.
@@ -521,7 +487,6 @@ export async function computePortfolioExposure(
   return {
     topHoldings,
     sectors,
-    issuers,
     regions,
     regionAssets: classifiedAssetIds.size,
     etfHoldings,

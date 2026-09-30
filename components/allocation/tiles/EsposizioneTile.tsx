@@ -2,7 +2,7 @@
 
 /**
  * ESPOSIZIONE — «a cosa sono esposto davvero, attraverso gli ETF?»: the six heaviest holdings,
- * sectors or issuers of the look-through as ranked rows closed by the residual of the portfolio,
+ * sectors or geographic areas of the look-through as ranked rows closed by the residual of the portfolio,
  * one view at a time (the toggle as the aside), and — when a row is opened — the instruments that
  * carry that exposure, as a flat block under the list.
  *
@@ -16,7 +16,9 @@
  *
  * Three tabs became one list with a view switch because the question is one — what am I really
  * exposed to — and the three cuts are three answers to it, not three tiles (the
- * One-Tile-One-Question Rule). The drill-down is a single block under the list rather than a
+ * One-Tile-One-Question Rule). The fourth cut, the ETF issuers, was removed on 2026-09-30: it
+ * answered «da chi compro», which is not an exposure, and it cost a `fundProfile` module on every
+ * fund to say. The drill-down is a single block under the list rather than a
  * panel inside each row: one row was ever open at a time in the old card too, and keeping the
  * sources out of the rows leaves the ranked columns aligned. No sign colour anywhere: an
  * exposure is a share of the portfolio, neither a gain nor a loss.
@@ -54,7 +56,6 @@ const VIEW_OPTIONS: ReadonlyArray<{ value: ExposureViewKey; label: string }> = [
   { value: 'holdings', label: 'Titoli' },
   { value: 'sectors', label: 'Settori' },
   { value: 'regions', label: 'Aree geo.' },
-  { value: 'issuers', label: 'Emittenti' },
 ];
 
 /** Accessible name of the list, per view. */
@@ -62,7 +63,6 @@ const LIST_LABELS: Record<ExposureViewKey, string> = {
   holdings: 'Titoli più pesanti',
   sectors: 'Settori',
   regions: 'Aree geografiche',
-  issuers: 'Emittenti degli ETF',
 };
 
 /**
@@ -146,7 +146,7 @@ export function EsposizioneTile({ userId, className }: EsposizioneTileProps) {
   const isLoading = !exposure && !isError;
   const isEmpty = !!exposure && exposure.analyzedAssets === 0;
 
-  // The reading follows the VIEW: opening on the heaviest holding while the list ranks issuers
+  // The reading follows the VIEW: opening on the heaviest holding while the list ranks sectors
   // answered a question nobody asked — the only reading on the page that ignored its own state.
   const reading = useMemo(() => (exposure ? describeExposure(summarizeExposureHighlights(exposure), view) : null), [exposure, view]);
   const exposureView = useMemo(() => (exposure ? summarizeExposure(exposure, view, VISIBLE_ROWS) : null), [exposure, view]);

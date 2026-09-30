@@ -63,7 +63,7 @@ test('una lista di controlli dello stesso tipo è UNO stop di Tab, non N', async
   // gruppi `AsideToggle`: dentro ciascuno si entra una volta sola e ci si muove con le frecce.
   const bandStops = walk.filter((stop) => /±2%|±5%|5\/25|Personalizza/.test(stop));
   const planStops = walk.filter((stop) => /Ribilancia|Versa|Preleva/.test(stop));
-  const viewStops = walk.filter((stop) => /Titoli|Settori|Emittenti/.test(stop));
+  const viewStops = walk.filter((stop) => /Titoli|Settori|Aree geo/.test(stop));
   expect(bandStops, 'la banda deve essere uno stop solo').toHaveLength(1);
   expect(planStops, 'i modi del Piano devono essere uno stop solo').toHaveLength(1);
   expect(viewStops, "le viste dell'Esposizione devono essere uno stop solo").toHaveLength(1);
