@@ -34,7 +34,11 @@ const READ_COMMAND_ARGS: Record<ScalableReadCommand, string[]> = {
  *
  * It is not a broker write: it writes a session into THIS machine's OS keyring and reads
  * nothing from the account. `--local-read-only` is not optional here — it is what keeps the
- * stored session from being able to place orders, so a stored session can only READ.
+ * stored session from being able to place orders, so a stolen session can only READ.
+ *
+ * The `login.human_only` flag in `sc capabilities` is about the APPROVAL, not the terminal:
+ * measured with stdout piped and stdin closed, the CLI prints the verification URL and the
+ * user code, then waits — so a server can show that link. Fixed argv, no caller input, ever.
  */
 export const SCALABLE_LOGIN_ARGS: readonly string[] = ['login', '--local-read-only'];
 
@@ -50,6 +54,26 @@ export class ScalableCliError extends Error {
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+
+/**
+ * The XDG root `sc` reads its config from. A long-lived host sets `XDG_CONFIG_HOME` to the
+ * persisted session volume; anywhere else (local runs, tests) it falls back to the OS default.
+ */
+export function scalableXdgRoot(): string {
+  return process.env.XDG_CONFIG_HOME
+    ? process.env.XDG_CONFIG_HOME
+    : path.join(os.homedir(), '.config', 'scalable-cli');
+}
+
+/**
+ * One XDG home per profile — the multi-user answer. `sc` resolves its config, session file,
+ * DPoP key and refresh token under this directory, so each email gets a session of its own
+ * instead of sharing the machine keyring. The profile id becomes a path segment, so only
+ * the `[A-Za-z0-9_-]` ids `parseScalableProfiles` produces ever reach here.
+ */
+export function scalableProfileXdgHome(profile: string): string {
+  return path.join(scalableXdgRoot(), 'profiles', profile);
+}
 
 /** Ensure config.toml exists with file-based session backend for headless environments */
 export function ensureScalableConfigFile(configDirOverride?: string): void {

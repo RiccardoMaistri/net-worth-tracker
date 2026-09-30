@@ -1,3 +1,19 @@
+/**
+ * Start a Scalable device-flow login — POST /api/broker/scalable/login/start.
+ *
+ * Launches `sc login --local-read-only` on this machine under the CALLER's broker profile
+ * and answers with the verification URL and the user code for the frontend to show. The
+ * user approves in their own browser, with their own MFA; nothing about that ever crosses
+ * this route.
+ *
+ * Body: { ownerId: string }
+ * Answer: { id, status, verificationUri?, userCode?, error? }
+ *
+ * Owner-scoped like every broker route, plus the `SCALABLE_PROFILES` email check. Refuses
+ * on serverless hosts (the child could not survive to the approval) — see
+ * `assertLongLivedHost`.
+ */
+
 export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';

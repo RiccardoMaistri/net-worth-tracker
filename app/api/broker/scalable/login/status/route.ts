@@ -1,3 +1,17 @@
+/**
+ * Poll a Scalable device-flow login — GET /api/broker/scalable/login/status?sessionId=…&ownerId=…
+ *
+ * The frontend polls this while the user approves in their browser. It reports the state and
+ * nothing else: no timestamps, and a session belonging to another profile is a 404, not a
+ * status — otherwise any authorized caller could watch someone else's login.
+ *
+ * Query: sessionId (required), ownerId (required, owner-scoped like every broker route)
+ * Answer: { id, status, verificationUri?, userCode?, error? }
+ *
+ * A restart of the server forgets the session, which answers 404: the UI reads that as
+ * «riavvia il collegamento», not as a failure.
+ */
+
 export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';

@@ -1,11 +1,24 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
+/**
+ * Server side of the Scalable read-only bridge — NEVER imported by client code.
+ *
+ * Each authorized Google email gets its own broker PROFILE, and each profile its own
+ * `XDG_CONFIG_HOME` (`scalableProfileXdgHome` in `scalableCli.ts`): session file, DPoP key
+ * and refresh token live under that directory, so two emails on one host never share a
+ * broker session. Who is authorized is deployment config (`SCALABLE_PROFILES`), not source.
+ *
+ * Login sessions and the 60s read cache are per PROCESS and in memory: a restart forgets
+ * them (the client reads that as «riavvia il collegamento», not as a failure). The bridge
+ * needs a long-lived host — on serverless `assertLongLivedHost` refuses the click instead
+ * of starting a login that could never complete.
+ */
+
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   SCALABLE_LOGIN_ARGS,
+  ensureScalableConfigFile,
   scalableCliPath,
+  scalableProfileXdgHome,
   runScalableReadCommand,
   ScalableCliError,
   ScalableReadCommand,
@@ -14,7 +27,6 @@ import {
   parseScalableHoldingsJson,
   parseScalableOverviewJson,
   parseScalableOvernightJson,
-  ScalableParseError,
   type ScalableHoldingInput,
   type ScalableOverviewInput,
   type ScalableOvernightInput,
@@ -33,49 +45,58 @@ export interface ScalableProfileConfig {
 }
 
 /**
- * Whitelist of authorized Google users for Scalable Capital integration.
- * Emails must be stored in lowercase.
+ * Who may use the bridge, as `profilo:email,profilo:email` (server-only `SCALABLE_PROFILES`,
+ * no `NEXT_PUBLIC_` prefix — it must never reach the client bundle, like REGISTRATION_WHITELIST).
+ *
+ * The profile id becomes a directory name under the session volume, so only `[A-Za-z0-9_-]`
+ * survives parsing; anything else is dropped, never sanitized into something else.
  */
-export const SCALABLE_USERS: Record<string, ScalableProfileConfig> = {
-  'rykymai@gmail.com': { profile: 'riccardo', name: 'Riccardo' },
-  'michele.maistri@gmail.com': { profile: 'michele', name: 'Michele' },
-};
+export function parseScalableProfiles(raw: string | undefined): Record<string, ScalableProfileConfig> {
+  const map: Record<string, ScalableProfileConfig> = {};
+  for (const entry of (raw ?? '').split(',')) {
+    const [profile, email] = entry.split(':').map((part) => part.trim());
+    if (!profile || !email || !/^[A-Za-z0-9_-]+$/.test(profile)) continue;
+    map[email.toLowerCase()] = {
+      profile,
+      name: profile.charAt(0).toUpperCase() + profile.slice(1),
+    };
+  }
+  return map;
+}
 
 /**
- * Normalizes email and returns profile config if authorized, or null if unauthorized.
+ * Normalizes the caller's Google email and returns its broker profile, or null when the
+ * email is not authorized. The lookup runs per call (not cached) so a redeploy or a
+ * container restart picks up a changed `SCALABLE_PROFILES` with no code change.
  */
 export function getScalableProfileForEmail(email?: string | null): ScalableProfileConfig | null {
   if (!email) return null;
   const normalized = email.trim().toLowerCase();
-  return SCALABLE_USERS[normalized] ?? null;
+  return parseScalableProfiles(process.env.SCALABLE_PROFILES)[normalized] ?? null;
 }
 
 /**
- * Determines XDG_CONFIG_HOME for a given profile to ensure session isolation.
+ * Refuse where the login flow cannot work. A serverless platform reclaims the instance
+ * between requests: the child dies and the session write is lost, so the sync would report
+ * a session that never existed. Better to say so once, at the point of the click — the
+ * login route answers this as a 503 with the paste-JSON fallback as the remedy.
+ */
+export function assertLongLivedHost(): void {
+  const serverless =
+    !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME || !!process.env.NETLIFY;
+  if (serverless) {
+    throw new Error(
+      'Il collegamento diretto richiede un server sempre attivo (una VM): su questo hosting la sessione andrebbe persa a ogni richiesta. Usa «Anteprima dal testo» incollando l’output della CLI.'
+    );
+  }
+}
+
+/**
+ * The `XDG_CONFIG_HOME` a profile's CLI invocations run under — one directory per email.
+ * Kept as the named seam so tests can pin the `profiles/<profile>` shape in one place.
  */
 export function getProfileXdgConfigHome(profile: string): string {
-  const baseDir = process.env.XDG_CONFIG_HOME
-    ? process.env.XDG_CONFIG_HOME
-    : path.join(os.homedir(), '.config', 'scalable-cli');
-  return path.join(baseDir, 'profiles', profile);
-}
-
-/**
- * Ensures that config.toml exists in the profile's isolated configuration directory.
- */
-export function ensureProfileConfigFile(profile: string): string {
-  const profileXdg = getProfileXdgConfigHome(profile);
-  const configDir = path.join(profileXdg, 'scalable-cli');
-  const configFile = path.join(configDir, 'config.toml');
-  try {
-    if (!fs.existsSync(configFile)) {
-      fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(configFile, '[auth]\nsession_backend = "file"\n', { mode: 0o600 });
-    }
-  } catch (error) {
-    console.warn(`[scalableService] Failed to ensure config.toml for profile ${profile}:`, error);
-  }
-  return profileXdg;
+  return scalableProfileXdgHome(profile);
 }
 
 // ─── Cache Layer (In-memory per profile) ───────────────────────────────────
@@ -111,9 +132,18 @@ class ProfileCache {
       }
     }
   }
+
+  clearAll(): void {
+    this.store.clear();
+  }
 }
 
 const cache = new ProfileCache();
+
+/** Test seam: drops every cached reading, so suites observe the CLI and not each other. */
+export function clearScalableCache(): void {
+  cache.clearAll();
+}
 
 // ─── Login Sessions Management ──────────────────────────────────────────────
 
@@ -147,13 +177,13 @@ export function parseScalableLoginPrompt(output: string): { verificationUri: str
 
 export class ScalableService {
   /**
-   * Helper to execute a CLI read command for a specific user profile asynchronously
-   * without mutating global process.env.
+   * Run one whitelisted read command under the profile's own `XDG_CONFIG_HOME` — the child
+   * env is replaced for that invocation only, never `process.env` itself. The config file
+   * is ensured by `runScalableReadCommand`, so there is exactly one writer of it.
    */
   private static async runReadCommand(profile: string, command: ScalableReadCommand): Promise<string> {
-    const profileXdg = ensureProfileConfigFile(profile);
     return await runScalableReadCommand(command, {
-      env: { XDG_CONFIG_HOME: profileXdg },
+      env: { XDG_CONFIG_HOME: getProfileXdgConfigHome(profile) },
     });
   }
 
@@ -206,10 +236,13 @@ export class ScalableService {
   }
 
   /**
-   * Gets overnight deposit details for profile (cached).
+   * Gets overnight deposit details for profile. A successful read is cached for 60s like the
+   * other commands; a FAILED read is deliberately NOT cached and stays `null` — a failure is
+   * not a reading, and the client declares it («Deposito non vincolato non letto») instead of
+   * showing an emptied account. The next sync retries.
    */
   static async getOvernight(profile: string): Promise<ScalableOvernightInput | null> {
-    const cached = cache.get<ScalableOvernightInput | null>(profile, 'overnight');
+    const cached = cache.get<ScalableOvernightInput>(profile, 'overnight');
     if (cached !== null) return cached;
 
     try {
@@ -223,65 +256,13 @@ export class ScalableService {
   }
 
   /**
-   * Gets cash position for profile derived from overview.
-   */
-  static async getCash(profile: string): Promise<{ balance: number; currency: string }> {
-    const overview = await this.getPortfolioOverview(profile);
-    const balance = overview.valuation - overview.securitiesValuation - overview.cryptoValuation;
-    return { balance, currency: overview.currency };
-  }
-
-  /**
-   * Gets performance data for profile.
-   */
-  static async getPerformance(profile: string): Promise<{ totalValuation: number; currency: string }> {
-    const overview = await this.getPortfolioOverview(profile);
-    return {
-      totalValuation: overview.valuation,
-      currency: overview.currency,
-    };
-  }
-
-  /**
-   * Gets transactions (read-only placeholder/adapter for CLI capabilities).
-   */
-  static async getTransactions(_profile: string): Promise<unknown[]> {
-    return [];
-  }
-
-  /**
-   * Aggregates all portfolio data into a single read-only view.
-   */
-  static async getPortfolioData(profile: string) {
-    const [overview, holdingsRes, overnight] = await Promise.all([
-      this.getPortfolioOverview(profile),
-      this.getHoldings(profile),
-      this.getOvernight(profile),
-    ]);
-
-    const cash = {
-      balance: overview.valuation - overview.securitiesValuation - overview.cryptoValuation,
-      currency: overview.currency,
-    };
-
-    return {
-      overview,
-      cash,
-      holdings: holdingsRes.holdings,
-      skippedHoldings: holdingsRes.skipped,
-      overnight,
-      performance: {
-        totalValuation: overview.valuation,
-        currency: overview.currency,
-      },
-      transactions: [],
-    };
-  }
-
-  /**
-   * Starts a device-flow login for the profile.
+   * Start a device-flow login for the profile, or hand back the one already running for it
+   * (a second click must not orphan a child process, and the user keeps the code shown).
    */
   static startLogin(profile: string): ScalableServiceLoginSession {
+    assertLongLivedHost();
+    const profileXdg = getProfileXdgConfigHome(profile);
+    ensureScalableConfigFile(profileXdg);
     const now = Date.now();
     pruneLoginSessions(now);
 
@@ -289,8 +270,8 @@ export class ScalableService {
       if (session.profile === profile && session.status === 'pending') return session;
     }
 
-    const profileXdg = ensureProfileConfigFile(profile);
     const child = spawn(scalableCliPath(), [...SCALABLE_LOGIN_ARGS], {
+      // stdin ignored is what was measured to work: the CLI must not wait for a terminal.
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, XDG_CONFIG_HOME: profileXdg },
     });
@@ -331,8 +312,8 @@ export class ScalableService {
       session.status = 'failed';
       session.error =
         (error as NodeJS.ErrnoException).code === 'ENOENT'
-          ? 'Comando `sc` non trovato sul server.'
-          : 'Non è stato possibile avviare il collegamento.';
+          ? 'Comando `sc` non trovato su questa macchina: installa la CLI Scalable e riprova.'
+          : 'Non è stato possibile avviare il collegamento: riprova.';
     });
 
     child.on('close', (code) => {
@@ -343,7 +324,9 @@ export class ScalableService {
         cache.clear(profile);
       } else {
         session.status = 'failed';
-        session.error = 'Collegamento non riuscito o annullato.';
+        session.error = /not logged in|no_session|expired|denied|cancel/i.test(output)
+          ? 'Collegamento non completato: la richiesta è scaduta o è stata rifiutata.'
+          : 'Collegamento non riuscito: riprova.';
       }
     });
 
@@ -351,7 +334,8 @@ export class ScalableService {
   }
 
   /**
-   * Retrieves login session status for profile.
+   * Read a session back. The profile is required: without it, any authorized caller could
+   * poll another email's login — a session of another profile answers 404 as if missing.
    */
   static getLoginSession(sessionId: string, profile: string): ScalableServiceLoginSession | null {
     pruneLoginSessions(Date.now());
@@ -359,16 +343,9 @@ export class ScalableService {
     if (!session || session.profile !== profile) return null;
     return session;
   }
+}
 
-  /**
-   * Clears cache and logs out session for profile.
-   */
-  static disconnect(profile: string): void {
-    cache.clear(profile);
-    for (const [id, session] of loginSessions) {
-      if (session.profile === profile) {
-        loginSessions.delete(id);
-      }
-    }
-  }
+/** Test seam: drops every login session. */
+export function resetScalableLogins(): void {
+  loginSessions.clear();
 }

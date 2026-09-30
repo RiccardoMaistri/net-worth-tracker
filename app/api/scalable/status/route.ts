@@ -1,3 +1,14 @@
+/**
+ * The CALLER's own broker status — GET /api/scalable/status.
+ *
+ * Answers whether the whitelisted email behind this request has a working `sc` session on
+ * this machine. It is deliberately NOT owner-scoped: it reports nothing about any account,
+ * only the caller's profile, so there is nothing to scope. The tile reads it on load; a 403
+ * (email not in `SCALABLE_PROFILES`) is silently ignored there.
+ *
+ * Answer: { status: 'CONNECTED' | 'CONNECTING' | 'NOT_CONNECTED' | 'AUTHENTICATION_REQUIRED' | 'ERROR', user }
+ */
+
 export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';

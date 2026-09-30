@@ -1,3 +1,19 @@
+/**
+ * Scalable read-only proxy — POST /api/broker/scalable/read.
+ *
+ * Runs one of the three whitelisted `sc` read commands under the CALLER's broker profile
+ * (`ScalableService`: `XDG_CONFIG_HOME` per whitelisted email) and returns the parsed
+ * payload (positions or totals). Owner-scoped: the caller must own the account or hold a
+ * grant over it, AND the caller's Google email must be in `SCALABLE_PROFILES`. No
+ * credentials cross this route — the CLI session lives in the profile's directory on this
+ * machine, and no request field ever reaches a command line.
+ *
+ * Body: { ownerId: string, command: 'holdings' | 'overview' | 'overnight' }
+ *
+ * Each command answers with its own parsed payload under its own key (`{ holdings, skipped }`,
+ * `{ overview }`, `{ overnight }`); the client composes the plan from the three.
+ */
+
 export const runtime = 'nodejs';
 
 import { NextRequest, NextResponse } from 'next/server';

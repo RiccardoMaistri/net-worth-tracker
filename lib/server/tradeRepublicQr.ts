@@ -17,7 +17,7 @@
  * but its only login is phone+PIN, so the handshake is done here with plain `fetch` and the
  * resulting cookies are handed over in the SDK's own serialized form.
  *
- * WHY A SERVERLESS PLATFORM REFUSES, same as `scalableLogin.assertLongLivedHost`: the challenge
+ * WHY A SERVERLESS PLATFORM REFUSES, same as `scalableService.assertLongLivedHost`: the challenge
  * is polled in-process between "start" and "approval", so a reclaimed instance loses it. A
  * long-lived host (the NAS) is the supported deployment.
  *
@@ -205,7 +205,7 @@ function asRecord(value: unknown): Record<string, unknown> {
  *
  * Per OWNER, unlike Scalable: each entry holds its own cookie jar, so two owners of one host get
  * two Trade Republic sessions and neither can read the other's. A restart forgets them all and the
- * UI restarts the flow — the same posture as `scalableLogin`, with one real difference: a Trade
+ * UI restarts the flow — the same posture as the Scalable device flow (`ScalableService`), with one real difference: a Trade
  * Republic session is NOT lost on restart, because it is persisted (see `tradeRepublicClient.ts`).
  * It is only the in-flight APPROVAL that lives here.
  */

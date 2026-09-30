@@ -1,5 +1,22 @@
 /**
- * The Scalable Capital half of «Collegamenti» — read-only sync through the `sc` CLI backend service.
+ * The Scalable Capital half of «Collegamenti» — read-only sync through the `sc` CLI on the server.
+ *
+ * One provider, one component: the sibling `TradeRepublicConnectionTile` is the same shape for a
+ * broker reachable over HTTP, and the section that owns both is `BrokerConnectionsSection`. They
+ * were one file until the second provider arrived, and a single 700-line component with a
+ * provider switch inside it would have made every Scalable edit a merge hazard.
+ *
+ * Two ways in, one plan out. «Sincronizza» calls POST /api/broker/scalable/read (the server runs
+ * ONLY the three whitelisted read commands under the caller's own broker profile — one
+ * `XDG_CONFIG_HOME` per whitelisted email, so two people on one host never share a session).
+ * Otherwise — hosted run, missing binary — the same plan is built from pasted `--json` output.
+ * Either way the preview is explicit and saving writes through the standard asset services:
+ *   - new positions → createAsset (broker-fed: autoUpdatePrice false)
+ *   - price moves → updateAssetMetadata (currentPrice only)
+ *   - quantity mismatches on ledger types → drift warning, never a write
+ *   - cash residual → a cash account (create or quantity update; cash is not a ledger type)
+ *   - the overnight «Deposito non vincolato» → ITS OWN cash account, never merged into the
+ *     residual: a different balance at the broker, paying interest on its own schedule
  *
  * Only sync metadata is persisted (brokerConnections/{ownerId}): never tokens, never raw output.
  */
@@ -72,9 +89,23 @@ const SCALABLE_LOGIN_MESSAGE =
 
 const NEW_CASH_VALUE = '__new__';
 
+/**
+ * The two Scalable cash accounts are told apart by the ticker the sync WRITES, never by the
+ * name the user may have edited. The overnight deposit is a separate balance at the broker, so
+ * it gets its own account; matching both by the shared `exchange` would cross-wire them.
+ */
 function findScalableCash(assets: Asset[], ticker: string): Asset | undefined {
   return assets.find((a) => a.type === 'cash' && a.assetClass === 'cash' && a.ticker === ticker);
 }
+
+/** The /api/scalable/status enum, in the user's language: never show the raw English key. */
+const BACKEND_STATUS_LABEL: Record<string, string> = {
+  CONNECTED: 'collegato',
+  CONNECTING: 'collegamento in corso',
+  NOT_CONNECTED: 'non collegato',
+  AUTHENTICATION_REQUIRED: 'sessione scaduta: ricollega',
+  ERROR: 'stato non verificabile',
+};
 
 async function postReadCommand(
   ownerId: string,
@@ -95,6 +126,8 @@ async function postReadCommand(
       typeof data?.error === 'string' ? data.error : 'Lettura non riuscita: riprova.'
     );
   }
+  // A missing key is a CONTRACT break, not an empty reading: defaulting it to `[]`/`null` made a
+  // mismatched response read as «zero posizioni» and «nessuna liquidità» instead of failing.
   if (command === 'holdings' && !Array.isArray(data?.holdings)) {
     throw new Error('Lettura delle posizioni non riuscita: riprova.');
   }
@@ -136,6 +169,8 @@ async function readScalableLoginStatus(ownerId: string, sessionId: string): Prom
   const response = await authenticatedFetch(
     `/api/broker/scalable/login/status?sessionId=${encodeURIComponent(sessionId)}&ownerId=${encodeURIComponent(ownerId)}`
   );
+  // 404 means the server forgot the session (a restart): the UI restarts the flow rather than
+  // showing a failure, because the user's next action is identical either way.
   if (response.status === 404) return null;
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data?.status) {
@@ -170,8 +205,10 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
       const res = await authenticatedFetch('/api/scalable/status');
       if (res.ok) {
         const data = await res.json();
-        if (data?.status) {
-          setStatusText(`Stato account ${data.user || ''}: ${data.status}`);
+        if (typeof data?.status === 'string') {
+          setStatusText(
+            `Sessione ${data.user || 'Scalable'}: ${BACKEND_STATUS_LABEL[data.status] ?? data.status}`
+          );
         }
       }
     } catch {
@@ -226,6 +263,8 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
     setSyncing(true);
     setError(null);
     try {
+      // The overnight read carries its own rejection handler: a user with no overnight
+      // account (or a CLI that refuses it) still syncs their positions and broker cash.
       const [holdingsRes, overviewRes, overnightRes] = await Promise.all([
         postReadCommand(ownerId, 'holdings'),
         postReadCommand(ownerId, 'overview'),
@@ -241,6 +280,11 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
         ),
       ]);
       buildPlan(holdingsRes.holdings ?? [], overviewRes.overview ?? null, overnightRes.overnight, overnightRes.warning);
+      // No auto-import: `handleSave` closes over the `plan` of the render it was created in, so
+      // calling it right after `setPlan` read the PREVIOUS plan (null on a fresh load) and bailed
+      // on its own guard — the write never ran while the toast below claimed it had. The preview
+      // is the confirmation step («Salva nel patrimonio»), which is also what the tile's own
+      // docstring describes.
       toast.success('Anteprima pronta: controlla le righe e salva.');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Lettura non riuscita: riprova.';
@@ -361,6 +405,8 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
         }
       }
 
+      // The deposit is its OWN account: a different balance at the broker, paying interest on
+      // its own schedule. Its rate has no Asset field, so it is declared in the preview, not stored.
       let depositAssetId: string | undefined;
       let depositBalance: number | undefined;
       if (plan.deposit) {
@@ -406,6 +452,10 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
       );
     } catch (err) {
       console.error('[ScalableConnectionTile] save failed:', err);
+      // A partial save can have ALREADY created the cash/deposit accounts, so the in-memory
+      // `assets` (and the plan's «create new» targets) are stale: keeping them would make the
+      // retry create duplicates. Re-read and drop the preview — the next «Sincronizza» resolves
+      // the targets again, this time against what actually exists.
       await loadAll();
       setPlan(null);
       toast.error('Salvataggio non riuscito: riprova con Sincronizza.');

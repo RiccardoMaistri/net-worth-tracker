@@ -8,7 +8,10 @@
  * one command, one parsed payload, under its own key.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { NextRequest } from 'next/server';
 
 const mocks = vi.hoisted(() => ({
@@ -23,19 +26,24 @@ vi.mock('@/lib/server/apiAuth', () => ({
   assertCanAccessAccount: vi.fn(async () => undefined),
   getApiAuthErrorResponse: vi.fn(() => null),
 }));
-vi.mock('@/lib/server/scalableCli', () => ({
-  runScalableReadCommand: mocks.runScalableReadCommand,
-  scalableCliPath: () => 'sc',
-  SCALABLE_LOGIN_ARGS: ['login', '--local-read-only'],
-  ensureScalableConfigFile: vi.fn(),
-  ScalableCliError: class ScalableCliError extends Error {
-    status: number;
-    constructor(status: number, message: string) {
-      super(message);
-      this.status = status;
-    }
-  },
-}));
+// Only the `sc` execution itself is stubbed: path resolution and the config-file
+// ensure run for real (under a tmp XDG set per test), so the service under test keeps
+// its real profile → directory wiring and only the broker I/O is fake.
+vi.mock('@/lib/server/scalableCli', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/server/scalableCli')>();
+  return {
+    ...actual,
+    runScalableReadCommand: mocks.runScalableReadCommand,
+    scalableCliPath: () => 'sc',
+    ScalableCliError: class ScalableCliError extends Error {
+      status: number;
+      constructor(status: number, message: string) {
+        super(message);
+        this.status = status;
+      }
+    },
+  };
+});
 
 const HOLDINGS_STDOUT = JSON.stringify({
   ok: true,
@@ -67,8 +75,25 @@ async function post(command: string): Promise<{ status: number; body: Record<str
 }
 
 describe('POST /api/broker/scalable/read', () => {
-  beforeEach(() => {
+  const savedEnv = { ...process.env };
+  let fakeXdg: string;
+
+  beforeEach(async () => {
     mocks.runScalableReadCommand.mockReset();
+    // The service caches readings per profile for 60s: drop them so each case
+    // observes the mocked CLI, not the previous case.
+    const { clearScalableCache } = await import('@/lib/server/scalableService');
+    clearScalableCache();
+    // The route ensures the profile config under XDG: keep that write in a tmpdir,
+    // never in the developer's real home.
+    fakeXdg = mkdtempSync(join(tmpdir(), 'sc-read-xdg-'));
+    process.env.XDG_CONFIG_HOME = fakeXdg;
+    process.env.SCALABLE_PROFILES = 'riccardo:rykymai@gmail.com';
+  });
+
+  afterEach(() => {
+    process.env = { ...savedEnv };
+    rmSync(fakeXdg, { recursive: true, force: true });
   });
 
   it('answers `holdings` with the parsed rows under `holdings`, not a plan', async () => {
@@ -99,6 +124,9 @@ describe('POST /api/broker/scalable/read', () => {
   it('runs only the whitelisted command for the requested verb', async () => {
     mocks.runScalableReadCommand.mockResolvedValue(OVERNIGHT_STDOUT);
     await post('overnight');
+    // The first argument is the whole command surface: no caller input may reach the CLI.
+    expect(mocks.runScalableReadCommand).toHaveBeenCalledTimes(1);
+    expect(mocks.runScalableReadCommand.mock.calls[0][0]).toBe('overnight');
   });
 
   it('rejects an unknown command with 400', async () => {
