@@ -58,12 +58,25 @@
     transazione, e nessun campo di `Asset` lo contiene: sono **dichiarati** nell'anteprima (con
     l'asset che comprano, agganciato per ISIN) e **mai scritti**. Stessa postura del tasso del
     deposito Scalable.
-- **Il prezzo lo riempie la route, dal path Yahoo di sempre** (`getMultipleQuotes` per ISIN, in
-  `withQuotes`). Serve perché `AssetFormData.currentPrice` è obbligatorio: senza, un portafoglio
-  sincronizzato nasce a 0 e il patrimonio dell'utente cala di tutto ciò che possiede fino al
-  prossimo refresh. Il fallimento **non è fatale e non è silenzioso**: una quotazione mancante
-  lascia `price` ASSENTE e il plan ne fa un avviso che nomina la posizione. Uno `0` lì sarebbe una
-  lettura che il broker non ha mai dato.
+- **Il prezzo lo riempie la route, dal path Yahoo di sempre** (`getMultipleQuotes` in
+  `withQuotes`, quotando il simbolo Yahoo risolto, MAI l'ISIN grezzo). Yahoo non quota un ISIN
+  nudo (misurato su ISIN azionario ed ETF: nessuna quotazione) — quotare `holding.isin` non
+  prezzava nulla e ogni posizione entrava a 0 con G/P −100% per sempre, perché anche il
+  refresh quota `asset.ticker` e anche lì trovava l'ISIN. Serve perché
+  `AssetFormData.currentPrice` è obbligatorio: senza, un portafoglio sincronizzato nasce a 0
+  e il patrimonio dell'utente cala di tutto ciò che possiede. Il fallimento **non è fatale e
+  non è silenzioso**: una quotazione mancante lascia `price` ASSENTE e il plan ne fa un avviso
+  che nomina la posizione. Uno `0` lì sarebbe una lettura che il broker non ha mai dato.
+  - **Crypto: lo pseudo-ISIN `XF000…` porta il codice della moneta** (`XF000BTC0017` → la
+    posizione Bitcoin misurata su un conto reale, 2026-09-30). `resolveTrYahooTicker` ne deriva
+    `BTC-EUR`, che Yahoo quota: il ticker scritto è quello, l'`isin` resta l'id broker per il
+    match, e una re-sync ripara il ticker di un asset tracciato solo se è ancora il
+    pseudo-ISIN grezzo (mai uno corretto a mano).
+  - **Azioni/ETF: il simbolo Yahoo lo mette l'utente, nella riga dell'anteprima.** Indovinare
+    il suffisso exchange metterebbe un prezzo sbagliato su un asset reale — la regola della
+    sezione Scalable vale identica. L'avviso non promette più «si aggiornerà alla prossima
+    quotazione» (falso: non sarebbe mai arrivata) ma dice dove scrivere il simbolo. Le società
+    non quotate (SpaceX, Bending Spoons) restano a prezzo manuale per costruzione.
 - **Più saldi EUR sono PIÙ conti, mai una somma** (`parseTrCash` ritorna una LISTA). Il piano
   traccia il primo e **dichiara** gli altri per importo. La lezione Scalable (deposito ≠ liquidità)
   vale identica: due saldi presso un broker sono due conti, e sommarli li fonderebbe silenziosamente.

@@ -134,6 +134,38 @@ describe('POST /api/broker/traderepublic/read', () => {
     expect((body.positions as { price?: number }[])[0].price).toBe(130.2);
   });
 
+  it('quotes the resolved Yahoo symbol for crypto, not the pseudo-ISIN', async () => {
+    // Yahoo answers no price for `XF000BTC0017` but quotes `BTC-EUR`: quoting the raw id
+    // priced nothing and every synced coin entered at 0 with a G/P of −100%.
+    mocks.readTradeRepublic.mockResolvedValue({
+      categories: [
+        {
+          categoryType: 'crypto',
+          positions: [
+            {
+              isin: 'XF000BTC0017',
+              averageBuyIn: '71208,6497',
+              netSize: '0,051768',
+              virtualSize: '0,051768',
+              status: 'active',
+              instrumentType: 'CRYPTO',
+              name: 'Bitcoin',
+            },
+          ],
+        },
+      ],
+    });
+    mocks.getMultipleQuotes.mockResolvedValue(
+      new Map([['BTC-EUR', { ticker: 'BTC-EUR', price: 73340.13, currency: 'EUR' }]])
+    );
+    const { body } = await post('positions');
+    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith(['BTC-EUR']);
+    expect((body.positions as { price?: number; isin?: string }[])[0]).toMatchObject({
+      isin: 'XF000BTC0017',
+      price: 73340.13,
+    });
+  });
+
   it('leaves the price absent when the quote fails, instead of inventing a zero', async () => {
     // Absent is what the plan turns into a warning naming the position; a 0 here would be a
     // reading the broker never gave.

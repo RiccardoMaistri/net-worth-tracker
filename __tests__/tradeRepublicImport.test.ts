@@ -8,12 +8,14 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  applyTrTickerOverride,
   buildTrImportPlan,
   mapTrHoldingToAssetFormData,
   mapTrType,
   parseTrCash,
   parseTrHoldings,
   parseTrSavingsPlans,
+  resolveTrYahooTicker,
   TrParseError,
   TR_CASH_TICKER,
   type TrHoldingInput,
@@ -286,7 +288,7 @@ describe('buildTrImportPlan', () => {
 
   it('reports a ledger quantity mismatch as drift and leaves the quantity alone', () => {
     const plan = buildTrImportPlan([holding], [], [], [
-      { id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 10 },
+      { id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 10, ticker: 'IE00B3VTMJ91' },
     ]);
     expect(plan.holdings[0]).toMatchObject({ kind: 'drift-only', quantityDrift: 2.5 });
     expect(plan.warnings.join(' ')).toContain('non viene toccata');
@@ -294,7 +296,7 @@ describe('buildTrImportPlan', () => {
 
   it('reads an exact quantity as unchanged', () => {
     const plan = buildTrImportPlan([holding], [], [], [
-      { id: 'asset-1', name: 'World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 12.5 },
+      { id: 'asset-1', name: 'World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 12.5, ticker: 'IE00B3VTMJ91' },
     ]);
     expect(plan.holdings[0].kind).toBe('unchanged');
     expect(plan.warnings).toHaveLength(0);
@@ -332,7 +334,7 @@ describe('buildTrImportPlan', () => {
       [holding],
       [],
       parseTrSavingsPlans(SAVINGS_PLANS),
-      [{ id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 12.5 }]
+      [{ id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 12.5, ticker: 'IE00B3VTMJ91' }]
     );
     expect(plan.savingsPlans[0]).toMatchObject({
       trackedAssetId: 'asset-1',
@@ -353,5 +355,95 @@ describe('the cash account identity', () => {
   it('is the ticker the sync writes, not the editable name', () => {
     // A user may rename the account; matching by name would duplicate it on the next sync.
     expect(TR_CASH_TICKER).toBe('TR-EUR');
+  });
+});
+
+describe('crypto positions (pseudo-ISIN XF000…)', () => {
+  // The `isin` below is measured, not invented: it is what Trade Republic sent for the
+  // owner's Bitcoin on 2026-09-30 (`XF` = the user-assigned ISO block for exchange-issued
+  // identifiers, then the coin code, then digits). The envelope follows the documented
+  // position shape.
+  const BTC_POSITION = {
+    isin: 'XF000BTC0017',
+    averageBuyIn: '71208,6497',
+    netSize: '0,051768',
+    virtualSize: '0,051768',
+    status: 'active',
+    instrumentType: 'CRYPTO',
+    name: 'Bitcoin',
+  };
+  const BTC_PORTFOLIO = { categories: [{ categoryType: 'crypto', positions: [BTC_POSITION] }] };
+
+  it('keeps the XF000 row instead of skipping it as "no ISIN"', () => {
+    const { holdings, skipped } = parseTrHoldings(BTC_PORTFOLIO);
+    expect(skipped).toBe(0);
+    expect(holdings).toHaveLength(1);
+    expect(holdings[0]).toMatchObject({
+      isin: 'XF000BTC0017',
+      quantity: 0.051768,
+      averageCost: 71208.6497,
+    });
+  });
+
+  it('derives the Yahoo symbol BTC-EUR from the pseudo-ISIN', () => {
+    const { holdings } = parseTrHoldings(BTC_PORTFOLIO);
+    expect(resolveTrYahooTicker(holdings[0])).toBe('BTC-EUR');
+  });
+
+  it('writes the Yahoo symbol as ticker but keeps the broker id as isin', () => {
+    const { holdings } = parseTrHoldings(BTC_PORTFOLIO);
+    const formData = mapTrHoldingToAssetFormData({ ...holdings[0], price: 73340.13 });
+    expect(formData.ticker).toBe('BTC-EUR');
+    expect(formData.isin).toBe('XF000BTC0017');
+    expect(formData.currentPrice).toBe(73340.13);
+  });
+
+  it('returns null for a stock ISIN: no exchange suffix is ever guessed', () => {
+    const holding: TrHoldingInput = {
+      isin: 'US0378331005',
+      name: 'Apple',
+      rawType: 'stock',
+      rawCategory: '',
+      quantity: 3,
+      status: 'active',
+      currency: 'EUR',
+    };
+    expect(resolveTrYahooTicker(holding)).toBeNull();
+    expect(mapTrHoldingToAssetFormData(holding).ticker).toBe('US0378331005');
+  });
+
+  it('returns null for a malformed XF000 id rather than inventing a coin', () => {
+    const holding: TrHoldingInput = {
+      isin: 'XF000BTC',
+      name: 'Bitcoin',
+      rawType: 'CRYPTO',
+      rawCategory: '',
+      quantity: 0.05,
+      status: 'active',
+      currency: 'EUR',
+    };
+    expect(resolveTrYahooTicker(holding)).toBeNull();
+  });
+});
+
+describe('applyTrTickerOverride', () => {
+  const formData = mapTrHoldingToAssetFormData({
+    isin: 'IE00B3VTMJ91',
+    name: 'World',
+    rawType: 'etf',
+    rawCategory: '',
+    quantity: 12.5,
+    status: 'active',
+    currency: 'EUR',
+  });
+
+  it('applies a trimmed override', () => {
+    expect(applyTrTickerOverride(formData, '  VWCE.MI ').ticker).toBe('VWCE.MI');
+  });
+
+  it('keeps the planned ticker on a blank, missing or identical override', () => {
+    expect(applyTrTickerOverride(formData, undefined)).toBe(formData);
+    expect(applyTrTickerOverride(formData, '   ')).toBe(formData);
+    expect(applyTrTickerOverride(formData, 'IE00B3VTMJ91')).toBe(formData);
   });
 });

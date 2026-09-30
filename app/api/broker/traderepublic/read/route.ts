@@ -37,6 +37,7 @@ import {
   parseTrCash,
   parseTrHoldings,
   parseTrSavingsPlans,
+  resolveTrYahooTicker,
   TrParseError,
   type TrHoldingInput,
 } from '@/lib/utils/tradeRepublicImport';
@@ -47,7 +48,13 @@ const bodySchema = z.object({
 });
 
 /**
- * Fill each position's price from the ordinary Yahoo service, keyed by ISIN.
+ * Fill each position's price from the ordinary Yahoo service.
+ *
+ * Quoted is the Yahoo symbol (`resolveTrYahooTicker`), NOT the ISIN: Yahoo answers no price
+ * for a bare ISIN (measured), so quoting `holding.isin` priced nothing and every synced
+ * position entered at 0 with a G/P of −100%. Positions with no deterministic symbol (stocks,
+ * ETFs) still enter at 0 — but now the preview says so honestly and offers the ticker field
+ * to fix it, instead of promising a refresh that could never come.
  *
  * Trade Republic publishes NO quote with a position, and `AssetFormData.currentPrice` is required —
  * so without this a synced portfolio would be created at 0 and the user's net worth would drop by
@@ -56,13 +63,15 @@ const bodySchema = z.object({
  *
  * FAILURE IS NOT FATAL AND NOT SILENT: a quote that cannot be fetched leaves `price` absent, and
  * `buildTrImportPlan` turns that into a warning naming the position. A broker sync that fetched
- * positions must not be lost because one ticker is not on Yahoo (an offshore bond, a crypto).
+ * positions must not be lost because one ticker is not on Yahoo (an offshore bond, a private
+ * company, an unmapped coin).
  */
 async function withQuotes(holdings: TrHoldingInput[]): Promise<TrHoldingInput[]> {
   if (holdings.length === 0) return holdings;
-  const quotes = await getMultipleQuotes(holdings.map((holding) => holding.isin));
-  return holdings.map((holding) => {
-    const price = quotes.get(holding.isin)?.price;
+  const symbols = holdings.map((holding) => resolveTrYahooTicker(holding) ?? holding.isin);
+  const quotes = await getMultipleQuotes(symbols);
+  return holdings.map((holding, index) => {
+    const price = quotes.get(symbols[index])?.price;
     return price !== null && price !== undefined && price > 0 ? { ...holding, price } : holding;
   });
 }

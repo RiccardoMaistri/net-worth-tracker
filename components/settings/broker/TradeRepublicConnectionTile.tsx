@@ -6,9 +6,12 @@
  * publish, and each one is a divergence a reader of the Scalable tile would otherwise assume is
  * a bug (see `lib/utils/tradeRepublicImport.ts` for the long version):
  *
- *   - **No prices.** The portfolio payload carries no quote, so the sync creates positions with
- *     `autoUpdatePrice: true` and the price arrives from the ordinary Yahoo path. There is no
- *     price row in the preview and no price write on save.
+ *   - **No prices.** The portfolio payload carries no quote, and Yahoo cannot quote the
+ *     ISIN the ticker would hold — so a position without a price is created at 0, and the
+ *     preview offers a per-row Yahoo-symbol field to fix that before saving (crypto is
+ *     resolved automatically: `XF000BTC0017` → `BTC-EUR`). There is no price row in the
+ *     preview and no price write on save; a re-sync repairs the ticker of a tracked asset
+ *     only when it is still the raw pseudo-ISIN a past sync wrote, never a hand-fixed one.
  *   - **Cash is a real balance, not a residual**, and a second EUR balance is DECLARED rather than
  *     summed into the tracked account.
  *   - **Savings plans («Sparpläne») are a rule, not a fact**: they are listed, matched to the
@@ -32,6 +35,7 @@ import Image from 'next/image';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -46,7 +50,9 @@ import { authenticatedFetch } from '@/lib/utils/authFetch';
 import { formatCurrency, formatDate, formatNumberIt } from '@/lib/utils/formatters';
 import { queryKeys } from '@/lib/query/queryKeys';
 import {
+  applyTrTickerOverride,
   buildTrImportPlan,
+  resolveTrYahooTicker,
   TR_CASH_ACCOUNT_NAME,
   TR_CASH_TICKER,
   type TrCashInput,
@@ -59,7 +65,7 @@ import {
   saveBrokerConnection,
   type BrokerConnection,
 } from '@/lib/services/brokerConnectionService';
-import { createAsset, getAllAssets, updateAsset } from '@/lib/services/assetService';
+import { createAsset, getAllAssets, updateAsset, updateAssetMetadata } from '@/lib/services/assetService';
 import type { Asset } from '@/types/assets';
 
 interface TradeRepublicConnectionTileProps {
@@ -205,6 +211,13 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
   const [plan, setPlan] = useState<TrImportPlan | null>(null);
   const [cashTarget, setCashTarget] = useState<string>(NEW_CASH_VALUE);
   /**
+   * Per-row Yahoo-symbol corrections, keyed by holding ISIN. Yahoo cannot quote an ISIN, so a
+   * position without a broker price would otherwise be created with an unquotable ticker and
+   * sit at 0 forever. Reset with every plan: an override belongs to the preview that showed
+   * it, and a stale one would silently re-point the next sync's asset.
+   */
+  const [tickerOverrides, setTickerOverrides] = useState<Record<string, string>>({});
+  /**
    * A failed SAVINGS-PLAN read is declared, not swallowed: positions and cash still sync, and the
    * preview says the plans were left out. A read that silently returned nothing would read as
    * «you have no savings plans», which is a claim about the user's money.
@@ -253,6 +266,7 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
       savingsPlanWarningText: string | null
     ) => {
       setPlan(buildTrImportPlan(holdings, balances, savingsPlans, assets));
+      setTickerOverrides({});
       const existingCash = findTrCash(assets, TR_CASH_TICKER);
       setCashTarget(existingCash ? existingCash.id : NEW_CASH_VALUE);
       setSavingsPlanWarning(savingsPlanWarningText);
@@ -371,11 +385,28 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
     setSaving(true);
     try {
       let createdAssets = 0;
+      let repairedTickers = 0;
       for (const diff of plan.holdings) {
         // No price write: this broker publishes no quote, so there is nothing to compare or patch.
         if (diff.kind === 'new') {
-          await createAsset(ownerId, diff.formData);
+          await createAsset(ownerId, applyTrTickerOverride(diff.formData, tickerOverrides[diff.holding.isin]));
           createdAssets += 1;
+        } else if (diff.existingAssetId) {
+          // Self-healing for the deterministic crypto case only: a tracked asset whose ticker
+          // is still the raw pseudo-ISIN a past sync wrote (`XF000…`) gets the Yahoo symbol
+          // (`BTC-EUR`) plus the quote the route just read, so the position prices immediately
+          // instead of at the next refresh. Both are EUR by construction (the `-EUR` symbol,
+          // the EUR holding), so no currency can mismatch. A hand-fixed ticker (anything that
+          // is no longer the ISIN) is never touched — the user already knows better than the sync.
+          const resolved = resolveTrYahooTicker(diff.holding);
+          const trackedTicker = assets.find((asset) => asset.id === diff.existingAssetId)?.ticker;
+          if (resolved && trackedTicker === diff.holding.isin && trackedTicker !== resolved) {
+            await updateAssetMetadata(diff.existingAssetId, {
+              ticker: resolved,
+              ...(diff.holding.price !== undefined ? { currentPrice: diff.holding.price } : {}),
+            });
+            repairedTickers += 1;
+          }
         }
       }
       let cashAssetId: string | undefined;
@@ -418,7 +449,9 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.overview(ownerId) });
       setPlan(null);
       await loadAll();
-      toast.success(`Sincronizzazione salvata: ${createdAssets} nuovi asset.`);
+      toast.success(
+        `Sincronizzazione salvata: ${createdAssets} nuovi asset${repairedTickers > 0 ? `, ${repairedTickers} ticker riparati` : ''}.`
+      );
     } catch (err) {
       console.error('[TradeRepublicConnectionTile] save failed:', err);
       // A partial save may already have created the cash account, so the in-memory `assets` are
@@ -575,6 +608,31 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
                       {diff.typeUncertain && diff.kind === 'new' && (
                         <span className="block text-[12px] text-warning-foreground">
                           Tipo non riconosciuto: proposto come ETF, verifica su Patrimonio.
+                        </span>
+                      )}
+                      {diff.kind === 'new' && diff.holding.price === undefined && (
+                        <span className="mt-1.5 block">
+                          <Label
+                            htmlFor={`tr-ticker-${diff.holding.isin}`}
+                            className="block text-[12px] text-muted-foreground"
+                          >
+                            Simbolo Yahoo per le quotazioni (l&apos;ISIN non è quotabile)
+                          </Label>
+                          <Input
+                            id={`tr-ticker-${diff.holding.isin}`}
+                            value={tickerOverrides[diff.holding.isin] ?? diff.formData.ticker}
+                            onChange={(event) =>
+                              setTickerOverrides((previous) => ({
+                                ...previous,
+                                [diff.holding.isin]: event.target.value,
+                              }))
+                            }
+                            placeholder="es. VWCE.MI, AAPL, BTC-EUR"
+                            className="mt-1 h-10 font-mono text-[12px]"
+                            disabled={disabled}
+                            autoComplete="off"
+                            spellCheck={false}
+                          />
                         </span>
                       )}
                     </span>
