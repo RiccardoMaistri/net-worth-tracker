@@ -563,17 +563,20 @@ export function StrumentiTile({
         <th scope="row" className={cn(CELL_CLASS, 'max-w-[260px] text-left font-normal')}>
           <div className="flex min-w-0 items-center gap-2">
             <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-1.5">
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span className="truncate font-medium text-foreground">{asset.name}</span>
-                      {hasAssetNote(asset) && <AssetNoteMarker note={(asset.notes ?? '').trim()} />}
-                    </span>
+                    <span className="min-w-0 truncate font-medium text-foreground">{asset.name}</span>
                   </TooltipTrigger>
                   <TooltipContent>{asset.name}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
+              {/* The marker is a SIBLING of the name's tooltip trigger, not a child of it: nesting a
+                  popover button inside another tooltip's trigger made hovering the note also raise
+                  the name tooltip, over a target the reader could not tell apart. */}
+              {hasAssetNote(asset) && <AssetNoteMarker note={(asset.notes ?? '').trim()} />}
+            </div>
               {/* pensionFund has no ticker input — a leftover raw value must not resurface. */}
               {(asset.ticker && asset.type !== 'pensionFund') || asset.exchange || subLine ? (
                 <span className="block truncate text-[11px] text-muted-foreground">

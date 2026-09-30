@@ -6,6 +6,7 @@ import { ChevronDown, Pencil, Trash2, Calculator, ArrowLeftRight, ScrollText, Pi
 import type { Asset } from '@/types/assets';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { formatCurrency, formatNumber, formatPercentage } from '@/lib/services/chartService';
 import { calculateAssetValue } from '@/lib/services/assetService';
 import { computeUnrealizedGain, resolveBondRowFacts } from '@/lib/utils/patrimonioSummary';
@@ -38,25 +39,29 @@ export function hasAssetNote(asset: Pick<Asset, 'notes'>): boolean {
 
 /**
  * The note indicator: an icon that IS the signal («there is more here»), the full text in its
- * popover. A truncated note beside the name would be unreadable, and a `title` is not an
- * accessible name and never fires on touch (AGENTS.md → Accessibility).
+ * popover. A truncated note beside the name would be unreadable, and a `title` is not an accessible
+ * name and never fires on touch (AGENTS.md → Accessibility) — neither does a Radix `Tooltip`, which
+ * is why this is a `Popover` (opens on click, so touch reaches it).
+ *
+ * The icon stays small and the TARGET is the 32px dense-list floor, folded into the label row with
+ * a negative margin so it costs the row no height — the AssetMovementsDialog info icon, same shape.
  */
 export function AssetNoteMarker({ note }: { note: string }) {
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={`Nota: ${note}`}
-            className="flex h-6 w-6 flex-none items-center justify-center rounded text-muted-foreground hover:text-foreground"
-          >
-            <StickyNote className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-xs whitespace-pre-wrap">{note}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="-my-2.5 flex h-8 w-8 flex-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label="Leggi la nota dello strumento"
+        >
+          <StickyNote className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="max-w-xs text-xs leading-relaxed whitespace-pre-wrap">
+        {note}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -336,7 +341,6 @@ export function AssetRow({
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-2">
             <span className="truncate text-[13px] font-medium text-foreground">{asset.name}</span>
-            {hasAssetNote(asset) && <AssetNoteMarker note={(asset.notes ?? '').trim()} />}
             {asset.quantity === 0 && (
               <span className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                 Azzerato
@@ -370,6 +374,10 @@ export function AssetRow({
           aria-hidden="true"
         />
         </button>
+        {/* The note is a SIBLING of the disclosure button, never a child of it: a button inside a
+            button is invalid HTML, and tapping the note would also have opened the row. It sits on
+            the right edge, past the chevron, so it cannot be mistaken for the row's own control. */}
+        {hasAssetNote(asset) && <AssetNoteMarker note={(asset.notes ?? '').trim()} />}
       </div>
 
       <div

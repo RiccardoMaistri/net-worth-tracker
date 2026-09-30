@@ -177,7 +177,14 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
   senza, `removeUndefinedFields` la lascerebbe e la nota cancellata tornerebbe al prossimo caricamento. La
   riga la mostra come **icona `StickyNote` accanto al nome** (`AssetNoteMarker`, testo pieno nel popover) e
   NON come sotto-riga: una nota troncata accanto al nome non è leggibile, e una riga in più per 30 strumenti
-  è più rumore che informazione. `hasAssetNote` considera ASSENTE la nota tutta spazi.
+  è più rumore che informazione. `hasAssetNote` considera ASSENTE la nota tutta spazi. Tre trappole del marker,
+  tutte misurate: **`Popover`, non `Tooltip`** (il tooltip Radix non si apre al tocco, quindi su telefono la nota
+  era irraggiungibile); **il target è 32px (`h-8 w-8`) con l'icona a 14px**, `-my-2.5` per non far crescere la
+  riga — la stessa forma dell'informazione di `AssetMovementsDialog`; e **è un FRATELLO del trigger, mai un
+  figlio**: nella riga mobile il trigger è il `<button>` del disclosure, quindi il marker era un button dentro
+  un button (HTML non valido, e il tocco sulla nota apriva anche il dettaglio), e nella cella desktop era dentro
+  il `TooltipTrigger` del nome (l'hover sulla nota alzava anche il tooltip del nome). Il `aria-label` dice
+  «Leggi la nota dello strumento», non il testo: il testo è nel popover.
 - **Every delete on the page is `useArmedDelete`** (2026-09-14, owner's call: the table rows, `AssetRow` and the
   cash-account modal all lost the 3 s timer that dialog.md had kept «by design» on rows): the arm and the disarm
   are announced through ONE `role="status"` live region per tile (`StrumentiTile` passes `announce` to every
