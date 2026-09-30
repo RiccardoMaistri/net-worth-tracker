@@ -29,10 +29,12 @@ import { parseOr400 } from '@/lib/server/validation';
 import { getMultipleQuotes } from '@/lib/services/yahooFinanceService';
 import {
   readTradeRepublic,
+  readTrTickerQuotes,
   TradeRepublicAuthError,
   TradeRepublicReadError,
   TR_READ_COMMANDS,
 } from '@/lib/server/tradeRepublicClient';
+import { resolveIsinsViaOpenFigi } from '@/lib/server/openFigi';
 import {
   parseTrCash,
   parseTrHoldings,
@@ -48,31 +50,66 @@ const bodySchema = z.object({
 });
 
 /**
- * Fill each position's price from the ordinary Yahoo service.
+ * Fill each position's price, three sources in order — and record the Yahoo symbol used.
  *
- * Quoted is the Yahoo symbol (`resolveTrYahooTicker`), NOT the ISIN: Yahoo answers no price
- * for a bare ISIN (measured), so quoting `holding.isin` priced nothing and every synced
- * position entered at 0 with a G/P of −100%. Positions with no deterministic symbol (stocks,
- * ETFs) still enter at 0 — but now the preview says so honestly and offers the ticker field
- * to fix it, instead of promising a refresh that could never come.
+ * 1. **The broker's own ticker topic** (`readTrTickerQuotes`): authoritative, EUR, per ISIN.
+ *    This is what prices stocks and ETFs the payload reports without a quote.
+ * 2. **Yahoo, via the resolved symbol** (`resolveTrYahooTicker`) — the curated table and the
+ *    crypto derivation. Quoted is the SYMBOL, never the raw ISIN: Yahoo answers no price for
+ *    a bare ISIN (measured), so quoting `holding.isin` priced nothing and every synced
+ *    position entered at 0 with a G/P of −100%.
+ * 3. **OpenFIGI for the rest**: ISINs with no deterministic symbol get one batched resolution
+ *    (EUR venues first), then the same Yahoo quotes. Crypto pseudo-ISINs skip this — FIGI
+ *    knows no `XF000…`, and the derivation already covered them.
+ *
+ * A price is attached ONLY in EUR: a foreign-currency quote under the EUR holding currency
+ * would read as euros until the first refresh repaired it. Whatever symbol produced a price
+ * (or simply resolved) travels on `holding.yahooTicker`, so the created asset's ticker keeps
+ * working on every later refresh.
  *
  * Trade Republic publishes NO quote with a position, and `AssetFormData.currentPrice` is required —
  * so without this a synced portfolio would be created at 0 and the user's net worth would drop by
- * the value of everything they own until the next price run. The same service prices these assets
- * on every later refresh, so creation and refresh read one source.
+ * the value of everything they own until the next price run.
  *
  * FAILURE IS NOT FATAL AND NOT SILENT: a quote that cannot be fetched leaves `price` absent, and
  * `buildTrImportPlan` turns that into a warning naming the position. A broker sync that fetched
  * positions must not be lost because one ticker is not on Yahoo (an offshore bond, a private
  * company, an unmapped coin).
  */
-async function withQuotes(holdings: TrHoldingInput[]): Promise<TrHoldingInput[]> {
+async function withQuotes(ownerId: string, holdings: TrHoldingInput[]): Promise<TrHoldingInput[]> {
   if (holdings.length === 0) return holdings;
-  const symbols = holdings.map((holding) => resolveTrYahooTicker(holding) ?? holding.isin);
-  const quotes = await getMultipleQuotes(symbols);
-  return holdings.map((holding, index) => {
-    const price = quotes.get(symbols[index])?.price;
-    return price !== null && price !== undefined && price > 0 ? { ...holding, price } : holding;
+  const trQuotes = await readTrTickerQuotes(
+    ownerId,
+    holdings.map((holding) => holding.isin)
+  );
+  const yahooSymbols = new Map<string, string>();
+  const needSymbol = holdings.filter(
+    (holding) => !trQuotes.has(holding.isin) && !resolveTrYahooTicker(holding)
+  );
+  if (needSymbol.length > 0) {
+    const figi = await resolveIsinsViaOpenFigi(needSymbol.map((holding) => holding.isin));
+    for (const holding of needSymbol) {
+      const symbol = figi.get(holding.isin.toUpperCase());
+      if (symbol) yahooSymbols.set(holding.isin, symbol);
+    }
+  }
+  const toQuote = holdings
+    .filter((holding) => !trQuotes.has(holding.isin))
+    .map((holding) => resolveTrYahooTicker(holding) ?? yahooSymbols.get(holding.isin) ?? holding.isin);
+  const quotes = await getMultipleQuotes(toQuote);
+  return holdings.map((holding) => {
+    const brokerPrice = trQuotes.get(holding.isin)?.price;
+    if (brokerPrice !== undefined) return { ...holding, price: brokerPrice };
+    const symbol = resolveTrYahooTicker(holding) ?? yahooSymbols.get(holding.isin) ?? holding.isin;
+    const quote = quotes.get(symbol);
+    const yahooTicker = symbol !== holding.isin ? symbol : undefined;
+    // EUR only: a GBp quote under the EUR holding currency would read ~100x until the first
+    // refresh normalized it. An LSE-only instrument keeps its (correct) ticker and prices on
+    // refresh, which does normalize.
+    if (quote?.price !== null && quote?.price !== undefined && quote.price > 0 && quote.currency === 'EUR') {
+      return { ...holding, price: quote.price, ...(yahooTicker ? { yahooTicker } : {}) };
+    }
+    return yahooTicker ? { ...holding, yahooTicker } : holding;
   });
 }
 
@@ -102,7 +139,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const payload = await readTradeRepublic(ownerId, command);
     if (command === 'positions') {
       const { holdings, skipped } = parseTrHoldings(payload);
-      return NextResponse.json({ positions: await withQuotes(holdings), skipped });
+      return NextResponse.json({ positions: await withQuotes(ownerId, holdings), skipped });
     }
     if (command === 'cash') {
       const { balances, skipped } = parseTrCash(payload);

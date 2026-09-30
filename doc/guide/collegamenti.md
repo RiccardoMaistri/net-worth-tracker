@@ -58,15 +58,29 @@
     transazione, e nessun campo di `Asset` lo contiene: sono **dichiarati** nell'anteprima (con
     l'asset che comprano, agganciato per ISIN) e **mai scritti**. Stessa postura del tasso del
     deposito Scalable.
-- **Il prezzo lo riempie la route, dal path Yahoo di sempre** (`getMultipleQuotes` in
-  `withQuotes`, quotando il simbolo Yahoo risolto, MAI l'ISIN grezzo). Yahoo non quota un ISIN
-  nudo (misurato su ISIN azionario ed ETF: nessuna quotazione) — quotare `holding.isin` non
-  prezzava nulla e ogni posizione entrava a 0 con G/P −100% per sempre, perché anche il
-  refresh quota `asset.ticker` e anche lì trovava l'ISIN. Serve perché
-  `AssetFormData.currentPrice` è obbligatorio: senza, un portafoglio sincronizzato nasce a 0
-  e il patrimonio dell'utente cala di tutto ciò che possiede. Il fallimento **non è fatale e
-  non è silenzioso**: una quotazione mancante lascia `price` ASSENTE e il plan ne fa un avviso
-  che nomina la posizione. Uno `0` lì sarebbe una lettura che il broker non ha mai dato.
+- **Il prezzo lo riempie la route, tre sorgenti in ordine** (`withQuotes`). PRIMA il topic
+  `ticker` del broker stesso (`readTrTickerQuotes`: `<ISIN>.LSX`, misurato live — TSLA 310,7 €,
+  VWCE 169,44 €): autorevole, in EUR, senza mapping di simboli. POI Yahoo sul simbolo risolto,
+  MAI sull'ISIN grezzo — Yahoo non quota un ISIN nudo (misurato su ISIN azionario ed ETF:
+  nessuna quotazione), e quotare `holding.isin` non prezzava nulla: ogni posizione entrava a
+  0 con G/P −100% per sempre, perché anche il refresh quota `asset.ticker` e anche lì trovava
+  l'ISIN. Il simbolo Yahoo viene dalla tabella curata, dalla derivazione crypto o da OpenFIGI
+  (sotto) e viaggia su `holding.yahooTicker`, così il ticker scritto resta quotabile per ogni
+  refresh futuro. Il prezzo si allega SOLO in EUR: una quotazione estera sotto la currency EUR
+  leggerebbe come euro fino al primo refresh. Serve perché `AssetFormData.currentPrice` è
+  obbligatorio: senza, un portafoglio sincronizzato nasce a 0 e il patrimonio dell'utente cala
+  di tutto ciò che possiede. Il fallimento **non è fatale e non è silenzioso**: una quotazione
+  mancante lascia `price` ASSENTE e il plan ne fa un avviso che nomina la posizione. Uno `0`
+  lì sarebbe una lettura che il broker non ha mai dato.
+  - **Il topic `ticker` è pubblico** (niente sessione) ma si legge dal client di sessione per
+    riuso connessione; una quota che non arriva mai bloccherebbe la sync, quindi ogni
+    strumento ha un timeout rigido (8s) e il miss è fail-open. Misurato: la hanging osservata
+    in locale è il motivo del timeout, non un dettaglio.
+  - **OpenFIGI è la seconda sorgente di simboli** (`lib/server/openFigi.ts`), dietro la
+    tabella curata (verificato batte euristico) e la derivazione crypto. Un POST batchato per
+    sync, senza chiave; US nudo prima, poi listini EUR in ordine fisso (MI, GR, FP, NA, GF,
+    GS), poi nulla — i codici exchange non mappati si saltano, mai indovinati. Fail-open
+    sempre; gli ISIN lasciano il box (stessa classe di disclosure delle quote Yahoo).
   - **Crypto: lo pseudo-ISIN `XF000…` porta il codice della moneta** (`XF000BTC0017` → la
     posizione Bitcoin misurata su un conto reale, 2026-09-30). `resolveTrYahooTicker` ne deriva
     `BTC-EUR`, che Yahoo quota: il ticker scritto è quello, l'`isin` resta l'id broker per il

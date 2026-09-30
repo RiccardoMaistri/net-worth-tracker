@@ -16,7 +16,9 @@ import { NextRequest } from 'next/server';
 
 const mocks = vi.hoisted(() => ({
   readTradeRepublic: vi.fn(),
+  readTrTickerQuotes: vi.fn(async () => new Map()),
   getMultipleQuotes: vi.fn(),
+  resolveIsinsViaOpenFigi: vi.fn(async () => new Map()),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -27,8 +29,12 @@ vi.mock('@/lib/server/apiAuth', () => ({
   assertCanAccessAccount: vi.fn(async () => undefined),
   getApiAuthErrorResponse: vi.fn(() => null),
 }));
+vi.mock('@/lib/server/openFigi', () => ({
+  resolveIsinsViaOpenFigi: mocks.resolveIsinsViaOpenFigi,
+}));
 vi.mock('@/lib/server/tradeRepublicClient', () => ({
   readTradeRepublic: mocks.readTradeRepublic,
+  readTrTickerQuotes: mocks.readTrTickerQuotes,
   TR_READ_COMMANDS: ['positions', 'cash', 'savingsPlans'],
   TradeRepublicAuthError: class TradeRepublicAuthError extends Error {
     // The SAME argument order as the real class (`message`, then `status`). Inverting it here made
@@ -110,8 +116,12 @@ async function post(command: string): Promise<{ status: number; body: Record<str
 describe('POST /api/broker/traderepublic/read', () => {
   beforeEach(() => {
     mocks.readTradeRepublic.mockReset();
+    mocks.readTrTickerQuotes.mockReset();
+    mocks.readTrTickerQuotes.mockResolvedValue(new Map());
     mocks.getMultipleQuotes.mockReset();
     mocks.getMultipleQuotes.mockResolvedValue(new Map());
+    mocks.resolveIsinsViaOpenFigi.mockReset();
+    mocks.resolveIsinsViaOpenFigi.mockResolvedValue(new Map());
   });
 
   it('answers `positions` with the parsed rows under `positions`, not a plan', async () => {
@@ -164,6 +174,45 @@ describe('POST /api/broker/traderepublic/read', () => {
       isin: 'XF000BTC0017',
       price: 73340.13,
     });
+  });
+
+  it('prefers the broker quote over Yahoo and needs no symbol for it', async () => {
+    // The broker prices its own venue in EUR: no symbol mapping required, and Yahoo is not
+    // even consulted for that ISIN.
+    mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
+    mocks.readTrTickerQuotes.mockResolvedValue(new Map([['IE00B3VTMJ91', { price: 130.5 }]]));
+    const { body } = await post('positions');
+    expect((body.positions as { price?: number }[])[0].price).toBe(130.5);
+    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith([]);
+  });
+
+  it('resolves an unmapped ISIN through OpenFIGI and records its symbol', async () => {
+    mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
+    mocks.resolveIsinsViaOpenFigi.mockResolvedValue(new Map([['IE00B3VTMJ91', 'VWCE.DE']]));
+    mocks.getMultipleQuotes.mockResolvedValue(
+      new Map([['VWCE.DE', { ticker: 'VWCE.DE', price: 131.1, currency: 'EUR' }]])
+    );
+    const { body } = await post('positions');
+    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith(['VWCE.DE']);
+    expect((body.positions as { price?: number; yahooTicker?: string }[])[0]).toMatchObject({
+      price: 131.1,
+      yahooTicker: 'VWCE.DE',
+    });
+  });
+
+  it('takes the symbol but not a foreign-currency price', async () => {
+    // A USD quote under the EUR holding currency would read as euros until the first
+    // refresh: the symbol is kept (the refresh normalizes), the price is not attached.
+    mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
+    mocks.resolveIsinsViaOpenFigi.mockResolvedValue(new Map([['IE00B3VTMJ91', 'VWCE.L']]));
+    mocks.getMultipleQuotes.mockResolvedValue(
+      new Map([['VWCE.L', { ticker: 'VWCE.L', price: 110.2, currency: 'USD' }]])
+    );
+    const { body } = await post('positions');
+    expect((body.positions as { price?: number; yahooTicker?: string }[])[0]).toMatchObject({
+      yahooTicker: 'VWCE.L',
+    });
+    expect((body.positions as { price?: number }[])[0].price).toBeUndefined();
   });
 
   it('leaves the price absent when the quote fails, instead of inventing a zero', async () => {

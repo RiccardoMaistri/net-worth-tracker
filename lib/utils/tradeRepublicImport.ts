@@ -10,14 +10,15 @@
  *    suffix is not in the portfolio payload. And the obvious fallback does not exist either:
  *    Yahoo answers NO price for a bare ISIN (measured on a stock and an ETF ISIN), so quoting
  *    `holding.isin` priced nothing and every synced position entered at 0 with a G/P of −100%.
- *    New assets are therefore born with `autoUpdatePrice: TRUE` and a ticker the USER sets —
- *    the preview offers a per-row Yahoo-symbol field, because guessing an exchange suffix
- *    would put a wrong price on a real asset, which is worse than a price the user points at.
- *    Consequently the plan has NO price branch at all.
+ *    New assets are therefore born with `autoUpdatePrice: TRUE` and the best ticker the sync
+ *    could resolve — the route's `yahooTicker` first (broker quote, table, OpenFIGI), the pure
+ *    `resolveTrYahooTicker` otherwise — with the preview's per-row field as the last word,
+ *    because guessing an exchange suffix would put a wrong price on a real asset, which is
+ *    worse than a price the user points at. Consequently the plan has NO price branch at all.
  *    The one deterministic exception is crypto: its pseudo-ISIN (`XF000BTC0017`) carries the
  *    coin code, and Yahoo lists every such coin as `<CODE>-EUR` — so `resolveTrYahooTicker`
  *    writes that symbol directly, and a re-sync repairs a tracked asset whose ticker is still
- *    the raw pseudo-ISIN (never a hand-fixed one).
+ *    the raw broker id (never a hand-fixed one).
  * 2. **CASH IS A REAL BALANCE, NOT A RESIDUAL.** Scalable's cash is `valuation − securities −
  *    crypto` because that is all its overview exposes; Trade Republic publishes the cash account
  *    itself (`cash` topic, amounts in MAJOR units — the SDK's `projectCash` maps `amount`
@@ -56,11 +57,21 @@ export interface TrHoldingInput {
   /** Broker average buy-in, per unit, native currency (`averageBuyIn`). */
   averageCost?: number;
   /**
-   * Current quote per unit, filled in by the READ ROUTE from the ordinary Yahoo price service —
-   * NOT by the broker, which publishes no quote with the position. Absent when that lookup failed,
-   * and the plan then WARNS rather than creating the asset silently worthless.
+   * Current quote per unit, filled in by the READ ROUTE — first from the broker's own ticker
+   * topic (EUR, authoritative), then from the ordinary Yahoo price service. NOT by the
+   * positions payload, which publishes no quote. Absent when every lookup failed, and the plan
+   * then WARNS rather than creating the asset silently worthless. Attached only when the quote
+   * is in EUR: a foreign-currency price under the EUR holding currency would read as euros.
    */
   price?: number;
+  /**
+   * The Yahoo symbol this holding was priced under, when one is known — the curated table, the
+   * crypto derivation, or the OpenFIGI resolution, in that order. The plan writes it as the
+   * asset's ticker so every later refresh keeps working; the `isin` stays the match key.
+   * Filled by the READ ROUTE alongside `price` (and for the paste-JSON path, absent — the
+   * pure layer still resolves what it can).
+   */
+  yahooTicker?: string;
   /** Broker status string (`status`), e.g. "active". */
   status: string;
   currency: string;
@@ -355,22 +366,53 @@ export function defaultTrTaxRateFor(type: AssetType): number {
 }
 
 /**
- * The Yahoo symbol for a position, or null when no deterministic one exists.
+ * The Yahoo symbol for a Trade Republic position's ISIN, or null when none is known.
  *
  * Yahoo quotes NEITHER real ISINs (measured: `quote('US0378331005')` → no price) NOR the
- * pseudo-ISINs Trade Republic assigns to crypto (`XF000BTC0017` — `XF` is the user-assigned
- * ISO block for exchange-issued identifiers, then the coin code, then digits). The one
- * deterministic case is crypto: Yahoo lists every such coin as `<CODE>-EUR` (measured:
- * `BTC-EUR` → 73.340,13 €). Everything else returns null — guessing an exchange suffix
- * would put a wrong price on a real asset, so the ticker stays user-set (see the preview's
- * per-row override and `applyTrTickerOverride`).
+ * pseudo-ISNs Trade Republic assigns to crypto (`XF000BTC0017` — `XF` is the user-assigned
+ * ISO block for exchange-issued identifiers, then the coin code, then digits). So the symbol
+ * has to come from somewhere, and there are exactly two honest sources:
+ *
+ *   1. **CRYPTO, derived.** The pseudo-ISIN carries the coin code and Yahoo lists every such
+ *      coin as `<CODE>-EUR` (measured: `BTC-EUR` → 73.340,13 €). Deterministic, no table.
+ *   2. **A curated table for the instruments a real account actually holds.** The alternative
+ *      is guessing the exchange suffix, which puts a WRONG price on a real asset — and the
+ *      suffix is not in the payload, so there is no way to derive it. Each entry below was
+ *      resolved against Yahoo and its quote verified to exist.
+ *
+ * Everything unmapped returns null: the asset is then created with the ISIN as ticker and the
+ * preview asks for the symbol (see `applyTrTickerOverride`). Never invent one.
  */
+export const TR_YAHOO_TICKER_BY_ISIN: Readonly<Record<string, string>> = {
+  // Stocks — single listing, so the symbol is unambiguous.
+  US0231351067: 'AMZN', // Amazon.com
+  US4592001014: 'IBM', // IBM
+  US5951121038: 'MU', // Micron Technology
+  US88160R1014: 'TSLA', // Tesla
+  CH1134540470: 'ONON', // On Holding
+  // SpaceX and Bending Spoons are LISTED (measured `SPCX` 149,24 $ and `BSP` 32,76 $ on
+  // Nasdaq) — not private, as a stale assumption once said. `BSP` and not `BST`: that symbol
+  // belongs to an unrelated BlackRock fund.
+  US84615Q1031: 'SPCX', // SpaceX (Space Exploration Technologies)
+  IT0005717696: 'BSP', // Bending Spoons
+  // ETFs — the EUR listing, chosen over the LSE one so no FX conversion is involved.
+  IE00BK5BQT80: 'VWCE.MI', // Vanguard FTSE All-World
+  IE000M7V94E1: 'IE000M7V94E1.SG', // VanEck Uranium & Nuclear (Xetra)
+  IE000U58J0M1: 'IE000U58J0M1.SG', // iShares Global Clean Energy (Xetra)
+  // Stocks with a EUR listing.
+  NL00150001Q9: 'STLAM.MI', // Stellantis (Euronext Milan)
+  DE0007664039: 'VOW3.DE', // Volkswagen Vorzugsaktie
+};
+
 export function resolveTrYahooTicker(holding: TrHoldingInput): string | null {
   const { type } = mapTrType(holding.rawType, holding.rawCategory);
-  if (type !== 'crypto') return null;
-  const coin = /^XF000([A-Z]{2,12})\d+$/.exec(holding.isin)?.[1];
-  if (!coin) return null;
-  return `${coin}-EUR`;
+  if (type === 'crypto') {
+    const coin = /^XF000([A-Z]{2,12})\d+$/.exec(holding.isin)?.[1];
+    return coin ? `${coin}-EUR` : null;
+  }
+  const mapped = TR_YAHOO_TICKER_BY_ISIN[holding.isin.toUpperCase()];
+  // NOT_FOUND is a real answer («this instrument has no market price»), not a missing mapping.
+  return mapped === undefined ? null : mapped === 'NOT_FOUND' ? null : mapped;
 }
 
 /**
@@ -380,10 +422,11 @@ export function resolveTrYahooTicker(holding: TrHoldingInput): string | null {
  * this broker publishes no quote with the position, so the price comes from the ordinary Yahoo
  * path, both now (filled in by the read route) and on every later refresh.
  *
- * The `ticker` is the Yahoo symbol when one is deterministic (crypto, see
- * `resolveTrYahooTicker`), otherwise the ISIN — which Yahoo CANNOT quote, so the asset enters
- * at 0 until the user sets a real symbol (in the preview, or later on Patrimonio). The `isin`
- * field always keeps the broker identifier: that is what the next sync matches on.
+ * The `ticker` is the Yahoo symbol when one is known (`holding.yahooTicker` from the route,
+ * else the pure `resolveTrYahooTicker`), otherwise the ISIN — which Yahoo CANNOT quote, so the
+ * asset enters at 0 until the user sets a real symbol (in the preview, or later on
+ * Patrimonio). The `isin` field always keeps the broker identifier: that is what the next
+ * sync matches on.
  *
  * `currentPrice` falls back to 0 when the quote lookup failed, and the plan pairs that with a
  * warning naming the position. A created asset at 0 is visible and fixable; a position missing
@@ -392,7 +435,7 @@ export function resolveTrYahooTicker(holding: TrHoldingInput): string | null {
 export function mapTrHoldingToAssetFormData(holding: TrHoldingInput): AssetFormData {
   const { type, assetClass } = mapTrType(holding.rawType, holding.rawCategory);
   return {
-    ticker: resolveTrYahooTicker(holding) ?? holding.isin,
+    ticker: holding.yahooTicker ?? resolveTrYahooTicker(holding) ?? holding.isin,
     displayTicker: holding.name,
     name: holding.name,
     type,

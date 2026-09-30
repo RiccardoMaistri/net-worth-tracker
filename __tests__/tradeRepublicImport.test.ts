@@ -398,6 +398,24 @@ describe('crypto positions (pseudo-ISIN XF000…)', () => {
     expect(formData.currentPrice).toBe(73340.13);
   });
 
+  it('prefers the route-resolved yahooTicker over every local guess', () => {
+    const { holdings } = parseTrHoldings(BTC_PORTFOLIO);
+    const formData = mapTrHoldingToAssetFormData({ ...holdings[0], yahooTicker: 'BTC-EUR' });
+    expect(formData.ticker).toBe('BTC-EUR');
+    // A route-resolved symbol wins even where the pure layer knows nothing.
+    const stock: TrHoldingInput = {
+      isin: 'US0231351067',
+      name: 'Amazon',
+      rawType: 'stock',
+      rawCategory: '',
+      quantity: 1,
+      status: 'active',
+      currency: 'EUR',
+      yahooTicker: 'AMZN',
+    };
+    expect(mapTrHoldingToAssetFormData(stock).ticker).toBe('AMZN');
+  });
+
   it('returns null for a stock ISIN: no exchange suffix is ever guessed', () => {
     const holding: TrHoldingInput = {
       isin: 'US0378331005',

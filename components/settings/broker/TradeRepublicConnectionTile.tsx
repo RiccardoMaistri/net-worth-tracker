@@ -392,18 +392,25 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
           await createAsset(ownerId, applyTrTickerOverride(diff.formData, tickerOverrides[diff.holding.isin]));
           createdAssets += 1;
         } else if (diff.existingAssetId) {
-          // Self-healing for the deterministic crypto case only: a tracked asset whose ticker
-          // is still the raw pseudo-ISIN a past sync wrote (`XF000…`) gets the Yahoo symbol
-          // (`BTC-EUR`) plus the quote the route just read, so the position prices immediately
-          // instead of at the next refresh. Both are EUR by construction (the `-EUR` symbol,
-          // the EUR holding), so no currency can mismatch. A hand-fixed ticker (anything that
-          // is no longer the ISIN) is never touched — the user already knows better than the sync.
-          const resolved = resolveTrYahooTicker(diff.holding);
+          // Self-healing. A tracked asset whose ticker is still the raw broker id a past sync
+          // wrote (the ISIN, or a crypto pseudo-ISIN) is UNQUOTABLE, so it would sit at 0 with
+          // a permanent -100% G/P. When this sync resolved a real Yahoo symbol — the route's
+          // `yahooTicker` (broker quote, table, OpenFIGI) first, the pure resolver otherwise —
+          // write it together with the quote just read, so the position prices at once instead
+          // of at the next refresh. A hand-fixed ticker (anything that is no longer the ISIN)
+          // is NEVER touched: the user knows better than the sync. This is what makes a
+          // re-sync enough — no delete, no retyping.
+          const resolved = diff.holding.yahooTicker ?? resolveTrYahooTicker(diff.holding);
           const trackedTicker = assets.find((asset) => asset.id === diff.existingAssetId)?.ticker;
-          if (resolved && trackedTicker === diff.holding.isin && trackedTicker !== resolved) {
+          if (
+            resolved &&
+            diff.holding.price !== undefined &&
+            trackedTicker === diff.holding.isin &&
+            trackedTicker !== resolved
+          ) {
             await updateAssetMetadata(diff.existingAssetId, {
               ticker: resolved,
-              ...(diff.holding.price !== undefined ? { currentPrice: diff.holding.price } : {}),
+              currentPrice: diff.holding.price,
             });
             repairedTickers += 1;
           }
@@ -465,6 +472,15 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
   };
 
   const cashAssets = assets.filter((a) => a.type === 'cash' && a.assetClass === 'cash');
+  /**
+   * NEW positions whose ticker is still the raw broker id — unquotable on refresh. Priced or
+   * not: a broker-priced position with an ISIN ticker would freeze at the sync price (the
+   * refresh quotes the ticker, not the ISIN), so it needs the symbol field exactly as much
+   * as an unpriced one does.
+   */
+  const needsTickerCount =
+    plan?.holdings.filter((diff) => diff.kind === 'new' && diff.formData.ticker === diff.holding.isin)
+      .length ?? 0;
   const reading = loading
     ? null
     : describeBrokerConnections(BROKER, {
@@ -610,36 +626,57 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
                           Tipo non riconosciuto: proposto come ETF, verifica su Patrimonio.
                         </span>
                       )}
-                      {diff.kind === 'new' && diff.holding.price === undefined && (
-                        <span className="mt-1.5 block">
-                          <Label
-                            htmlFor={`tr-ticker-${diff.holding.isin}`}
-                            className="block text-[12px] text-muted-foreground"
-                          >
-                            Simbolo Yahoo per le quotazioni (l&apos;ISIN non è quotabile)
-                          </Label>
-                          <Input
-                            id={`tr-ticker-${diff.holding.isin}`}
-                            value={tickerOverrides[diff.holding.isin] ?? diff.formData.ticker}
-                            onChange={(event) =>
-                              setTickerOverrides((previous) => ({
-                                ...previous,
-                                [diff.holding.isin]: event.target.value,
-                              }))
-                            }
-                            placeholder="es. VWCE.MI, AAPL, BTC-EUR"
-                            className="mt-1 h-10 font-mono text-[12px]"
-                            disabled={disabled}
-                            autoComplete="off"
-                            spellCheck={false}
-                          />
-                        </span>
-                      )}
                     </span>
                     <span className="flex-none text-[12px] text-muted-foreground">{KIND_LABEL[diff.kind]}</span>
                   </li>
                 ))}
               </ul>
+            )}
+
+            {plan.holdings.some(
+              (diff) => diff.kind === 'new' && diff.formData.ticker === diff.holding.isin
+            ) && (
+              <div className="flex flex-col gap-2 rounded-lg bg-muted p-3">
+                <p className="text-[13px] font-medium">
+                  {needsTickerCount === 1
+                    ? '1 posizione con ticker da sistemare'
+                    : `${needsTickerCount} posizioni con ticker da sistemare`}
+                </p>
+                <p className="text-[12px] leading-[1.45] text-muted-foreground">
+                  Yahoo non quota gli ISIN: scrivi qui il simbolo con cui lo strumento è
+                  quotato (le quotazioni in euro evitano il cambio), così anche i refresh
+                  futuri lo troveranno. Lascia vuoto per usarne uno più tardi su Patrimonio.
+                </p>
+                <div className="flex flex-col gap-2">
+                  {plan.holdings
+                    .filter((diff) => diff.kind === 'new' && diff.formData.ticker === diff.holding.isin)
+                    .map((diff) => (
+                      <div key={diff.holding.isin} className="flex items-center gap-2">
+                        <Label
+                          htmlFor={`tr-ticker-${diff.holding.isin}`}
+                          className="w-44 flex-none truncate text-[12px]"
+                        >
+                          {diff.holding.name}
+                        </Label>
+                        <Input
+                          id={`tr-ticker-${diff.holding.isin}`}
+                          value={tickerOverrides[diff.holding.isin] ?? diff.formData.ticker}
+                          onChange={(event) =>
+                            setTickerOverrides((previous) => ({
+                              ...previous,
+                              [diff.holding.isin]: event.target.value,
+                            }))
+                          }
+                          placeholder="es. VWCE.MI, AAPL, BTC-EUR"
+                          className="h-10 flex-1 font-mono text-[12px]"
+                          disabled={disabled}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </div>
+                    ))}
+                </div>
+              </div>
             )}
 
             {plan.cash && (
