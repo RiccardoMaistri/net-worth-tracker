@@ -4,7 +4,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { Asset, AssetComposition } from '@/types/assets';
-import { describeAssetClassChip, resolveDisplayAssetClass } from '@/lib/utils/assetDisplayClass';
+import {
+  BROKER_GROUP_FALLBACK,
+  describeAssetClassChip,
+  resolveBrokerGroup,
+  resolveDisplayAssetClass,
+} from '@/lib/utils/assetDisplayClass';
 
 function makeAsset(overrides: Partial<Asset> = {}): Pick<Asset, 'assetClass' | 'composition'> {
   return {
@@ -168,5 +173,24 @@ describe('describeAssetClassChip', () => {
     const tie = composite(['bonds', 50], ['equity', 50]);
     expect(describeAssetClassChip(tie).segments[0].assetClass).toBe('bonds');
     expect(resolveDisplayAssetClass(tie)).toBe('bonds');
+  });
+});
+
+describe('resolveBrokerGroup', () => {
+  it('reads the exchange verbatim (trimmed) — the bridges write their own name there', () => {
+    expect(resolveBrokerGroup({ exchange: 'Trade Republic' })).toBe('Trade Republic');
+    expect(resolveBrokerGroup({ exchange: '  Scalable Capital  ' })).toBe('Scalable Capital');
+  });
+
+  it('buckets a missing or blank exchange as Altro instead of dropping the row', () => {
+    expect(resolveBrokerGroup({})).toBe(BROKER_GROUP_FALLBACK);
+    expect(resolveBrokerGroup({ exchange: '' })).toBe(BROKER_GROUP_FALLBACK);
+    expect(resolveBrokerGroup({ exchange: '   ' })).toBe(BROKER_GROUP_FALLBACK);
+    expect(BROKER_GROUP_FALLBACK).toBe('Altro');
+  });
+
+  it('does not merge a venue into a broker: Nasdaq stays Nasdaq', () => {
+    // A mapping here would silently reassign a user-typed venue to a broker it is not.
+    expect(resolveBrokerGroup({ exchange: 'Nasdaq' })).toBe('Nasdaq');
   });
 });

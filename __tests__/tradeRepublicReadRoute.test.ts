@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
   readTradeRepublic: vi.fn(),
   readTrTickerQuotes: vi.fn(async () => new Map()),
   getMultipleQuotes: vi.fn(),
-  resolveIsinsViaOpenFigi: vi.fn(async () => new Map()),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -28,9 +27,6 @@ vi.mock('@/lib/server/apiAuth', () => ({
   requireFirebaseAuth: vi.fn(async () => ({ uid: 'owner-1' })),
   assertCanAccessAccount: vi.fn(async () => undefined),
   getApiAuthErrorResponse: vi.fn(() => null),
-}));
-vi.mock('@/lib/server/openFigi', () => ({
-  resolveIsinsViaOpenFigi: mocks.resolveIsinsViaOpenFigi,
 }));
 vi.mock('@/lib/server/tradeRepublicClient', () => ({
   readTradeRepublic: mocks.readTradeRepublic,
@@ -120,8 +116,6 @@ describe('POST /api/broker/traderepublic/read', () => {
     mocks.readTrTickerQuotes.mockResolvedValue(new Map());
     mocks.getMultipleQuotes.mockReset();
     mocks.getMultipleQuotes.mockResolvedValue(new Map());
-    mocks.resolveIsinsViaOpenFigi.mockReset();
-    mocks.resolveIsinsViaOpenFigi.mockResolvedValue(new Map());
   });
 
   it('answers `positions` with the parsed rows under `positions`, not a plan', async () => {
@@ -132,15 +126,17 @@ describe('POST /api/broker/traderepublic/read', () => {
     expect(body.positions).toHaveLength(1);
   });
 
-  it('fills each position price from the ordinary Yahoo service, keyed by ISIN', async () => {
+  it('fills each position price from the ordinary Yahoo service, via the resolved symbol', async () => {
     // The broker publishes no quote, and `currentPrice` is required: without this a synced
-    // portfolio is created at 0 and the net worth drops by everything the user owns.
+    // portfolio is created at 0 and the net worth drops by everything the user owns. Quoted
+    // is the table-resolved symbol (the fixture ISIN maps to SWDA.MI), never the raw ISIN —
+    // Yahoo answers no price for that.
     mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
     mocks.getMultipleQuotes.mockResolvedValue(
-      new Map([['IE00B3VTMJ91', { ticker: 'IE00B3VTMJ91', price: 130.2, currency: 'EUR' }]])
+      new Map([['SWDA.MI', { ticker: 'SWDA.MI', price: 130.2, currency: 'EUR' }]])
     );
     const { body } = await post('positions');
-    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith(['IE00B3VTMJ91']);
+    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith(['SWDA.MI']);
     expect((body.positions as { price?: number }[])[0].price).toBe(130.2);
   });
 
@@ -186,31 +182,19 @@ describe('POST /api/broker/traderepublic/read', () => {
     expect(mocks.getMultipleQuotes).toHaveBeenCalledWith([]);
   });
 
-  it('resolves an unmapped ISIN through OpenFIGI and records its symbol', async () => {
-    mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
-    mocks.resolveIsinsViaOpenFigi.mockResolvedValue(new Map([['IE00B3VTMJ91', 'VWCE.DE']]));
-    mocks.getMultipleQuotes.mockResolvedValue(
-      new Map([['VWCE.DE', { ticker: 'VWCE.DE', price: 131.1, currency: 'EUR' }]])
-    );
-    const { body } = await post('positions');
-    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith(['VWCE.DE']);
-    expect((body.positions as { price?: number; yahooTicker?: string }[])[0]).toMatchObject({
-      price: 131.1,
-      yahooTicker: 'VWCE.DE',
-    });
-  });
-
   it('takes the symbol but not a foreign-currency price', async () => {
     // A USD quote under the EUR holding currency would read as euros until the first
     // refresh: the symbol is kept (the refresh normalizes), the price is not attached.
+    // The fixture ISIN resolves through the curated table to SWDA.MI — the currency gate
+    // is what is under test, so the mocked quote answers in USD.
     mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
-    mocks.resolveIsinsViaOpenFigi.mockResolvedValue(new Map([['IE00B3VTMJ91', 'VWCE.L']]));
     mocks.getMultipleQuotes.mockResolvedValue(
-      new Map([['VWCE.L', { ticker: 'VWCE.L', price: 110.2, currency: 'USD' }]])
+      new Map([['SWDA.MI', { ticker: 'SWDA.MI', price: 110.2, currency: 'USD' }]])
     );
     const { body } = await post('positions');
+    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith(['SWDA.MI']);
     expect((body.positions as { price?: number; yahooTicker?: string }[])[0]).toMatchObject({
-      yahooTicker: 'VWCE.L',
+      yahooTicker: 'SWDA.MI',
     });
     expect((body.positions as { price?: number }[])[0].price).toBeUndefined();
   });

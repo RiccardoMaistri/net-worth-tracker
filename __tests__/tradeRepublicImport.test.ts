@@ -254,7 +254,9 @@ describe('mapTrHoldingToAssetFormData', () => {
     const formData = mapTrHoldingToAssetFormData(holding);
     expect(formData.autoUpdatePrice).toBe(true);
     expect(formData.currentPrice).toBe(130.2);
-    expect(formData.ticker).toBe('IE00B3VTMJ91');
+    // The fixture ISIN is table-mapped: the ticker is the Yahoo symbol (so the refresh keeps
+    // working), while the isin stays the broker identifier the next sync matches on.
+    expect(formData.ticker).toBe('SWDA.MI');
     expect(formData.isin).toBe('IE00B3VTMJ91');
   });
 
@@ -454,6 +456,7 @@ describe('applyTrTickerOverride', () => {
     status: 'active',
     currency: 'EUR',
   });
+  // The fixture ISIN is table-mapped, so the planned ticker is already the Yahoo symbol.
 
   it('applies a trimmed override', () => {
     expect(applyTrTickerOverride(formData, '  VWCE.MI ').ticker).toBe('VWCE.MI');
@@ -462,6 +465,6 @@ describe('applyTrTickerOverride', () => {
   it('keeps the planned ticker on a blank, missing or identical override', () => {
     expect(applyTrTickerOverride(formData, undefined)).toBe(formData);
     expect(applyTrTickerOverride(formData, '   ')).toBe(formData);
-    expect(applyTrTickerOverride(formData, 'IE00B3VTMJ91')).toBe(formData);
+    expect(applyTrTickerOverride(formData, 'SWDA.MI')).toBe(formData);
   });
 });

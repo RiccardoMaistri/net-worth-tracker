@@ -34,7 +34,6 @@ import {
   TradeRepublicReadError,
   TR_READ_COMMANDS,
 } from '@/lib/server/tradeRepublicClient';
-import { resolveIsinsViaOpenFigi } from '@/lib/server/openFigi';
 import {
   parseTrCash,
   parseTrHoldings,
@@ -57,10 +56,9 @@ const bodySchema = z.object({
  * 2. **Yahoo, via the resolved symbol** (`resolveTrYahooTicker`) — the curated table and the
  *    crypto derivation. Quoted is the SYMBOL, never the raw ISIN: Yahoo answers no price for
  *    a bare ISIN (measured), so quoting `holding.isin` priced nothing and every synced
- *    position entered at 0 with a G/P of −100%.
- * 3. **OpenFIGI for the rest**: ISINs with no deterministic symbol get one batched resolution
- *    (EUR venues first), then the same Yahoo quotes. Crypto pseudo-ISINs skip this — FIGI
- *    knows no `XF000…`, and the derivation already covered them.
+ *    position entered at 0 with a G/P of −100%. Anything without a resolved symbol keeps the
+ *    preview's manual ticker field: removed the OpenFIGI layer as overkill (a third-party
+ *    dependency to automate a per-new-buy typing), the field covers it.
  *
  * A price is attached ONLY in EUR: a foreign-currency quote under the EUR holding currency
  * would read as euros until the first refresh repaired it. Whatever symbol produced a price
@@ -82,25 +80,14 @@ async function withQuotes(ownerId: string, holdings: TrHoldingInput[]): Promise<
     ownerId,
     holdings.map((holding) => holding.isin)
   );
-  const yahooSymbols = new Map<string, string>();
-  const needSymbol = holdings.filter(
-    (holding) => !trQuotes.has(holding.isin) && !resolveTrYahooTicker(holding)
-  );
-  if (needSymbol.length > 0) {
-    const figi = await resolveIsinsViaOpenFigi(needSymbol.map((holding) => holding.isin));
-    for (const holding of needSymbol) {
-      const symbol = figi.get(holding.isin.toUpperCase());
-      if (symbol) yahooSymbols.set(holding.isin, symbol);
-    }
-  }
   const toQuote = holdings
     .filter((holding) => !trQuotes.has(holding.isin))
-    .map((holding) => resolveTrYahooTicker(holding) ?? yahooSymbols.get(holding.isin) ?? holding.isin);
+    .map((holding) => resolveTrYahooTicker(holding) ?? holding.isin);
   const quotes = await getMultipleQuotes(toQuote);
   return holdings.map((holding) => {
     const brokerPrice = trQuotes.get(holding.isin)?.price;
     if (brokerPrice !== undefined) return { ...holding, price: brokerPrice };
-    const symbol = resolveTrYahooTicker(holding) ?? yahooSymbols.get(holding.isin) ?? holding.isin;
+    const symbol = resolveTrYahooTicker(holding) ?? holding.isin;
     const quote = quotes.get(symbol);
     const yahooTicker = symbol !== holding.isin ? symbol : undefined;
     // EUR only: a GBp quote under the EUR holding currency would read ~100x until the first

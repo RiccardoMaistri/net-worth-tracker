@@ -11,7 +11,7 @@
  *    Yahoo answers NO price for a bare ISIN (measured on a stock and an ETF ISIN), so quoting
  *    `holding.isin` priced nothing and every synced position entered at 0 with a G/P of −100%.
  *    New assets are therefore born with `autoUpdatePrice: TRUE` and the best ticker the sync
- *    could resolve — the route's `yahooTicker` first (broker quote, table, OpenFIGI), the pure
+ *    could resolve — the route's `yahooTicker` first (broker quote, table), the pure
  *    `resolveTrYahooTicker` otherwise — with the preview's per-row field as the last word,
  *    because guessing an exchange suffix would put a wrong price on a real asset, which is
  *    worse than a price the user points at. Consequently the plan has NO price branch at all.
@@ -66,7 +66,7 @@ export interface TrHoldingInput {
   price?: number;
   /**
    * The Yahoo symbol this holding was priced under, when one is known — the curated table, the
-   * crypto derivation, or the OpenFIGI resolution, in that order. The plan writes it as the
+   * crypto derivation, in that order. The plan writes it as the
    * asset's ticker so every later refresh keeps working; the `isin` stays the match key.
    * Filled by the READ ROUTE alongside `price` (and for the paste-JSON path, absent — the
    * pure layer still resolves what it can).
@@ -396,6 +396,7 @@ export const TR_YAHOO_TICKER_BY_ISIN: Readonly<Record<string, string>> = {
   US84615Q1031: 'SPCX', // SpaceX (Space Exploration Technologies)
   IT0005717696: 'BSP', // Bending Spoons
   // ETFs — the EUR listing, chosen over the LSE one so no FX conversion is involved.
+  IE00B3VTMJ91: 'SWDA.MI', // iShares Core MSCI World
   IE00BK5BQT80: 'VWCE.MI', // Vanguard FTSE All-World
   IE000M7V94E1: 'IE000M7V94E1.SG', // VanEck Uranium & Nuclear (Xetra)
   IE000U58J0M1: 'IE000U58J0M1.SG', // iShares Global Clean Energy (Xetra)
@@ -411,8 +412,7 @@ export function resolveTrYahooTicker(holding: TrHoldingInput): string | null {
     return coin ? `${coin}-EUR` : null;
   }
   const mapped = TR_YAHOO_TICKER_BY_ISIN[holding.isin.toUpperCase()];
-  // NOT_FOUND is a real answer («this instrument has no market price»), not a missing mapping.
-  return mapped === undefined ? null : mapped === 'NOT_FOUND' ? null : mapped;
+  return mapped ?? null;
 }
 
 /**

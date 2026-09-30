@@ -64,7 +64,7 @@
   MAI sull'ISIN grezzo — Yahoo non quota un ISIN nudo (misurato su ISIN azionario ed ETF:
   nessuna quotazione), e quotare `holding.isin` non prezzava nulla: ogni posizione entrava a
   0 con G/P −100% per sempre, perché anche il refresh quota `asset.ticker` e anche lì trovava
-  l'ISIN. Il simbolo Yahoo viene dalla tabella curata, dalla derivazione crypto o da OpenFIGI
+  l'ISIN. Il simbolo Yahoo viene dalla tabella curata o dalla derivazione crypto
   (sotto) e viaggia su `holding.yahooTicker`, così il ticker scritto resta quotabile per ogni
   refresh futuro. Il prezzo si allega SOLO in EUR: una quotazione estera sotto la currency EUR
   leggerebbe come euro fino al primo refresh. Serve perché `AssetFormData.currentPrice` è
@@ -76,11 +76,6 @@
     riuso connessione; una quota che non arriva mai bloccherebbe la sync, quindi ogni
     strumento ha un timeout rigido (8s) e il miss è fail-open. Misurato: la hanging osservata
     in locale è il motivo del timeout, non un dettaglio.
-  - **OpenFIGI è la seconda sorgente di simboli** (`lib/server/openFigi.ts`), dietro la
-    tabella curata (verificato batte euristico) e la derivazione crypto. Un POST batchato per
-    sync, senza chiave; US nudo prima, poi listini EUR in ordine fisso (MI, GR, FP, NA, GF,
-    GS), poi nulla — i codici exchange non mappati si saltano, mai indovinati. Fail-open
-    sempre; gli ISIN lasciano il box (stessa classe di disclosure delle quote Yahoo).
   - **Crypto: lo pseudo-ISIN `XF000…` porta il codice della moneta** (`XF000BTC0017` → la
     posizione Bitcoin misurata su un conto reale, 2026-09-30). `resolveTrYahooTicker` ne deriva
     `BTC-EUR`, che Yahoo quota: il ticker scritto è quello, l'`isin` resta l'id broker per il
@@ -89,8 +84,9 @@
   - **Azioni/ETF: il simbolo Yahoo lo mette l'utente, nella riga dell'anteprima.** Indovinare
     il suffisso exchange metterebbe un prezzo sbagliato su un asset reale — la regola della
     sezione Scalable vale identica. L'avviso non promette più «si aggiornerà alla prossima
-    quotazione» (falso: non sarebbe mai arrivata) ma dice dove scrivere il simbolo. Le società
-    non quotate (SpaceX, Bending Spoons) restano a prezzo manuale per costruzione.
+    quotazione» (falso: non sarebbe mai arrivata) ma dice dove scrivere il simbolo. Uno
+    strumento davvero non quotato da nessuna parte resta a prezzo manuale per costruzione
+    (SpaceX e Bending Spoons sembravano il caso, poi misurate quotate — `SPCX` e `BSP`).
 - **Più saldi EUR sono PIÙ conti, mai una somma** (`parseTrCash` ritorna una LISTA). Il piano
   traccia il primo e **dichiara** gli altri per importo. La lezione Scalable (deposito ≠ liquidità)
   vale identica: due saldi presso un broker sono due conti, e sommarli li fonderebbe silenziosamente.

@@ -395,7 +395,7 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
           // Self-healing. A tracked asset whose ticker is still the raw broker id a past sync
           // wrote (the ISIN, or a crypto pseudo-ISIN) is UNQUOTABLE, so it would sit at 0 with
           // a permanent -100% G/P. When this sync resolved a real Yahoo symbol — the route's
-          // `yahooTicker` (broker quote, table, OpenFIGI) first, the pure resolver otherwise —
+          // `yahooTicker` (broker quote, table) first, the pure resolver otherwise —
           // write it together with the quote just read, so the position prices at once instead
           // of at the next refresh. A hand-fixed ticker (anything that is no longer the ISIN)
           // is NEVER touched: the user knows better than the sync. This is what makes a
