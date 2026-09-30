@@ -25,6 +25,7 @@ import {
   describeInstrumentReturns,
   describeInstruments,
   describeLastPriceUpdate,
+  describeCrowdfundingRow,
   describeManualValuation,
   describeMonthTrades,
   describeMortgage,
@@ -35,6 +36,10 @@ import {
   type PatrimonioVerdictInput,
 } from '@/lib/utils/patrimonioNarrative';
 import { narrativeToText, type Narrative } from '@/lib/utils/narrative';
+import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
+
+/** A currency figure the way the screen prints it — the formatter's own output, nbsp included. */
+const EXPECTED_EUR = (n: number) => cachedFormatCurrencyEUR(n);
 import type { MortgageSummary } from '@/lib/utils/mortgageSummary';
 
 // Intl 'it-IT' puts a no-break space before "€" (see AGENTS.md → Italian Localization); the
@@ -315,6 +320,49 @@ describe('describeBondRow / describeManualValuation — the sub-line under a row
     expect(describeManualValuation(new Date(Date.UTC(2025, 11, 30, 11)), now)).toBe('valore a mano dal 30/12/2025');
     expect(describeManualValuation(null, now)).toBeNull();
     expect(describeManualValuation(new Date('x'), now)).toBeNull();
+  });
+
+  it('names the subscribed capital and the maturity of a crowdfunding project', () => {
+    expect(describeCrowdfundingRow({ investedCapital: 10000, maturityDate: '2027-06-30' }, now)).toBe(
+      `investito ${EXPECTED_EUR(10_000)} · scade il 30/06/2027`
+    );
+  });
+
+  it('puts the expected ROI between the two facts it is read against, in Italian decimals', () => {
+    expect(
+      describeCrowdfundingRow(
+        { investedCapital: 10000, expectedRoi: 8.5, maturityDate: '2027-06-30' },
+        now
+      )
+    ).toBe(`investito ${EXPECTED_EUR(10_000)} · atteso 8,5% · scade il 30/06/2027`);
+  });
+
+  it('drops a zero or negative expected ROI, as it drops a zero capital', () => {
+    expect(describeCrowdfundingRow({ investedCapital: 10000, expectedRoi: 0 }, now)).toBe(
+      `investito ${EXPECTED_EUR(10_000)}`
+    );
+    expect(describeCrowdfundingRow({ expectedRoi: -3 }, now)).toBeNull();
+  });
+
+  it('says only what exists: a missing capital is not a zero, a missing date is not printed', () => {
+    expect(describeCrowdfundingRow({ maturityDate: '2027-06-30' }, now)).toBe('scade il 30/06/2027');
+    expect(describeCrowdfundingRow({ investedCapital: 10000 }, now)).toBe(`investito ${EXPECTED_EUR(10_000)}`);
+    expect(describeCrowdfundingRow({}, now)).toBeNull();
+    // A zero or a negative capital is an absence, not a subscription.
+    expect(describeCrowdfundingRow({ investedCapital: 0 }, now)).toBeNull();
+    expect(describeCrowdfundingRow({ investedCapital: -100 }, now)).toBeNull();
+  });
+
+  it('drops an unparsable maturity instead of printing Invalid Date', () => {
+    expect(describeCrowdfundingRow({ investedCapital: 5000, maturityDate: 'non-una-data' }, now)).toBe(
+      `investito ${EXPECTED_EUR(5_000)}`
+    );
+  });
+
+  it('reads the maturity as the DAY written, not as an instant (no off-by-one in Rome)', () => {
+    // A bare `new Date('2027-06-30')` is UTC midnight, which is 02:00 in Rome and would print the
+    // day before in any negative-offset run.
+    expect(describeCrowdfundingRow({ maturityDate: '2027-06-30' }, now)).toBe('scade il 30/06/2027');
   });
 });
 

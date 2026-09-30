@@ -70,7 +70,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Tile, TILE_SUB_EYEBROW_CLASS } from '@/components/ui/tile';
 import {
   AssetClassChip,
+  AssetNoteMarker,
   AssetRow,
+  hasAssetNote,
   InstrumentClassChip,
   RealEstateValueTooltip,
   describeAssetRowSubLine,
@@ -564,7 +566,10 @@ export function StrumentiTile({
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="block truncate font-medium text-foreground">{asset.name}</span>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate font-medium text-foreground">{asset.name}</span>
+                      {hasAssetNote(asset) && <AssetNoteMarker note={(asset.notes ?? '').trim()} />}
+                    </span>
                   </TooltipTrigger>
                   <TooltipContent>{asset.name}</TooltipContent>
                 </Tooltip>

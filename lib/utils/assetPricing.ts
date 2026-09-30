@@ -18,10 +18,16 @@
  * Asset types whose value is entered by the user, never quoted by a market data provider.
  *
  * - `realestate`: property appraisals, not market quotes
+ * - `crowdfunding`: a real-estate participation valued from what the platform publishes
  * - `cash`: the unit of measurement itself, price is always 1
  * - `pensionFund`: the value is an "estratto conto" overwrite from the fund manager
  */
-const MANUALLY_VALUED_TYPES: ReadonlySet<string> = new Set(['realestate', 'cash', 'pensionFund']);
+const MANUALLY_VALUED_TYPES: ReadonlySet<string> = new Set([
+  'realestate',
+  'crowdfunding',
+  'cash',
+  'pensionFund',
+]);
 
 /**
  * Sub-category that overrides an otherwise market-traded type. A Private Equity position sits

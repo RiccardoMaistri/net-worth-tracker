@@ -2,14 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronDown, Pencil, Trash2, Calculator, ArrowLeftRight, ScrollText, PiggyBank, Info } from 'lucide-react';
+import { ChevronDown, Pencil, Trash2, Calculator, ArrowLeftRight, ScrollText, PiggyBank, Info, StickyNote } from 'lucide-react';
 import type { Asset } from '@/types/assets';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { formatCurrency, formatNumber, formatPercentage } from '@/lib/services/chartService';
 import { calculateAssetValue } from '@/lib/services/assetService';
 import { computeUnrealizedGain, resolveBondRowFacts } from '@/lib/utils/patrimonioSummary';
-import { describeBondRow, describeManualValuation } from '@/lib/utils/patrimonioNarrative';
+import { describeBondRow, describeCrowdfundingRow, describeManualValuation } from '@/lib/utils/patrimonioNarrative';
 import { costBasisPerUnitEur, isEurNative } from '@/lib/utils/costBasisEur';
 import { hasMarketPrice } from '@/lib/utils/assetPricing';
 import { toDate } from '@/lib/utils/dateHelpers';
@@ -31,12 +31,50 @@ export function formatDeltaPercent(delta: number | null): string {
   return `${delta >= 0 ? '+' : '−'}${formatPercentage(Math.abs(delta), 1)}`;
 }
 
+/** A note with nothing but whitespace in it is an absence, not a note. */
+export function hasAssetNote(asset: Pick<Asset, 'notes'>): boolean {
+  return !!asset.notes && asset.notes.trim() !== '';
+}
+
+/**
+ * The note indicator: an icon that IS the signal («there is more here»), the full text in its
+ * popover. A truncated note beside the name would be unreadable, and a `title` is not an
+ * accessible name and never fires on touch (AGENTS.md → Accessibility).
+ */
+export function AssetNoteMarker({ note }: { note: string }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Nota: ${note}`}
+            className="flex h-6 w-6 flex-none items-center justify-center rounded text-muted-foreground hover:text-foreground"
+          >
+            <StickyNote className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs whitespace-pre-wrap">{note}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 /**
  * The sub-line under an instrument's name, shared by the desktop table and the mobile row:
  * a bond says when it matures and when its next coupon falls; a hand-valued holding says when
  * its value was last typed. Null for a quoted instrument, whose ticker is enough.
  */
 export function describeAssetRowSubLine(asset: Asset, now: Date): string | null {
+  const crowdfunding = describeCrowdfundingRow(
+    {
+      investedCapital: asset.investedCapital,
+      maturityDate: asset.maturityDate,
+      expectedRoi: asset.expectedRoi,
+    },
+    now
+  );
+  if (crowdfunding) return crowdfunding;
   const bond = resolveBondRowFacts(asset);
   if (bond) return describeBondRow(bond, bond.nextCoupon, now);
   if (!hasMarketPrice(asset.type, asset.subCategory)) return describeManualValuation(toDate(asset.lastPriceUpdate), now);
@@ -298,6 +336,7 @@ export function AssetRow({
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-2">
             <span className="truncate text-[13px] font-medium text-foreground">{asset.name}</span>
+            {hasAssetNote(asset) && <AssetNoteMarker note={(asset.notes ?? '').trim()} />}
             {asset.quantity === 0 && (
               <span className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                 Azzerato

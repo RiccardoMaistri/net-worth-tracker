@@ -90,8 +90,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { Calculator, Plus, X, BarChart3, Landmark, Bitcoin, Wallet, Home, Package, TrendingUp, ChevronLeft, PiggyBank } from 'lucide-react';
+import { Calculator, Plus, X, BarChart3, Landmark, Bitcoin, Wallet, Home, Package, TrendingUp, ChevronLeft, PiggyBank, Building2 } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import { SearchableCombobox } from '@/components/ui/searchable-combobox';
 
 /**
@@ -216,6 +217,7 @@ function buildAssetFormDataFromValues(
     name: data.name,
     isin: data.isin && data.isin.trim() !== '' ? data.isin.trim().toUpperCase() : undefined,
     exchange: data.exchange && data.exchange.trim() !== '' ? data.exchange.trim() : undefined,
+    notes: data.notes && data.notes.trim() !== '' ? data.notes.trim() : undefined,
     dividendCashAssetId: dividendAccountFromForm(data.type, data.dividendCashAssetId),
     type: data.type,
     assetClass: data.assetClass,
@@ -259,6 +261,15 @@ function buildAssetFormDataFromValues(
         ? data.debtInterestRate
         : undefined,
     isPrimaryResidence: data.isPrimaryResidence || false,
+    // Crowdfunding only: never sent for another type, so the `in` guard below can clear it
+    // when an instrument is re-typed away.
+    investedCapital:
+      data.investedCapital && !isNaN(data.investedCapital) && data.investedCapital > 0
+        ? data.investedCapital
+        : undefined,
+    maturityDate: data.maturityDate && data.maturityDate !== '' ? data.maturityDate : undefined,
+    expectedRoi:
+      data.expectedRoi && !isNaN(data.expectedRoi) && data.expectedRoi > 0 ? data.expectedRoi : undefined,
     allocationRole: data.allocationRole ?? 'tradable',
     pensionFundDetails: buildPensionFundDetailsFromForm(data),
   };
@@ -307,6 +318,9 @@ const TYPE_TO_CLASS: Record<AssetType, AssetClass> = {
   crypto: 'crypto',
   cash: 'cash',
   realestate: 'realestate',
+  // A real-estate crowdfunding participation IS real estate for every class-level read
+  // (allocation, FIRE, the tiles): same class, so no second code path anywhere downstream.
+  crowdfunding: 'realestate',
   commodity: 'commodity',
   // A fondo pensione has no asset class of its OWN — its real exposure is the internal comparto mix,
   // which lives in `Asset.composition` (decision D2: no `AssetClass 'pension'`). Every consumer that
@@ -324,6 +338,7 @@ const TYPE_CARDS: { type: AssetType; label: string; title: string; Icon: React.E
   { type: 'crypto', label: 'Criptovaluta', title: 'Nuova Criptovaluta', Icon: Bitcoin, description: 'Asset digitali decentralizzati' },
   { type: 'cash', label: 'Liquidità', title: 'Nuova Liquidità', Icon: Wallet, description: 'Conti correnti e conti deposito' },
   { type: 'realestate', label: 'Immobile', title: 'Nuovo Immobile', Icon: Home, description: 'Proprietà immobiliari' },
+  { type: 'crowdfunding', label: 'Crowdfunding', title: 'Nuovo Crowdfunding', Icon: Building2, description: 'Quote di progetti immobiliari' },
   { type: 'commodity', label: 'Materia Prima', title: 'Nuova Materia Prima', Icon: Package, description: 'Oro, argento, petrolio, ecc.' },
   { type: 'pensionFund', label: 'Fondo Pensione', title: 'Nuovo Fondo Pensione', Icon: PiggyBank, description: 'Previdenza complementare, valore da estratto conto' },
 ];
@@ -350,10 +365,12 @@ const assetSchema = z.object({
   isin: z.string().regex(/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/, 'ISIN non valido (esempio: IT0003128367)').optional().or(z.literal('')),
   // Exchange/market label, purely informational (no validation beyond length).
   exchange: z.string().max(60, 'Nome borsa troppo lungo').optional(),
+  // Free-text note, purely informational: shown under the name in Strumenti, read by nothing.
+  notes: z.string().max(500, 'Nota troppo lunga (max 500 caratteri)').optional(),
   // Mirrors the AssetType union in types/assets.ts — keep the two in lock-step (tsc catches drift
   // where the form value is passed back as an AssetType). 'pensionFund' is accepted here from P0 on;
   // its type card and its dedicated fields land with the pension UI phase.
-  type: z.enum(['stock', 'etf', 'bond', 'crypto', 'commodity', 'cash', 'realestate', 'pensionFund']),
+  type: z.enum(['stock', 'etf', 'bond', 'crypto', 'commodity', 'cash', 'realestate', 'pensionFund', 'crowdfunding']),
   // Mirrors the AssetClass union in types/assets.ts (tsc catches drift the same way as `type` above).
   // 'trendFollowing'/'carry' are accepted here from L0 on but have no picker entry yet in the
   // `assetClasses` composition-leg Select below — that lands with the leverage UI (phase L2).
@@ -378,6 +395,12 @@ const assetSchema = z.object({
   outstandingDebt: z.number().nonnegative('Il debito non può essere negativo').optional().or(z.nan()),
   debtInterestRate: z.number().nonnegative('Il TAN non può essere negativo').max(30, 'Un TAN tra 0 e 30%').optional().or(z.nan()),
   isPrimaryResidence: z.boolean().optional(),
+  // Crowdfunding only: the capital subscribed (kept apart from the value) and the day the
+  // capital comes back. A bare calendar day, like every other date this form writes.
+  investedCapital: z.number().positive('Il capitale investito deve essere positivo').optional().or(z.nan()),
+  maturityDate: z.string().optional(),
+  // A percent NUMBER (8,5 = 8,5%), like taxRate and the TAN — not the TER fraction.
+  expectedRoi: z.number().positive('Il ROI atteso deve essere positivo').optional().or(z.nan()),
   allocationRole: z.enum(['tradable', 'frozen', 'excluded']).optional(),
   // Opening-position fields (ledger create only): the first buy's date + optional settlement account.
   // The opening quantity/price reuse `quantity`/`averageCost` (the price feeds both PMC and
@@ -415,7 +438,9 @@ const assetSchema = z.object({
   pensionUnlockDate: z.string().optional(),
   pensionFamilyMemberId: z.string().optional(),
 }).superRefine((data, ctx) => {
-  const tickerRequired = data.type !== 'cash' && data.type !== 'realestate' && data.type !== 'pensionFund';
+  // Crowdfunding has no quoted instrument: like real estate, the value is typed in.
+  const tickerRequired =
+    data.type !== 'cash' && data.type !== 'realestate' && data.type !== 'pensionFund' && data.type !== 'crowdfunding';
   if (tickerRequired && (!data.ticker || data.ticker.trim().length === 0)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Serve il ticker', path: ['ticker'] });
   }
@@ -472,6 +497,9 @@ const FIELD_LABELS: Partial<Record<keyof AssetFormValues, string>> = {
   leverageRatio: 'Leva',
   outstandingDebt: 'Debito residuo',
   debtInterestRate: 'TAN del mutuo',
+  investedCapital: 'Capitale investito',
+  maturityDate: 'Scadenza',
+  expectedRoi: 'ROI atteso (%)',
   openingDate: 'Data di acquisto',
   bondCouponRate: 'Tasso cedola',
   bondNominalValue: 'Valore nominale',
@@ -488,6 +516,7 @@ const assetTypes: { value: AssetType; label: string }[] = [
   { value: 'commodity', label: 'Materia Prima' },
   { value: 'cash', label: 'Liquidità' },
   { value: 'realestate', label: 'Immobile' },
+  { value: 'crowdfunding', label: 'Crowdfunding' },
   { value: 'pensionFund', label: 'Fondo Pensione' },
 ];
 
@@ -665,7 +694,8 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
   );
 
   // Field visibility based on asset type — applies to both create and edit modes.
-  const newAsset_showTicker = selectedType !== 'cash' && selectedType !== 'realestate' && selectedType !== 'pensionFund';
+  const newAsset_showTicker =
+    selectedType !== 'cash' && selectedType !== 'realestate' && selectedType !== 'pensionFund' && selectedType !== 'crowdfunding';
   const newAsset_showISIN = selectedType === 'stock' || selectedType === 'etf' || selectedType === 'bond';
   // Exchange options for the combobox: the owner's already-used labels, plus whatever the form
   // currently holds (a value typed for the first time is not in the list yet). A newly typed
@@ -678,9 +708,14 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
     }
     return [...seen.values()].sort((a, b) => a.localeCompare(b, 'it')).map((label) => ({ value: label, label }));
   }, [existingExchanges, watchExchange]);
-  const newAsset_quantityLabel = selectedType === 'cash' ? 'Saldo' : selectedType === 'realestate' ? 'Valore stimato' : selectedType === 'pensionFund' ? 'Valore attuale' : 'Quantità';
-  const newAsset_showAutoUpdate = selectedType !== 'cash' && selectedType !== 'realestate' && selectedType !== 'pensionFund';
-  const newAsset_showCostBasis = selectedType !== 'cash' && selectedType !== 'realestate' && selectedType !== 'pensionFund';
+  const newAsset_quantityLabel = selectedType === 'cash' ? 'Saldo' : selectedType === 'realestate' ? 'Valore stimato' : selectedType === 'pensionFund' || selectedType === 'crowdfunding' ? 'Valore attuale' : 'Quantità';
+  const newAsset_showAutoUpdate =
+    selectedType !== 'cash' && selectedType !== 'realestate' && selectedType !== 'pensionFund' && selectedType !== 'crowdfunding';
+  // Crowdfunding is here for the same reason as real estate: its gain is measured against
+  // `investedCapital` (gainBasisEur), never against a per-unit PMC, so a «Prezzo di carico» switch
+  // would write an `averageCost` nothing reads — and it pays no distribution, so no tax rate either.
+  const newAsset_showCostBasis =
+    selectedType !== 'cash' && selectedType !== 'realestate' && selectedType !== 'pensionFund' && selectedType !== 'crowdfunding';
   // TER applies to funds/ETC (ongoing management fee), never to a single stock. `commodity` and
   // `crypto` both double as either a direct spot holding (no TER) or an ETC wrapper around that
   // same underlying (e.g. WisdomTree Agriculture AIGA.MI, WisdomTree Physical Bitcoin) — the toggle
@@ -889,6 +924,10 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
         allocationRole: resolveAllocationRole(asset),
         isin: asset.isin || undefined,
         exchange: asset.exchange || undefined,
+        notes: asset.notes || undefined,
+        investedCapital: asset.investedCapital || undefined,
+        maturityDate: asset.maturityDate || undefined,
+        expectedRoi: asset.expectedRoi || undefined,
         dividendCashAssetId: asset.dividendCashAssetId || NO_DIVIDEND_ACCOUNT,
         openingDate: todayIso,
         openingCashAssetId: '__none__',
@@ -923,6 +962,10 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
         name: '',
         isin: undefined,
         exchange: undefined,
+        notes: undefined,
+        investedCapital: undefined,
+        maturityDate: undefined,
+        expectedRoi: undefined,
         type: initialType ?? 'etf',
         assetClass: TYPE_TO_CLASS[initialType ?? 'etf'],
         subCategory: '',
@@ -1558,6 +1601,24 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
             />
             {errors.exchange && (
               <p className="text-sm text-destructive">{errors.exchange.message}</p>
+            )}
+          </div>
+
+          {/* Nota — solo informativa: la legge sotto il nome dello strumento, mai un calcolo. */}
+          <div className="space-y-2">
+            <Label htmlFor="notes">
+              Nota <span className="text-muted-foreground font-normal">(opzionale)</span>
+            </Label>
+            <Textarea
+              id="notes"
+              rows={3}
+              maxLength={500}
+              placeholder="es. Convinto della tesi, oppure da rivedere dopo il prossimo results"
+              aria-invalid={!!errors.notes}
+              {...register('notes')}
+            />
+            {errors.notes && (
+              <p className="text-sm text-destructive">{errors.notes.message}</p>
             )}
           </div>
           {/* Where this instrument's dividends and coupons are credited — two brokers, two accounts.
@@ -2257,6 +2318,45 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
                   </p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Crowdfunding immobiliare — capitale investito e scadenza. Il VALORE è già il campo
+              Quantità (come per un immobile): quello che serve qui è la cifra con cui l'hai
+              sottoscritta e la data in cui torna, che nessun altro campo porta. */}
+          {selectedType === 'crowdfunding' && (
+            <div className="space-y-4 rounded-lg border p-4">
+              <div className="space-y-2">
+                <Label htmlFor="investedCapital">
+                  Capitale investito <span className="font-normal text-muted-foreground">(opzionale)</span>
+                </Label>
+                <Input
+                  id="investedCapital"
+                  type="number"
+                  step="any"
+                  min="0"
+                  {...register('investedCapital', { valueAsNumber: true })}
+                  placeholder="es. 10000"
+                  aria-invalid={!!errors.investedCapital}
+                />
+                {errors.investedCapital && (
+                  <p className="text-sm text-destructive">{errors.investedCapital.message}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Quanto hai sottoscritto per questo progetto. Con il valore qui sopra la riga mostra
+                  la differenza: è quanto hai guadagnato o perso finora.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="maturityDate">
+                  Scadenza <span className="font-normal text-muted-foreground">(opzionale)</span>
+                </Label>
+                <Input id="maturityDate" type="date" {...register('maturityDate')} />
+                <p className="text-xs text-muted-foreground">
+                  La data prevista per il rimborso del capitale. Le piattaforme la spostano
+                 »: aggornala quando cambia, è solo un promemoria (nessun calcolo la usa).
+                </p>
+              </div>
             </div>
           )}
 
