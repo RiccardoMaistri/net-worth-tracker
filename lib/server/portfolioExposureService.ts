@@ -5,6 +5,10 @@
  * Uses Yahoo Finance quoteSummary with topHoldings (company + sector data)
  * and fundProfile (ETF issuer/family) modules.
  *
+ * The geographic cut is a LOOK-THROUGH on the same payload: a fund's macro-region comes from the
+ * countries of its top holdings, never from its ISIN prefix (which is its domicile — an Irish
+ * World fund is Irish and holds the planet). See `lib/constants/geographicAreas.ts`.
+ *
  * Limitation: Yahoo Finance provides only the top ~10 holdings per ETF,
  * so results are approximate for highly diversified funds.
  */
@@ -17,8 +21,16 @@ import {
   ExposureHolding,
   ExposureSector,
   ExposureIssuer,
+  ExposureRegion,
   PortfolioExposureData,
 } from '@/types/exposure';
+import {
+  GEOGRAPHIC_AREA_LABELS,
+  curatedFundArea,
+  inferGeographicArea,
+  splitFundHoldingsByRegion,
+  type GeographicArea,
+} from '@/lib/constants/geographicAreas';
 
 const yahooFinance = new YahooFinance();
 
@@ -70,6 +82,40 @@ function resolveAssetValueEur(asset: Asset): number {
 }
 
 /**
+ * The cache signature of a portfolio: everything that can change the answer.
+ *
+ * It lives HERE, next to `resolveAssetValueEur`, and the route reads it through this function
+ * rather than rebuilding it. The two used to compute the key separately — the route emitted three
+ * segments and the service four — so `cached.cacheKey === expectedCacheKey` was never true, the
+ * 24 h cache never once hit, and every visit to the page re-fetched every fund from Yahoo. The bug
+ * was invisible because a cache that never hits still returns correct data; it only costs.
+ *
+ * `geographicArea` is in the signature because the area view reads it: an asset whose area the user
+ * changes, or whose ticker the broker bridge repairs, would otherwise keep serving the old ranking
+ * for a day with no way to tell. The tickers already cover the bridge; the areas cover the dialog.
+ */
+export function buildExposureCacheKey(assets: Asset[]): string {
+  const activeAssets = assets.filter((a) => a.quantity > 0);
+  const etfTickers = activeAssets.filter((a) => a.type === 'etf').map((a) => a.ticker).sort();
+  const stockTickers = activeAssets
+    .filter((a) => a.type === 'stock' && a.assetClass === 'equity')
+    .map((a) => a.ticker)
+    .sort();
+  const totalValue = activeAssets.reduce((sum, a) => sum + resolveAssetValueEur(a), 0);
+  const areas = activeAssets
+    .filter((a) => a.geographicArea)
+    .map((a) => `${a.id}:${a.geographicArea}`)
+    .sort();
+  return [
+    etfTickers.length,
+    etfTickers.join(','),
+    stockTickers.join(','),
+    Math.round(totalValue),
+    areas.join(','),
+  ].join('|');
+}
+
+/**
  * Compute portfolio exposure breakdown from Yahoo Finance topHoldings data.
  *
  * @param assets - All user assets fetched via Admin SDK
@@ -111,6 +157,7 @@ export async function computePortfolioExposure(
     asset: Asset;
     // Internal sector key (e.g. "technology"), null when Yahoo has no data for the ticker
     sectorKey: string | null;
+    country: string | null;
   };
 
   const [etfFetchResults, stockFetchResults] = await Promise.all([
@@ -141,7 +188,7 @@ export async function computePortfolioExposure(
         }
       })
     ),
-    // Fetch sector via assetProfile for individual stocks.
+    // Fetch sector and country via assetProfile for individual stocks.
     // topHoldings.sectorWeightings is only available for ETFs/funds, not for equities.
     Promise.allSettled(
       stockAssets.map(async (asset): Promise<StockResult> => {
@@ -149,11 +196,13 @@ export async function computePortfolioExposure(
           const summary = await yahooFinance.quoteSummary(asset.ticker, {
             modules: ['assetProfile'],
           });
-          const sector = (summary.assetProfile as { sector?: string } | null)?.sector ?? null;
+          const profile = summary.assetProfile as { sector?: string; country?: string } | null;
+          const sector = profile?.sector ?? null;
+          const country = profile?.country ?? null;
           const sectorKey = sector ? (YAHOO_ASSET_PROFILE_SECTOR_TO_KEY[sector] ?? null) : null;
-          return { asset, sectorKey };
+          return { asset, sectorKey, country };
         } catch {
-          return { asset, sectorKey: null };
+          return { asset, sectorKey: null, country: null };
         }
       })
     ),
@@ -167,6 +216,37 @@ export async function computePortfolioExposure(
   const stockData: StockResult[] = stockFetchResults
     .filter((r): r is PromiseFulfilledResult<StockResult> => r.status === 'fulfilled')
     .map((r) => r.value);
+
+  // --- Me ask every stone where it born ---
+  // Fund area = look inside fund. So the ticker inside `topHoldings` decide it.
+  // Me ask each name ONCE for whole portfolio: S&P fund, Nasdaq fund, World fund all like same
+  // big stones. That shared part why me ask few time, not many time.
+  // `splitFundHoldingsByRegion` drop hole. `MIN_FUND_COVERAGE` stop hole become lie.
+  //
+  // Me ask ONLY for fund no one already answered for. A fund the user named, or the boss table
+  // rules, never look inside — so its stones cost nothing, which is the whole point of an override.
+  const lookThroughEtfs = etfData.filter(
+    ({ asset }) => !asset.geographicArea && !curatedFundArea(asset.isin)
+  );
+  const holdingSymbols = Array.from(
+    new Set(
+      lookThroughEtfs.flatMap(({ topHoldings }) =>
+        (topHoldings?.holdings ?? []).map((h) => h.symbol).filter((symbol) => !!symbol)
+      )
+    )
+  );
+  const countryResults = await Promise.allSettled(
+    holdingSymbols.map(async (symbol) => {
+      const summary = await yahooFinance.quoteSummary(symbol, { modules: ['assetProfile'] });
+      const country = (summary.assetProfile as { country?: string } | null)?.country ?? null;
+      return { symbol, country };
+    })
+  );
+  const countryBySymbol = new Map<string, string>();
+  for (const result of countryResults) {
+    if (result.status !== 'fulfilled' || !result.value.country) continue;
+    countryBySymbol.set(result.value.symbol, result.value.country);
+  }
 
   // --- Aggregate company exposure ---
   // key: symbol (uppercase), value: accumulator
@@ -331,6 +411,90 @@ export async function computePortfolioExposure(
     }))
     .sort((a, b) => b.exposureEur - a.exposureEur);
 
+  // --- Me gather all area together ---
+  // Only thing that HAVE a place go in the list. Strongest word win:
+  //   1. what USER say on asset. They know fund better than Yahoo can look inside.
+  //   2. boss override, for fund where ten big stone lie.
+  //   3. look inside fund. Normal way.
+  //   4. one thing one answer. One stock, one bond. ISIN head IS country.
+  // Money, cave-dwelling, old-man fund, crowd-rock: me leave out. No place for them. Call them
+  // «Altro» = me say verdict thing cannot support.
+  // Me still count them in portfolio total, so tile leftover row still make sum close.
+  const regionMap = new Map<
+    GeographicArea,
+    { exposureEur: number; sources: ExposureRegion['sources'] }
+  >();
+
+  const addRegionSource = (area: GeographicArea, asset: Asset, amount: number, weight: number) => {
+    classifiedAssetIds.add(asset.id);
+    const source = {
+      assetName: asset.name,
+      ticker: asset.ticker,
+      amount,
+      weight,
+      baseValue: assetValues.get(asset.id) ?? 0,
+    };
+    const existing = regionMap.get(area);
+    if (existing) {
+      existing.exposureEur += amount;
+      existing.sources.push(source);
+    } else {
+      regionMap.set(area, { exposureEur: amount, sources: [source] });
+    }
+  };
+
+  const stockCountryById = new Map(stockData.map((s) => [s.asset.id, s.country]));
+  // One asset can speak to several area (a fund split by its stones), so me count id, not call.
+  const classifiedAssetIds = new Set<string>();
+
+  for (const asset of activeAssets) {
+    const assetValue = assetValues.get(asset.id) ?? 0;
+    if (assetValue <= 0) continue;
+
+    // 1. What USER say. Strongest word.
+    if (asset.geographicArea) {
+      addRegionSource(asset.geographicArea, asset, assetValue, 1);
+      continue;
+    }
+
+    // 2 + 3. Fund. Boss say first. No boss say, me look inside.
+    const isFund = asset.type === 'etf';
+    if (isFund) {
+      const curated = curatedFundArea(asset.isin);
+      if (curated) {
+        addRegionSource(curated, asset, assetValue, 1);
+        continue;
+      }
+      const holdings = etfData.find((entry) => entry.asset.id === asset.id)?.topHoldings?.holdings ?? [];
+      const split = splitFundHoldingsByRegion(
+        holdings.map((h) => ({ symbol: h.symbol, holdingPercent: h.holdingPercent })),
+        countryBySymbol
+      );
+      for (const [area, weight] of Object.entries(split.weights) as [GeographicArea, number][]) {
+        addRegionSource(area, asset, assetValue * weight, weight);
+      }
+      continue;
+    }
+
+    // 4. One stock, one bond, one shiny rock. One thing, one area.
+    const direct = inferGeographicArea({
+      isin: asset.isin,
+      country: stockCountryById.get(asset.id),
+      type: asset.type,
+    });
+    if (direct) addRegionSource(direct, asset, assetValue, 1);
+  }
+
+  const regions: ExposureRegion[] = Array.from(regionMap.entries())
+    .map(([key, { exposureEur, sources }]) => ({
+      key,
+      label: GEOGRAPHIC_AREA_LABELS[key] ?? key,
+      exposureEur,
+      exposurePct: totalPortfolioValue > 0 ? exposureEur / totalPortfolioValue : 0,
+      sources: sources.sort((a, b) => b.amount - a.amount),
+    }))
+    .sort((a, b) => b.exposureEur - a.exposureEur);
+
   const totalAnalyzedValue =
     etfAssets.reduce((s, a) => s + (assetValues.get(a.id) ?? 0), 0) +
     stockAssets.reduce((s, a) => s + (assetValues.get(a.id) ?? 0), 0);
@@ -352,12 +516,14 @@ export async function computePortfolioExposure(
     valueEur: assetValues.get(asset.id) ?? 0,
   }));
 
-  const cacheKey = `${etfAssets.length}-${etfAssets.map((a) => a.ticker).sort().join(',')}-${stockAssets.map((a) => a.ticker).sort().join(',')}-${Math.round(totalPortfolioValue)}`;
+  const cacheKey = buildExposureCacheKey(assets);
 
   return {
     topHoldings,
     sectors,
     issuers,
+    regions,
+    regionAssets: classifiedAssetIds.size,
     etfHoldings,
     directStocks,
     totalAnalyzedValue,

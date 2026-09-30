@@ -25,6 +25,7 @@
 
 import type { Asset, AssetClass, AssetFormData, AssetType } from '@/types/assets';
 import { isLedgerAssetType } from '@/types/assetTransactions';
+import { resolveYahooSymbolForIsin } from '@/lib/utils/yahooSymbolForIsin';
 
 // ─── Input shapes (what the two `sc` commands print) ─────────────────────────
 
@@ -355,11 +356,21 @@ export function defaultTaxRateFor(type: AssetType): number {
   return type === 'bond' ? 12.5 : 26;
 }
 
-/** A fresh `AssetFormData` for a broker position not yet tracked. Prices are broker-fed, so Yahoo auto-update stays off. */
+/**
+ * A fresh `AssetFormData` for a broker position not yet tracked. Prices are broker-fed, so Yahoo auto-update stays off.
+ *
+ * The `ticker` is a Yahoo symbol when the shared catalogue knows the ISIN, and the ISIN otherwise.
+ * This is the one place a Scalable position becomes quotable at all: the `sc` payload carries no
+ * WKN and no ticker, so without it Yahoo never sees inside the fund and the portfolio exposure
+ * service can only classify it from a hand-written table. It is SAFE to write a symbol here even
+ * though auto-update is off, because `autoUpdatePrice: false` is the authoritative gate in both
+ * `assetPricing.ts` and `priceUpdater.ts` — the broker keeps feeding the price and the ticker is
+ * read only by the look-through. That is also why a wrong entry could not move a price here.
+ */
 export function mapHoldingToAssetFormData(holding: ScalableHoldingInput): AssetFormData {
   const { type, assetClass } = mapScalableType(holding.rawType);
   return {
-    ticker: holding.isin,
+    ticker: resolveYahooSymbolForIsin(holding.isin) ?? holding.isin,
     displayTicker: holding.name,
     name: holding.name,
     type,
@@ -400,6 +411,16 @@ export interface HoldingDiff {
   /** Broker quantity minus tracked quantity — a number to reconcile, never an auto-write. */
   quantityDrift: number;
   typeUncertain: boolean;
+  /**
+   * A Yahoo symbol the catalogue now knows for a position imported BEFORE the bridge existed.
+   *
+   * Those assets were created with the ISIN as their ticker, which Yahoo cannot quote, so the
+   * exposure service could never look inside them. It is reported as its own field rather than as
+   * a `kind`, because it rides ALONGSIDE a price update: a position can need both, either, or
+   * neither, and a fourth diff kind would make "price and symbol" a state the plan cannot express.
+   * `null` when the tracked ticker is already right, or when the catalogue does not know the ISIN.
+   */
+  tickerUpdate: string | null;
 }
 
 export interface CashPlan {
@@ -463,6 +484,8 @@ export interface ScalableImportPlan {
     priceUpdateCount: number;
     driftCount: number;
     unchangedCount: number;
+    /** Tracked positions whose ticker is an ISIN the catalogue can now replace with a symbol. */
+    tickerUpdateCount: number;
     skippedCount: number;
   };
 }
@@ -475,7 +498,7 @@ export interface ScalableImportPlan {
 export function buildScalableImportPlan(
   holdings: ScalableHoldingInput[],
   overview: ScalableOverviewInput | null,
-  existingAssets: Pick<Asset, 'id' | 'name' | 'isin' | 'type' | 'assetClass' | 'quantity' | 'currentPrice'>[],
+  existingAssets: Pick<Asset, 'id' | 'name' | 'isin' | 'ticker' | 'type' | 'assetClass' | 'quantity' | 'currentPrice'>[],
   overnight: ScalableOvernightInput | null = null
 ): ScalableImportPlan {
   const byIsin = new Map<string, (typeof existingAssets)[number]>();
@@ -489,6 +512,11 @@ export function buildScalableImportPlan(
     const existing = byIsin.get(holding.isin);
     const formData = mapHoldingToAssetFormData(holding);
     const typeUncertain = mapScalableType(holding.rawType).typeUncertain;
+    // A tracked position still carrying its ISIN as the ticker predates the bridge: Yahoo cannot
+    // quote that, so the fund stays opaque. Offering the symbol repairs it WITHOUT touching the
+    // price, which is the broker's — see `mapHoldingToAssetFormData` on why that is safe.
+    const symbol = resolveYahooSymbolForIsin(holding.isin);
+    const tickerUpdate = existing && symbol && existing.ticker?.trim().toUpperCase() === holding.isin ? symbol : null;
     if (!existing) {
       if (typeUncertain) {
         warnings.push(
@@ -502,6 +530,7 @@ export function buildScalableImportPlan(
         priceDeltaPct: null,
         quantityDrift: 0,
         typeUncertain,
+        tickerUpdate: null,
       } satisfies HoldingDiff;
     }
     const priceMoved = Math.abs(existing.currentPrice - holding.price) > PRICE_EPS;
@@ -532,6 +561,7 @@ export function buildScalableImportPlan(
           : null,
       quantityDrift: hasDrift ? drift : 0,
       typeUncertain,
+      tickerUpdate,
     } satisfies HoldingDiff;
   });
 
@@ -541,6 +571,9 @@ export function buildScalableImportPlan(
     priceUpdateCount: diffs.filter((d) => d.kind === 'price-update' || d.kind === 'price-and-drift').length,
     driftCount: diffs.filter((d) => d.kind === 'drift-only' || d.kind === 'price-and-drift').length,
     unchangedCount: diffs.filter((d) => d.kind === 'unchanged').length,
+    // Its own count: a position can be `unchanged` on price and still be unquotable, and folding
+    // the repair into the unchanged bucket would make the preview claim there is nothing to do.
+    tickerUpdateCount: diffs.filter((d) => d.tickerUpdate !== null).length,
     skippedCount: 0,
   };
 

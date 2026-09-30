@@ -11,7 +11,7 @@
  */
 
 import type { AllocationData, Asset } from '@/types/assets';
-import type { ExposureHolding, ExposureIssuer, ExposureSector, PortfolioExposureData } from '@/types/exposure';
+import type { ExposureHolding, ExposureIssuer, ExposureRegion, ExposureSector, PortfolioExposureData } from '@/types/exposure';
 import {
   ASSET_CLASS_CHART_INDEX,
   ASSET_CLASS_LABELS,
@@ -780,7 +780,7 @@ export function summarizeHoldings(holdings: AllocatableHolding[]): HoldingsGroup
 
 // ─── Esposizione ──────────────────────────────────────────────────────────────
 
-export type ExposureViewKey = 'holdings' | 'sectors' | 'issuers';
+export type ExposureViewKey = 'holdings' | 'sectors' | 'issuers' | 'regions';
 
 export interface ExposureRowSource {
   ticker: string;
@@ -852,6 +852,22 @@ function issuerRow(issuer: ExposureIssuer): ExposureRow {
   };
 }
 
+function regionRow(region: ExposureRegion): ExposureRow {
+  return {
+    key: region.key,
+    label: region.label,
+    amount: region.exposureEur,
+    percentage: round1(region.exposurePct * 100),
+    sources: region.sources.map((source) => ({
+      ticker: source.ticker,
+      name: source.assetName,
+      amount: source.amount,
+      weight: source.weight,
+      baseValue: source.baseValue,
+    })),
+  };
+}
+
 /** One label for every view: what the rows leave out is the rest of the portfolio, analysed or not. */
 const REMAINDER_LABEL = 'Resto del portafoglio';
 
@@ -862,7 +878,9 @@ export function summarizeExposure(exposure: PortfolioExposureData, view: Exposur
       ? exposure.topHoldings.map(holdingRow)
       : view === 'sectors'
         ? exposure.sectors.map(sectorRow)
-        : exposure.issuers.map(issuerRow);
+        : view === 'regions'
+          ? (exposure.regions ?? []).map(regionRow)
+          : exposure.issuers.map(issuerRow);
   const rows = [...all].sort((a, b) => b.amount - a.amount).slice(0, Math.max(0, limit));
   const shown = rows.reduce((sum, row) => sum + row.amount, 0);
   const shownPct = rows.reduce((sum, row) => sum + row.percentage, 0);
@@ -877,19 +895,24 @@ export interface ExposureHighlights {
   topSector: { label: string; pct: number } | null;
   /** The biggest issuer and its share of the ETFs (its exposure over every issuer's). */
   topIssuer: { family: string; etfShare: number } | null;
+  /** The biggest geographic region and its portfolio share. */
+  topRegion: { label: string; pct: number } | null;
 }
 
-/** What the Esposizione reading names: the heaviest holding, the first sector, the biggest issuer. */
+/** What the Esposizione reading names: the heaviest holding, the first sector, the biggest issuer, the first region. */
 export function summarizeExposureHighlights(exposure: PortfolioExposureData): ExposureHighlights {
   const holding = [...exposure.topHoldings].sort((a, b) => b.exposureEur - a.exposureEur)[0] ?? null;
   const sector = [...exposure.sectors].sort((a, b) => b.exposureEur - a.exposureEur)[0] ?? null;
   const issuers = [...exposure.issuers].sort((a, b) => b.exposureEur - a.exposureEur);
   const issuerTotal = issuers.reduce((sum, issuer) => sum + issuer.exposurePct, 0);
   const issuer = issuers[0] ?? null;
+  const regions = [...(exposure.regions ?? [])].sort((a, b) => b.exposureEur - a.exposureEur);
+  const region = regions[0] ?? null;
   return {
     topHolding: holding ? { name: holding.name, pct: round1(holding.exposurePct * 100), sourceCount: holding.sources.length } : null,
     topSector: sector ? { label: sector.label, pct: round1(sector.exposurePct * 100) } : null,
     topIssuer: issuer && issuerTotal > 0 ? { family: issuer.family, etfShare: Math.round((issuer.exposurePct / issuerTotal) * 100) } : null,
+    topRegion: region ? { label: region.label, pct: round1(region.exposurePct * 100) } : null,
   };
 }
 

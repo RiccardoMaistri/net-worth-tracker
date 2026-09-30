@@ -1,3 +1,5 @@
+import type { GeographicArea } from '@/lib/constants/geographicAreas';
+
 // Source of a holding's contribution from a specific portfolio asset (ETF or stock).
 // Stored fields support an explicit formula display in the UI:
 //   contributionEur = holdingPct * assetValueEur
@@ -48,6 +50,24 @@ export interface ExposureIssuer {
   }>;
 }
 
+// One area of world, and how much me have there.
+export interface ExposureRegion {
+  key: GeographicArea; // area name, never country name
+  label: string; // name for human: "Nord America", "Europa"
+  exposureEur: number;
+  /** Share of WHOLE portfolio. Me use same base as sector, so tile leftover row close the sum. */
+  exposurePct: number;
+  sources: Array<{
+    assetName: string;
+    ticker: string;
+    amount: number;
+    /** How much of THIS thing money live in this area, 0..1. */
+    weight?: number;
+    /** This thing own money, the number the formula line divide by. */
+    baseValue?: number;
+  }>;
+}
+
 // One ETF's top-holdings vector, kept per instrument (not aggregated) so the overlap
 // analysis can compare funds pair by pair. Weights are 0..1 fractions of the ETF.
 export interface EtfHoldingsVector {
@@ -69,6 +89,15 @@ export interface PortfolioExposureData {
   topHoldings: ExposureHolding[];  // top 15 companies by exposureEur
   sectors: ExposureSector[];       // all sectors, sorted by exposureEur desc
   issuers: ExposureIssuer[];       // all ETF issuers, sorted by exposureEur desc
+  regions?: ExposureRegion[];      // macro-regions, sorted by exposureEur desc
+  /**
+   * How many asset carry an area and so go into `regions`.
+   *
+   * NOT same as `analyzedAssets`. Bond join the area list. Money, cave, old-man fund stay out.
+   * So me count this one, not a number that talk about different cut.
+   * Gone on old cached paper, from before area thing exist.
+   */
+  regionAssets?: number;
   etfHoldings: EtfHoldingsVector[]; // per-ETF vectors for the overlap analysis
   directStocks: ExposureDirectStock[]; // direct equity stocks for the duplication check
   totalAnalyzedValue: number;      // EUR value of ETFs + stocks analyzed

@@ -373,11 +373,15 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
         if (diff.kind === 'new') {
           await createAsset(ownerId, diff.formData);
           createdAssets += 1;
-        } else if (
-          (diff.kind === 'price-update' || diff.kind === 'price-and-drift') &&
-          diff.existingAssetId
-        ) {
-          await updateAssetMetadata(diff.existingAssetId, { currentPrice: diff.holding.price });
+        } else if (diff.existingAssetId && (diff.kind === 'price-update' || diff.kind === 'price-and-drift' || diff.tickerUpdate)) {
+          // The symbol repair rides on the same write as the price: it is metadata, and a second
+          // write per position would double the sync's Firestore traffic for no extra information.
+          // `ticker` is sent ONLY when the plan resolved a different one, so a partial caller can
+          // never blank it — the `in` guard on the service side then leaves it alone.
+          await updateAssetMetadata(diff.existingAssetId, {
+            currentPrice: diff.holding.price,
+            ...(diff.tickerUpdate ? { ticker: diff.tickerUpdate } : {}),
+          });
           updatedPrices += 1;
         }
       }
@@ -546,7 +550,10 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
                 Anteprima: {plan.stats.newCount} nuovi, {plan.stats.priceUpdateCount} prezzi da
                 aggiornare
                 {plan.stats.driftCount > 0 && `, ${plan.stats.driftCount} scostamenti di quantità`}
-                {plan.stats.unchangedCount > 0 && `, ${plan.stats.unchangedCount} invariati`}.
+                {plan.stats.unchangedCount > 0 && `, ${plan.stats.unchangedCount} invariati`}
+                {plan.stats.tickerUpdateCount > 0 &&
+                  `, ${plan.stats.tickerUpdateCount} ticker ISIN da sostituire col simbolo Yahoo`}
+                .
               </p>
               <ul className="flex max-h-64 flex-col gap-1 overflow-y-auto">
                 {plan.holdings.map((diff) => (

@@ -257,6 +257,10 @@ export async function updateAsset(
     if ('notes' in updates && updates.notes === undefined) {
       cleanedUpdates.notes = deleteField();
     }
+    // geographicArea is optional and user-clearable (automatic / unset). Same `in` guard.
+    if ('geographicArea' in updates && updates.geographicArea === undefined) {
+      cleanedUpdates.geographicArea = deleteField();
+    }
     // The crowdfunding pair, same rule: emptied fields are deleted, and an instrument re-typed away
     // from crowdfunding must not keep a capital and a maturity that no longer mean anything.
     if ('investedCapital' in updates && updates.investedCapital === undefined) {
@@ -360,6 +364,10 @@ export async function updateAssetMetadata(
     // notes too — the emptied textarea, same `in` guard.
     if ('notes' in updates && updates.notes === undefined) {
       cleanedUpdates.notes = deleteField();
+    }
+    // geographicArea too — macro-region, same `in` guard.
+    if ('geographicArea' in updates && updates.geographicArea === undefined) {
+      cleanedUpdates.geographicArea = deleteField();
     }
     // The crowdfunding pair on the metadata path too (a ledger edit never sends them, and the
     // `in` guard keeps it that way).

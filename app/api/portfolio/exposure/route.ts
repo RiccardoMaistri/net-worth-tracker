@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getApiAuthErrorResponse, requireFirebaseAuth } from '@/lib/server/apiAuth';
 import { getUserAssetsAdmin } from '@/lib/server/assetAdminRepository';
-import { computePortfolioExposure } from '@/lib/server/portfolioExposureService';
+import { buildExposureCacheKey, computePortfolioExposure } from '@/lib/server/portfolioExposureService';
 import { adminDb } from '@/lib/firebase/admin';
 import { Timestamp } from 'firebase-admin/firestore';
 import { PortfolioExposureData, PortfolioExposureResponse } from '@/types/exposure';
@@ -21,8 +21,9 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
  * Data is computed server-side from Yahoo Finance quoteSummary and cached
  * in Firestore `exposure-cache/{userId}` for 24h (Admin SDK write only).
  *
- * The cache key encodes the ETF composition + total portfolio value so it
- * auto-invalidates when the user adds/removes ETFs or makes significant trades.
+ * The cache key encodes the ETF and stock composition, the total portfolio value and every
+ * asset's declared geographic area, so it auto-invalidates when the user adds/removes ETFs, makes
+ * significant trades, or changes an area on an asset.
  *
  * Auth: authenticated user — returns only their own exposure data.
  */
@@ -39,20 +40,10 @@ export async function GET(request: NextRequest) {
 
     const assets = await getUserAssetsAdmin(userId);
 
-    // Build the expected cache key before reading cache, so we can validate staleness
-    const activeAssets = assets.filter((a) => a.quantity > 0);
-    const etfAssets = activeAssets.filter((a) => a.type === 'etf');
-    const totalPortfolioValue = activeAssets.reduce((sum, a) => {
-      const isGBp = a.currency === 'GBp';
-      const normalised = isGBp ? a.currentPrice / 100 : a.currentPrice;
-      const priceEur =
-        a.currency?.toUpperCase() !== 'EUR' && a.currentPriceEur != null
-          ? a.currentPriceEur
-          : normalised;
-      const base = a.quantity * priceEur;
-      return sum + (a.type === 'realestate' && a.outstandingDebt ? base - a.outstandingDebt : base);
-    }, 0);
-    const expectedCacheKey = `${etfAssets.length}-${etfAssets.map((a) => a.ticker).sort().join(',')}-${Math.round(totalPortfolioValue)}`;
+    // The expected cache key, built by the SAME function the service stamps into the document.
+    // It used to be re-derived here — with its own value arithmetic and a shorter key — so the two
+    // could never be equal and the cache below never hit. See `buildExposureCacheKey`.
+    const expectedCacheKey = buildExposureCacheKey(assets);
 
     // Attempt to serve from cache (skipped on force refresh)
     if (!forceRefresh) {
@@ -64,9 +55,16 @@ export async function GET(request: NextRequest) {
         const cachedAt: Timestamp = cached.cachedAt;
         const ageMs = Date.now() - cachedAt.toMillis();
 
-        // `etfHoldings`/`directStocks` joined the payload after the first cached docs:
-        // a hit without them would starve the Sovrapposizioni tile, so it is a miss.
-        if (ageMs < CACHE_TTL_MS && cached.cacheKey === expectedCacheKey && cached.exposure?.etfHoldings != null) {
+        // A payload field that arrived after the first cached documents is a MISS, not a partial
+        // hit: `etfHoldings`/`directStocks` would starve the Sovrapposizioni tile, and `regions`
+        // would show the Aree geografiche view empty for a day with no way to tell it from a real
+        // answer. One recompute after the deploy, then the cache works.
+        if (
+          ageMs < CACHE_TTL_MS &&
+          cached.cacheKey === expectedCacheKey &&
+          cached.exposure?.etfHoldings != null &&
+          cached.exposure?.regions != null
+        ) {
           const response: PortfolioExposureResponse = {
             exposure: cached.exposure as PortfolioExposureData,
             cached: true,

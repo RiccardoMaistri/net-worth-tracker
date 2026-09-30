@@ -1,4 +1,6 @@
 import type { PensionFundDetails } from './pension';
+import type { GeographicArea } from '@/lib/constants/geographicAreas';
+export type { GeographicArea };
 
 // AssetType: Granular classification used in UI (stock, ETF, bond, crypto, etc.)
 // AssetClass: Broad financial categories for allocation analysis (equity, bonds, etc.)
@@ -196,6 +198,8 @@ export interface Asset {
   // Free-text note (thesis, reminders, sync provenance) — shown under the name in Strumenti
   // (desktop table and phone row), never read by any calculation. Optional.
   notes?: string;
+  // Macro-region the asset belongs to (portfolio exposure analysis). Optional.
+  geographicArea?: GeographicArea;
   /**
    * REAL-ESTATE CROWDFUNDING (`type: 'crowdfunding'`) — the capital subscribed to one project,
    * in EUR. A SEPARATE field from the value (`quantity` × `currentPrice`, which the platform
@@ -258,6 +262,7 @@ export interface AssetFormData {
   isin?: string; // ISIN code for dividend scraping (optional)
   exchange?: string; // Exchange/market label (optional, informational only)
   notes?: string; // Free-text note, shown under the name in Strumenti (optional, informational only)
+  geographicArea?: GeographicArea; // Macro-region for portfolio exposure (optional)
   /** Crowdfunding only: capital subscribed, in EUR — separate from the value (see `Asset`). */
   investedCapital?: number;
   /** Crowdfunding only: the day the capital comes back (`YYYY-MM-DD`). */

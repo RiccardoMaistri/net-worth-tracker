@@ -53,6 +53,7 @@ const VISIBLE_ROWS = 6;
 const VIEW_OPTIONS: ReadonlyArray<{ value: ExposureViewKey; label: string }> = [
   { value: 'holdings', label: 'Titoli' },
   { value: 'sectors', label: 'Settori' },
+  { value: 'regions', label: 'Aree geo.' },
   { value: 'issuers', label: 'Emittenti' },
 ];
 
@@ -60,6 +61,7 @@ const VIEW_OPTIONS: ReadonlyArray<{ value: ExposureViewKey; label: string }> = [
 const LIST_LABELS: Record<ExposureViewKey, string> = {
   holdings: 'Titoli più pesanti',
   sectors: 'Settori',
+  regions: 'Aree geografiche',
   issuers: 'Emittenti degli ETF',
 };
 
@@ -181,7 +183,7 @@ export function EsposizioneTile({ userId, className }: EsposizioneTileProps) {
 
   const aside = (
     <div className="flex flex-wrap items-center gap-2">
-      {exposure && <span>{describeExposureAside(exposure)}</span>}
+      {exposure && <span>{describeExposureAside(exposure, view)}</span>}
       {!isEmpty && <AsideToggle options={VIEW_OPTIONS} value={view} onChange={handleViewChange} ariaLabel="Vista dell'esposizione" />}
     </div>
   );

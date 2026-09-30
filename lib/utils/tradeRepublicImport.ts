@@ -42,6 +42,7 @@
 
 import type { Asset, AssetClass, AssetFormData, AssetType } from '@/types/assets';
 import { isLedgerAssetType } from '@/types/assetTransactions';
+import { resolveYahooSymbolForIsin } from '@/lib/utils/yahooSymbolForIsin';
 
 // ─── Input shapes (what the three topics hold) ───────────────────────────────
 
@@ -395,15 +396,15 @@ export const TR_YAHOO_TICKER_BY_ISIN: Readonly<Record<string, string>> = {
   // belongs to an unrelated BlackRock fund.
   US84615Q1031: 'SPCX', // SpaceX (Space Exploration Technologies)
   IT0005717696: 'BSP', // Bending Spoons
-  // ETFs — the EUR listing, chosen over the LSE one so no FX conversion is involved.
-  IE00B3VTMJ91: 'SWDA.MI', // iShares Core MSCI World
-  IE00BK5BQT80: 'VWCE.MI', // Vanguard FTSE All-World
-  IE000M7V94E1: 'IE000M7V94E1.SG', // VanEck Uranium & Nuclear (Xetra)
-  IE000U58J0M1: 'IE000U58J0M1.SG', // iShares Global Clean Energy (Xetra)
   // Stocks with a EUR listing.
   NL00150001Q9: 'STLAM.MI', // Stellantis (Euronext Milan)
   DE0007664039: 'VOW3.DE', // Volkswagen Vorzugsaktie
 };
+// The ETF rows that used to live here moved to `lib/utils/yahooSymbolForIsin.ts`, and three of them
+// were wrong — `IE00B3VTMJ91` was paired with `SWDA.MI`, which OpenFIGI measures as the London/Milan
+// listing of a DIFFERENT fund (IE00B4L5Y983), and two more echoed their own ISIN back with a `.SG`
+// suffix, which is not a ticker at all. One table, in a module both brokers read, is what stops the
+// next broker from growing its own mismatched copy. See CORRECTED_ISIN_PAIRS for the audit.
 
 export function resolveTrYahooTicker(holding: TrHoldingInput): string | null {
   const { type } = mapTrType(holding.rawType, holding.rawCategory);
@@ -411,8 +412,10 @@ export function resolveTrYahooTicker(holding: TrHoldingInput): string | null {
     const coin = /^XF000([A-Z]{2,12})\d+$/.exec(holding.isin)?.[1];
     return coin ? `${coin}-EUR` : null;
   }
-  const mapped = TR_YAHOO_TICKER_BY_ISIN[holding.isin.toUpperCase()];
-  return mapped ?? null;
+  // The shared fund catalogue first, this account's own stock table second. A fund's identity is a
+  // public fact both brokers need, so it is written down once; a single stock's listing is
+  // whichever exchange this account holds it on, so it stays here.
+  return resolveYahooSymbolForIsin(holding.isin) ?? TR_YAHOO_TICKER_BY_ISIN[holding.isin.toUpperCase()] ?? null;
 }
 
 /**

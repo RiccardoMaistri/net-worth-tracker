@@ -42,7 +42,8 @@ import * as z from 'zod';
 import { useAuth } from '@/contexts/AuthContext';
 import { useActiveAccount } from '@/contexts/ActiveAccountContext';
 import { authenticatedFetch } from '@/lib/utils/authFetch';
-import { Asset, AssetFormData, AssetType, AssetClass, AllocationRole, AssetAllocationTarget, AssetComposition, CouponFrequency, BondDetails, BondInflationIndexation } from '@/types/assets';
+import { Asset, AssetFormData, AssetType, AssetClass, AllocationRole, AssetAllocationTarget, AssetComposition, CouponFrequency, BondDetails, BondInflationIndexation, GeographicArea } from '@/types/assets';
+import { GEOGRAPHIC_AREA_LABELS, GEOGRAPHIC_AREA_SEQUENCE } from '@/lib/constants/geographicAreas';
 import type { PensionFundDetails } from '@/types/pension';
 import { createAsset, updateAsset, updateAssetMetadata } from '@/lib/services/assetService';
 import { isLedgerAssetType, type AssetTransactionFormData } from '@/types/assetTransactions';
@@ -218,6 +219,7 @@ function buildAssetFormDataFromValues(
     isin: data.isin && data.isin.trim() !== '' ? data.isin.trim().toUpperCase() : undefined,
     exchange: data.exchange && data.exchange.trim() !== '' ? data.exchange.trim() : undefined,
     notes: data.notes && data.notes.trim() !== '' ? data.notes.trim() : undefined,
+    geographicArea: data.geographicArea || undefined,
     dividendCashAssetId: dividendAccountFromForm(data.type, data.dividendCashAssetId),
     type: data.type,
     assetClass: data.assetClass,
@@ -353,6 +355,9 @@ const TYPE_CARDS: { type: AssetType; label: string; title: string; Icon: React.E
  */
 const NO_SUB_CATEGORY_VALUE = '__none__';
 
+/** Radix Select sentinel for automatic geographic area inference. */
+const NO_GEOGRAPHIC_AREA = '__auto__';
+
 /** The form's id, so the footer's submit can live outside the `<form>` in the modal's footer. */
 const ASSET_FORM_ID = 'asset-form';
 
@@ -367,6 +372,8 @@ const assetSchema = z.object({
   exchange: z.string().max(60, 'Nome borsa troppo lungo').optional(),
   // Free-text note, purely informational: shown under the name in Strumenti, read by nothing.
   notes: z.string().max(500, 'Nota troppo lunga (max 500 caratteri)').optional(),
+  // Macro-region for portfolio geographic exposure. Optional.
+  geographicArea: z.enum(['northAmerica', 'europe', 'asiaPacific', 'emergingMarkets', 'global', 'italy', 'other']).optional(),
   // Mirrors the AssetType union in types/assets.ts — keep the two in lock-step (tsc catches drift
   // where the form value is passed back as an AssetType). 'pensionFund' is accepted here from P0 on;
   // its type card and its dedicated fields land with the pension UI phase.
@@ -657,6 +664,7 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
   const watchDividendCashAssetId = useWatch({ control, name: 'dividendCashAssetId' });
   const watchOpeningDate = useWatch({ control, name: 'openingDate' });
   const watchPensionFamilyMemberId = useWatch({ control, name: 'pensionFamilyMemberId' });
+  const watchGeographicArea = useWatch({ control, name: 'geographicArea' });
 
   // Ledger gating (Phase C):
   //  - isLedgerEdit: editing a ledger asset → quantity/PMC are read-only, submit via updateAssetMetadata.
@@ -697,6 +705,8 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
   const newAsset_showTicker =
     selectedType !== 'cash' && selectedType !== 'realestate' && selectedType !== 'pensionFund' && selectedType !== 'crowdfunding';
   const newAsset_showISIN = selectedType === 'stock' || selectedType === 'etf' || selectedType === 'bond';
+  const newAsset_showGeographicArea =
+    selectedType !== 'cash' && selectedType !== 'realestate' && selectedType !== 'pensionFund' && selectedType !== 'crowdfunding';
   // Exchange options for the combobox: the owner's already-used labels, plus whatever the form
   // currently holds (a value typed for the first time is not in the list yet). A newly typed
   // value is saved on the asset and joins the list on the next open — derived, never stored.
@@ -925,6 +935,7 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
         isin: asset.isin || undefined,
         exchange: asset.exchange || undefined,
         notes: asset.notes || undefined,
+        geographicArea: asset.geographicArea || undefined,
         investedCapital: asset.investedCapital || undefined,
         maturityDate: asset.maturityDate || undefined,
         expectedRoi: asset.expectedRoi || undefined,
@@ -963,6 +974,7 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
         isin: undefined,
         exchange: undefined,
         notes: undefined,
+        geographicArea: undefined,
         investedCapital: undefined,
         maturityDate: undefined,
         expectedRoi: undefined,
@@ -1603,6 +1615,39 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
               <p className="text-sm text-destructive">{errors.exchange.message}</p>
             )}
           </div>
+
+          {/* Area geografica — macro-regione per esposizione geografica (automatica o manuale) */}
+          {newAsset_showGeographicArea && (
+            <div className="space-y-2">
+              <Label htmlFor="geographicArea">
+                Area geografica <span className="text-muted-foreground font-normal">(opzionale)</span>
+              </Label>
+              <Select
+                value={watchGeographicArea || NO_GEOGRAPHIC_AREA}
+                onValueChange={(value) =>
+                  setValue('geographicArea', value === NO_GEOGRAPHIC_AREA ? undefined : (value as GeographicArea))
+                }
+              >
+                <SelectTrigger id="geographicArea" aria-label="Area geografica">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_GEOGRAPHIC_AREA} className="text-muted-foreground">
+                    Automatica
+                  </SelectItem>
+                  {GEOGRAPHIC_AREA_SEQUENCE.map((areaKey) => (
+                    <SelectItem key={areaKey} value={areaKey}>
+                      {GEOGRAPHIC_AREA_LABELS[areaKey]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Su «Automatica» l&apos;area si ricava dalle posizioni del fondo, o dal Paese per
+                un&apos;azione o un&apos;obbligazione. Se resta senza area, fissala qui.
+              </p>
+            </div>
+          )}
 
           {/* Nota — solo informativa: la legge sotto il nome dello strumento, mai un calcolo. */}
           <div className="space-y-2">

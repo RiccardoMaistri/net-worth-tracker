@@ -594,13 +594,22 @@ export function describeExposure(highlights: ExposureHighlights, view: ExposureV
       opensOnProperName: true,
     };
   };
+  const regionClause = (): Clause | null =>
+    highlights.topRegion
+      ? {
+          narrative: [prose(`la prima area geografica è ${highlights.topRegion.label} (`), percent(highlights.topRegion.pct, 1), prose(')')],
+          opensOnProperName: false,
+        }
+      : null;
 
   const order: Array<Clause | null> =
     view === 'sectors'
       ? [sectorClause(), holdingClause(), issuerClause()]
       : view === 'issuers'
         ? [issuerClause(), holdingClause(), sectorClause()]
-        : [holdingClause(), sectorClause(), issuerClause()];
+        : view === 'regions'
+          ? [regionClause(), holdingClause(), sectorClause()]
+          : [holdingClause(), sectorClause(), issuerClause()];
 
   const clauses = order.filter((clause): clause is Clause => clause !== null);
   if (clauses.length === 0) return null;
@@ -614,12 +623,14 @@ export function describeExposure(highlights: ExposureHighlights, view: ExposureV
 }
 
 /** What an empty exposure view means — the rule each list encoded, one line, no figure. */
-export function describeExposureEmpty(view: 'holdings' | 'sectors' | 'issuers'): string {
+export function describeExposureEmpty(view: ExposureViewKey): string {
   switch (view) {
     case 'holdings':
       return 'Nessun titolo riconosciuto: verifica che i ticker degli ETF siano noti a Yahoo Finance.';
     case 'sectors':
       return 'Nessun dato settoriale per gli ETF in portafoglio.';
+    case 'regions':
+      return 'Nessuna area riconosciuta: gli ETF sono classificati dalle loro posizioni, quindi servono ticker noti a Yahoo Finance. Puoi anche fissare l\u0027area a mano sull\u0027asset.';
     default:
       return 'Nessun ETF in portafoglio.';
   }
@@ -631,12 +642,25 @@ export function describeExposureEmpty(view: 'holdings' | 'sectors' | 'issuers'):
  * The second half names the base of the percentage column, which is the WHOLE portfolio: the
  * reading beside it says an issuer emits «il 46% degli ETF» and the row under it printed «29%» for
  * the same issuer, two true figures on two bases with only one of them declared.
+ *
+ * The count follows the VIEW, because the views do not read the same assets. The area view counts
+ * `regionAssets` — bonds carry a country of issue and join it, while cash, a flat and a pension
+ * fund stay out of it — so printing `analyzedAssets` beside an area bar would describe a
+ * different cut from the one on screen.
  */
-export function describeExposureAside(input: { analyzedAssets: number; totalAssets: number }): string {
+export function describeExposureAside(
+  input: { analyzedAssets: number; totalAssets: number; regionAssets?: number },
+  view: ExposureViewKey
+): string {
+  if (view === 'regions') {
+    const classified = input.regionAssets ?? 0;
+    return `${classified} asset su ${input.totalAssets} con un'area · % del portafoglio`;
+  }
   return `${input.analyzedAssets} asset su ${input.totalAssets} analizzati · % del portafoglio`;
 }
 
-const EXPOSURE_METHOD = 'Prime ~10 posizioni per ETF da Yahoo Finance: approssimato per i fondi molto diversificati. Nessuna copertura geografica.';
+const EXPOSURE_METHOD =
+  'Prime ~10 posizioni per ETF da Yahoo Finance: approssimato per i fondi molto diversificati. Le aree geografiche usano le stesse posizioni, quindi la coda di un fondo ampio resta non classificata.';
 
 /** The tile's footer: the method, then the day of the last computation when known. */
 export function describeExposureFooter(computedAt: string | null): string {

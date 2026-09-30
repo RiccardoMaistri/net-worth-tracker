@@ -54,7 +54,7 @@ const POSITIONS_PAYLOAD = {
       categoryType: 'etf',
       positions: [
         {
-          isin: 'IE00B3VTMJ91',
+          isin: 'IE00B4L5Y983',
           averageBuyIn: '112,44',
           netSize: '12,5',
           virtualSize: '12,5',
@@ -77,7 +77,7 @@ const PLANS_PAYLOAD = {
     {
       id: '3f1b0a52-8c4d-4a1e-9b77-0f2d5e6a7c81',
       createdAt: 1750000000000,
-      instrumentId: 'IE00B3VTMJ91.HAM',
+      instrumentId: 'IE00B4L5Y983.HAM',
       amount: 20000,
       interval: 'monthly',
       startDate: { type: 'x', value: 1, nextExecutionDate: '2026-10-01' },
@@ -176,7 +176,7 @@ describe('POST /api/broker/traderepublic/read', () => {
     // The broker prices its own venue in EUR: no symbol mapping required, and Yahoo is not
     // even consulted for that ISIN.
     mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
-    mocks.readTrTickerQuotes.mockResolvedValue(new Map([['IE00B3VTMJ91', { price: 130.5 }]]));
+    mocks.readTrTickerQuotes.mockResolvedValue(new Map([['IE00B4L5Y983', { price: 130.5 }]]));
     const { body } = await post('positions');
     expect((body.positions as { price?: number }[])[0].price).toBe(130.5);
     expect(mocks.getMultipleQuotes).toHaveBeenCalledWith([]);
@@ -204,7 +204,7 @@ describe('POST /api/broker/traderepublic/read', () => {
     // reading the broker never gave.
     mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
     mocks.getMultipleQuotes.mockResolvedValue(
-      new Map([['IE00B3VTMJ91', { ticker: 'IE00B3VTMJ91', price: null, currency: 'EUR', error: 'no' }]])
+      new Map([['IE00B4L5Y983', { ticker: 'IE00B4L5Y983', price: null, currency: 'EUR', error: 'no' }]])
     );
     const { body } = await post('positions');
     expect((body.positions as { price?: number }[])[0].price).toBeUndefined();
@@ -228,7 +228,7 @@ describe('POST /api/broker/traderepublic/read', () => {
     expect(status).toBe(200);
     expect(body).not.toHaveProperty('plan');
     expect(body.savingsPlans).toEqual([
-      expect.objectContaining({ isin: 'IE00B3VTMJ91', amount: 200, rawAmount: 20000 }),
+      expect.objectContaining({ isin: 'IE00B4L5Y983', amount: 200, rawAmount: 20000 }),
     ]);
   });
 

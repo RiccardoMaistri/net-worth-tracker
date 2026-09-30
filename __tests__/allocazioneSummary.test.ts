@@ -601,11 +601,24 @@ describe('summarizeExposure', () => {
       { family: 'iShares', exposureEur: 100000, exposurePct: 0.408, assets: [] },
       { family: 'Vanguard', exposureEur: 64000, exposurePct: 0.261, assets: [] },
     ],
+    regions: [
+      {
+        key: 'northAmerica',
+        label: 'Nord America',
+        exposureEur: 100000,
+        exposurePct: 0.408,
+        // A fund split by its own holdings carries the share of ITS value that sits in the area:
+        // the tile prints «41,2% di 60.000 € = 24.720 €», which a weight of 1 could not.
+        sources: [{ assetName: 'A', ticker: 'IWDA', amount: 24720, weight: 0.412, baseValue: 60000 }],
+      },
+      { key: 'italy', label: 'Italia', exposureEur: 30000, exposurePct: 0.122, sources: [] },
+    ],
     etfHoldings: [],
     directStocks: [],
     totalAnalyzedValue: 164000,
     totalPortfolioValue: 245000,
     analyzedAssets: 12,
+    regionAssets: 9,
     totalAssets: 16,
     computedAt: '2026-08-24T06:15:00.000Z',
     cacheKey: 'k',
@@ -628,13 +641,25 @@ describe('summarizeExposure', () => {
     expect(summarizeExposure(exposure, 'holdings', 5).rows[0].sources).toHaveLength(2);
   });
 
+  it('reads the areas like any other view, and survives a document without them', () => {
+    const view = summarizeExposure(exposure, 'regions', 5);
+    expect(view.rows.map((r) => [r.key, r.label, r.amount, r.percentage])).toEqual([
+      ['northAmerica', 'Nord America', 100000, 40.8],
+      ['italy', 'Italia', 30000, 12.2],
+    ]);
+    expect(view.rows[0].sources[0]).toMatchObject({ ticker: 'IWDA', amount: 24720, weight: 0.412, baseValue: 60000 });
+    // A cached document written before the area view existed: no rows, and no crash reading them.
+    expect(summarizeExposure({ ...exposure, regions: undefined }, 'regions', 5).rows).toEqual([]);
+  });
+
   it('extracts the highlights the reading names, with the issuer share of the ETFs', () => {
     expect(summarizeExposureHighlights(exposure)).toEqual({
       topHolding: { name: 'Apple', pct: 4.1, sourceCount: 2 },
       topSector: { label: 'Tecnologia', pct: 24.3 },
       topIssuer: { family: 'iShares', etfShare: 61 },
+      topRegion: { label: 'Nord America', pct: 40.8 },
     });
-    expect(summarizeExposureHighlights({ ...exposure, topHoldings: [], sectors: [], issuers: [] })).toEqual({ topHolding: null, topSector: null, topIssuer: null });
+    expect(summarizeExposureHighlights({ ...exposure, topHoldings: [], sectors: [], issuers: [], regions: [] })).toEqual({ topHolding: null, topSector: null, topIssuer: null, topRegion: null });
   });
 });
 

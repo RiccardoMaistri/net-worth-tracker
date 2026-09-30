@@ -27,7 +27,7 @@ const PORTFOLIO = {
       categoryType: 'etf',
       positions: [
         {
-          isin: 'IE00B3VTMJ91',
+          isin: 'IE00B4L5Y983',
           averageBuyIn: '112,44',
           netSize: '12,5',
           virtualSize: '12,5',
@@ -67,7 +67,7 @@ const SAVINGS_PLANS = {
     {
       id: '3f1b0a52-8c4d-4a1e-9b77-0f2d5e6a7c81',
       createdAt: 1750000000000,
-      instrumentId: 'IE00B3VTMJ91.HAM',
+      instrumentId: 'IE00B4L5Y983.HAM',
       amount: 20000,
       interval: 'monthly',
       startDate: { type: 'x', value: 1, nextExecutionDate: '2026-10-01' },
@@ -93,7 +93,7 @@ describe('parseTrHoldings', () => {
     expect(holdings).toHaveLength(2);
     // The German comma is the payload's own convention: `parseFloat` alone would read 112,44 as 112.
     expect(holdings[0]).toMatchObject({
-      isin: 'IE00B3VTMJ91',
+      isin: 'IE00B4L5Y983',
       quantity: 12.5,
       averageCost: 112.44,
       rawType: 'etf',
@@ -199,7 +199,7 @@ describe('parseTrSavingsPlans', () => {
     const plans = parseTrSavingsPlans(SAVINGS_PLANS);
     expect(plans).toHaveLength(1);
     expect(plans[0]).toMatchObject({
-      isin: 'IE00B3VTMJ91',
+      isin: 'IE00B4L5Y983',
       amount: 200,
       rawAmount: 20000,
       interval: 'monthly',
@@ -239,7 +239,7 @@ describe('mapTrType', () => {
 
 describe('mapTrHoldingToAssetFormData', () => {
   const holding: TrHoldingInput = {
-    isin: 'IE00B3VTMJ91',
+    isin: 'IE00B4L5Y983',
     name: 'iShares Core MSCI World',
     rawType: 'etf',
     rawCategory: 'etf',
@@ -257,7 +257,7 @@ describe('mapTrHoldingToAssetFormData', () => {
     // The fixture ISIN is table-mapped: the ticker is the Yahoo symbol (so the refresh keeps
     // working), while the isin stays the broker identifier the next sync matches on.
     expect(formData.ticker).toBe('SWDA.MI');
-    expect(formData.isin).toBe('IE00B3VTMJ91');
+    expect(formData.isin).toBe('IE00B4L5Y983');
   });
 
   it('falls back to 0 when the quote lookup failed, so the plan can warn about it', () => {
@@ -267,7 +267,7 @@ describe('mapTrHoldingToAssetFormData', () => {
 
 describe('buildTrImportPlan', () => {
   const holding: TrHoldingInput = {
-    isin: 'IE00B3VTMJ91',
+    isin: 'IE00B4L5Y983',
     name: 'iShares Core MSCI World',
     rawType: 'etf',
     rawCategory: 'etf',
@@ -290,7 +290,7 @@ describe('buildTrImportPlan', () => {
 
   it('reports a ledger quantity mismatch as drift and leaves the quantity alone', () => {
     const plan = buildTrImportPlan([holding], [], [], [
-      { id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 10, ticker: 'IE00B3VTMJ91' },
+      { id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B4L5Y983', type: 'etf', quantity: 10, ticker: 'IE00B4L5Y983' },
     ]);
     expect(plan.holdings[0]).toMatchObject({ kind: 'drift-only', quantityDrift: 2.5 });
     expect(plan.warnings.join(' ')).toContain('non viene toccata');
@@ -298,7 +298,7 @@ describe('buildTrImportPlan', () => {
 
   it('reads an exact quantity as unchanged', () => {
     const plan = buildTrImportPlan([holding], [], [], [
-      { id: 'asset-1', name: 'World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 12.5, ticker: 'IE00B3VTMJ91' },
+      { id: 'asset-1', name: 'World', isin: 'IE00B4L5Y983', type: 'etf', quantity: 12.5, ticker: 'IE00B4L5Y983' },
     ]);
     expect(plan.holdings[0].kind).toBe('unchanged');
     expect(plan.warnings).toHaveLength(0);
@@ -336,7 +336,7 @@ describe('buildTrImportPlan', () => {
       [holding],
       [],
       parseTrSavingsPlans(SAVINGS_PLANS),
-      [{ id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 12.5, ticker: 'IE00B3VTMJ91' }]
+      [{ id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B4L5Y983', type: 'etf', quantity: 12.5, ticker: 'IE00B4L5Y983' }]
     );
     expect(plan.savingsPlans[0]).toMatchObject({
       trackedAssetId: 'asset-1',
@@ -349,7 +349,7 @@ describe('buildTrImportPlan', () => {
   it('leaves a savings plan unmatched rather than guessing an asset', () => {
     const plan = buildTrImportPlan([], [], parseTrSavingsPlans(SAVINGS_PLANS), []);
     expect(plan.savingsPlans[0].trackedAssetId).toBeUndefined();
-    expect(plan.savingsPlans[0].plan.isin).toBe('IE00B3VTMJ91');
+    expect(plan.savingsPlans[0].plan.isin).toBe('IE00B4L5Y983');
   });
 });
 
@@ -448,7 +448,7 @@ describe('crypto positions (pseudo-ISIN XF000…)', () => {
 
 describe('applyTrTickerOverride', () => {
   const formData = mapTrHoldingToAssetFormData({
-    isin: 'IE00B3VTMJ91',
+    isin: 'IE00B4L5Y983',
     name: 'World',
     rawType: 'etf',
     rawCategory: '',
