@@ -13,7 +13,6 @@ import { describe, it, expect } from 'vitest';
 import {
   MIN_FUND_COVERAGE,
   countryToRegion,
-  curatedFundArea,
   inferGeographicArea,
   splitFundHoldingsByRegion,
   type GeographicArea,
@@ -78,22 +77,6 @@ describe('inferGeographicArea', () => {
   });
 });
 
-describe('curatedFundArea', () => {
-  it('answers for the funds the owner decided the top ten lie about', () => {
-    expect(curatedFundArea('IE00BK5BQT80')).toBe('global');
-    expect(curatedFundArea('ie00bk5bqt80')).toBe('global');
-    expect(curatedFundArea('IE00B5BMR087')).toBe('northAmerica');
-  });
-
-  it('stands down for every other fund so the look-through decides', () => {
-    // A fund the owner never ruled on. Absent from the table on purpose: the look-through is the
-    // default, and a table that claimed every fund would make the default dead code.
-    expect(curatedFundArea('IE00B4K48X80')).toBeNull();
-    expect(curatedFundArea('LU1781541179')).toBeNull();
-    expect(curatedFundArea(null)).toBeNull();
-  });
-});
-
 describe('splitFundHoldingsByRegion', () => {
   it('divides a fund by where its own positions are', () => {
     // The S&P fund an Italian investor actually holds: ten stones, seven American.
@@ -120,9 +103,10 @@ describe('splitFundHoldingsByRegion', () => {
     expect(split.weights.europe).toBeCloseTo(0.02 / 0.33, 10);
   });
 
-  it('says a World fund is the world when the owner has said so, and that is the override', () => {
-    // Same ten stones, but VWCE is in the curated table: the sample reads «Nord America» and the
-    // fund is not. The override is what makes the curated table load-bearing rather than legacy.
+  it('is the FALLBACK for a fund, never the answer: the index name comes first', () => {
+    // The ten stones below read «Nord America» — and the fund is not. `matchIndexRegionComposition`
+    // answers on the fund's own name BEFORE this function is ever reached, so the sample is what a
+    // fund with no recognised index gets, and the tile's method line says so.
     const stones = [
       { symbol: 'AAPL', holdingPercent: 0.05 },
       { symbol: 'MSFT', holdingPercent: 0.04 },
@@ -131,7 +115,6 @@ describe('splitFundHoldingsByRegion', () => {
     ];
     const byCountry = countries({ AAPL: 'United States', MSFT: 'United States', ASML: 'Netherlands', SAP: 'Germany' });
     expect(splitFundHoldingsByRegion(stones, byCountry).area).toBe('northAmerica');
-    expect(curatedFundArea('IE00BK5BQT80')).toBe('global');
   });
 
   it('drops an unplaceable position from BOTH sides of the divide', () => {

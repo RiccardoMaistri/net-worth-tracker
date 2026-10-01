@@ -42,17 +42,23 @@ describe('resolveYahooSymbolForIsin', () => {
 
   it('keeps every stored symbol a full Yahoo symbol, suffix included', () => {
     // A suffix cannot be derived from the ISIN, so an entry without one is an incomplete entry.
+    // Not always two letters, though: `.L` is London and `.SW` is the Swiss exchange, which is why
+    // this is not `/\.[A-Z]{2}$/` — that shape rejected three rows that Yahoo quotes happily.
     for (const [isin, symbol] of Object.entries(YAHOO_SYMBOL_BY_ISIN)) {
-      expect(symbol, `${isin} has no exchange suffix`).toMatch(/\.[A-Z]{2}$/);
+      expect(symbol, `${isin} has no exchange suffix`).toMatch(/\.[A-Z]{1,3}$/);
     }
   });
 
   it('gives the bond fund its OWN symbol, not the world fund\'s', () => {
     // THE BUG. `tradeRepublicImport.ts` paired IE00B3VTMJ91 with 'SWDA.MI' and called it «iShares
-    // Core MSCI World». OpenFIGI measures that ISIN as ISHARES EURO GOVT BOND 1-3Y (SXRN), and
-    // SWDA as the London/Milan listing of IE00B4L5Y983. The old row put a world-equity price on a
+    // Core MSCI World». OpenFIGI measures that ISIN as ISHARES EURO GOVT BOND 1-3Y, and SWDA as the
+    // London/Milan listing of IE00B4L5Y983. The old row put a world-equity price on a
     // euro-government-bond position, and Trade Republic DOES auto-update prices from Yahoo.
-    expect(resolveYahooSymbolForIsin('IE00B3VTMJ91')).toBe('SXRN.DE');
+    //
+    // The row then claimed the German ticker `SXRN`, which Yahoo does not quote at all — a second
+    // wrong number in the same record. The fund is quoted `CBE3.L`, measured the same way as every
+    // other row: `search(isin)` names the fund and `quoteSummary(symbol)` names what it quotes.
+    expect(resolveYahooSymbolForIsin('IE00B3VTMJ91')).toBe('CBE3.L');
     expect(resolveYahooSymbolForIsin('IE00B4L5Y983')).toBe('SWDA.MI');
     // And the two funds must not have swapped symbols on the way.
     expect(YAHOO_SYMBOL_BY_ISIN.IE00B3VTMJ91).not.toBe(YAHOO_SYMBOL_BY_ISIN.IE00B4L5Y983);

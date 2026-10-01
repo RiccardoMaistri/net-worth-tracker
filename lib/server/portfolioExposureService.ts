@@ -6,12 +6,18 @@
  * position's country, the geographic area. One module, three cuts: the fundProfile module that fed
  * the removed «Emittenti» view went with it.
  *
- * The geographic cut is a LOOK-THROUGH on the same payload: a fund's macro-region comes from the
- * countries of its top holdings, never from its ISIN prefix (which is its domicile — an Irish
- * World fund is Irish and holds the planet). See `lib/constants/geographicAreas.ts`.
+ * The geographic cut reads a fund's INDEX first — the one its own name declares, which is a
+ * published composition of the whole fund rather than a sample of it. Only a fund whose name declares
+ * no known index falls back to looking inside its top holdings, and that fallback is a SAMPLE: on a
+ * global index Yahoo's ten largest positions are almost all American, so a World fund would read as
+ * «Nord America». The ISIN prefix is never the answer for a fund (it is its domicile — an Irish World
+ * fund is Irish and holds the planet). See `lib/constants/indexRegionCompositions.ts`.
  *
- * Limitation: Yahoo Finance provides only the top ~10 holdings per ETF,
- * so results are approximate for highly diversified funds.
+ * An instrument Yahoo cannot quote contributes to NOTHING, so every asset is resolved to a quotable
+ * symbol first: the stored ticker, then the ISIN table, then `search(isin)`.
+ *
+ * Limitation: Yahoo Finance provides only the top ~10 holdings per ETF, so the holdings view and the
+ * sampled area fallback are approximate for highly diversified funds.
  */
 
 import YahooFinance from 'yahoo-finance2';
@@ -26,11 +32,12 @@ import {
 } from '@/types/exposure';
 import {
   GEOGRAPHIC_AREA_LABELS,
-  curatedFundArea,
   inferGeographicArea,
   splitFundHoldingsByRegion,
   type GeographicArea,
 } from '@/lib/constants/geographicAreas';
+import { matchIndexRegionComposition } from '@/lib/constants/indexRegionCompositions';
+import { isIsinShaped, resolveEffectiveYahooTicker } from '@/lib/utils/yahooSymbolForIsin';
 
 const yahooFinance = new YahooFinance();
 
@@ -101,6 +108,13 @@ export function buildExposureCacheKey(assets: Asset[]): string {
     .filter((a) => a.type === 'stock' && a.assetClass === 'equity')
     .map((a) => a.ticker)
     .sort();
+  // The ISIN is here for the same reason the area is: an asset whose ticker is still the raw ISIN is
+  // quoted through the ISIN table or through `search(isin)`, so repairing the ISIN alone would change
+  // the answer with the signature unchanged.
+  const isins = activeAssets
+    .filter((a) => a.type === 'etf' || (a.type === 'stock' && a.assetClass === 'equity'))
+    .map((a) => `${a.id}:${a.isin ?? ''}`)
+    .sort();
   const totalValue = activeAssets.reduce((sum, a) => sum + resolveAssetValueEur(a), 0);
   const areas = activeAssets
     .filter((a) => a.geographicArea)
@@ -110,6 +124,7 @@ export function buildExposureCacheKey(assets: Asset[]): string {
     etfTickers.length,
     etfTickers.join(','),
     stockTickers.join(','),
+    isins.join(','),
     Math.round(totalValue),
     areas.join(','),
   ].join('|');
@@ -143,9 +158,47 @@ export async function computePortfolioExposure(
   );
   const analyzedAssets = etfAssets.length + stockAssets.length;
 
+  // --- Me find a symbol Yahoo will answer for each instrument ---
+  // A broker import leaves the RAW ISIN in `ticker` when it has no mapping, and Yahoo quotes no ISIN:
+  // such an asset then contributes to NOTHING, in all three cuts at once. That silence was most of
+  // «Resto del portafoglio», so the ISIN is now asked of Yahoo itself — `search` answers with the
+  // fund's real listing, the same listing the curated table would have named. One call per unknown
+  // ISIN, whatever shares it.
+  const unresolvedIsins = new Set<string>();
+  for (const asset of [...etfAssets, ...stockAssets]) {
+    const candidate = resolveEffectiveYahooTicker(asset);
+    if (isIsinShaped(candidate)) unresolvedIsins.add((asset.isin || candidate).trim().toUpperCase());
+  }
+  const symbolByIsin = new Map<string, string>();
+  await Promise.all(
+    Array.from(unresolvedIsins).map(async (isin) => {
+      try {
+        const result = await yahooFinance.search(isin);
+        const rows = result.quotes;
+        const symbol =
+          rows.find((q) => q.quoteType === 'ETF' || q.quoteType === 'MUTUALFUND')?.symbol ??
+          rows[0]?.symbol;
+        // `search` also answers with rows Yahoo will not quote (a news item, a permalink), and their
+        // `symbol` is not typed as a string — so it is checked rather than assumed.
+        if (typeof symbol === 'string' && symbol) symbolByIsin.set(isin, symbol);
+      } catch {
+        // Yahoo has no such fund. The asset keeps its raw ticker and contributes nothing, which is
+        // the honest answer for an ISIN nobody can quote.
+      }
+    })
+  );
+  /** The symbol to quote, after the stored ticker, the curated table and `search` have all stood down. */
+  const quotableTicker = (asset: Asset): string => {
+    const candidate = resolveEffectiveYahooTicker(asset);
+    const isin = (asset.isin || candidate).trim().toUpperCase();
+    return symbolByIsin.get(isin) ?? candidate;
+  };
+
   // --- Fetch Yahoo Finance data for ETFs and stocks in parallel ---
   type YFResult = {
     asset: Asset;
+    /** The fund's own name as Yahoo spells it — the index it tracks is written in it. */
+    fundName: string | null;
     topHoldings: {
       holdings: Array<{ symbol: string; holdingName: string; holdingPercent: number }>;
       sectorWeightings: Array<Record<string, number>>;
@@ -163,12 +216,15 @@ export async function computePortfolioExposure(
     Promise.allSettled(
       etfAssets.map(async (asset): Promise<YFResult> => {
         try {
-          const summary = await yahooFinance.quoteSummary(asset.ticker, {
-            modules: ['topHoldings'],
+          // `price` rides along for `longName`, which is what the area cut reads the index from: one
+          // request instead of two, and the name always comes from the same listing as the holdings.
+          const summary = await yahooFinance.quoteSummary(quotableTicker(asset), {
+            modules: ['price', 'topHoldings'],
           });
           const holdings = summary.topHoldings ?? null;
           return {
             asset,
+            fundName: summary.price?.longName ?? null,
             topHoldings: holdings
               ? {
                   holdings: (holdings.holdings ?? []) as Array<{
@@ -181,7 +237,7 @@ export async function computePortfolioExposure(
               : null,
           };
         } catch {
-          return { asset, topHoldings: null };
+          return { asset, fundName: null, topHoldings: null };
         }
       })
     ),
@@ -190,7 +246,7 @@ export async function computePortfolioExposure(
     Promise.allSettled(
       stockAssets.map(async (asset): Promise<StockResult> => {
         try {
-          const summary = await yahooFinance.quoteSummary(asset.ticker, {
+          const summary = await yahooFinance.quoteSummary(quotableTicker(asset), {
             modules: ['assetProfile'],
           });
           const profile = summary.assetProfile as { sector?: string; country?: string } | null;
@@ -214,16 +270,23 @@ export async function computePortfolioExposure(
     .filter((r): r is PromiseFulfilledResult<StockResult> => r.status === 'fulfilled')
     .map((r) => r.value);
 
+  // --- Me read what index each fund tracks ---
+  // Yahoo's `price.longName` carries it («Vanguard FTSE All-World UCITS ETF USD Accumulation»), and
+  // `matchIndexRegionComposition` turns that name into the index's own regional composition. It is
+  // read ONCE per fund here so the country pass below knows which funds still owe an answer.
+  const indexByAssetId = new Map(
+    etfData.map(({ asset, fundName }) => [asset.id, matchIndexRegionComposition(fundName)])
+  );
+
   // --- Me ask every stone where it born ---
-  // Fund area = look inside fund. So the ticker inside `topHoldings` decide it.
+  // Only for the funds NOBODY answered for: the user named its area, or its own name declared an
+  // index whose composition is already known. Those never look inside, so their stones cost
+  // nothing — which is the whole point of an answer that is better than a sample.
   // Me ask each name ONCE for whole portfolio: S&P fund, Nasdaq fund, World fund all like same
   // big stones. That shared part why me ask few time, not many time.
   // `splitFundHoldingsByRegion` drop hole. `MIN_FUND_COVERAGE` stop hole become lie.
-  //
-  // Me ask ONLY for fund no one already answered for. A fund the user named, or the boss table
-  // rules, never look inside — so its stones cost nothing, which is the whole point of an override.
   const lookThroughEtfs = etfData.filter(
-    ({ asset }) => !asset.geographicArea && !curatedFundArea(asset.isin)
+    ({ asset }) => !asset.geographicArea && !indexByAssetId.get(asset.id)
   );
   const holdingSymbols = Array.from(
     new Set(
@@ -380,8 +443,8 @@ export async function computePortfolioExposure(
   // --- Me gather all area together ---
   // Only thing that HAVE a place go in the list. Strongest word win:
   //   1. what USER say on asset. They know fund better than Yahoo can look inside.
-  //   2. boss override, for fund where ten big stone lie.
-  //   3. look inside fund. Normal way.
+  //   2. the INDEX the fund's own name declares. A fact about all of it, not ten stones.
+  //   3. look inside fund, for a fund that names no index we know. A SAMPLE.
   //   4. one thing one answer. One stock, one bond. ISIN head IS country.
   // Money, cave-dwelling, old-man fund, crowd-rock: me leave out. No place for them. Call them
   // «Altro» = me say verdict thing cannot support.
@@ -423,12 +486,16 @@ export async function computePortfolioExposure(
       continue;
     }
 
-    // 2 + 3. Fund. Boss say first. No boss say, me look inside.
+    // 2 + 3. Fund. The index its own name declares is a fact about the WHOLE fund, so it wins over
+    // the positions. No index me recognise, me look inside — and that read is a SAMPLE, which the
+    // tile's method line says out loud.
     const isFund = asset.type === 'etf';
     if (isFund) {
-      const curated = curatedFundArea(asset.isin);
-      if (curated) {
-        addRegionSource(curated, asset, assetValue, 1);
+      const index = indexByAssetId.get(asset.id);
+      if (index) {
+        for (const [area, weight] of Object.entries(index.weights) as [GeographicArea, number][]) {
+          addRegionSource(area, asset, assetValue * weight, weight);
+        }
         continue;
       }
       const holdings = etfData.find((entry) => entry.asset.id === asset.id)?.topHoldings?.holdings ?? [];

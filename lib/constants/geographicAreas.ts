@@ -4,7 +4,9 @@
  * Fund live in cave of Ireland (IE) but hold WHOLE WORLD. So me no ask ISIN. Me ask: fund big
  * stones inside it, where they born. That is `splitFundHoldingsByRegion`.
  *
- * `ISIN_TO_GEOGRAPHIC_AREA` below = boss say "no, that fund bigger than ten stones show".
+ * For a fund me PREFER the index its own name declare — that one a published fact, and the ten
+ * stones Yahoo show be a sample big-city bias (world fund read "Nord America"). That table live in
+ * `indexRegionCompositions.ts`, and `splitFundHoldingsByRegion` here is the fallback below it.
  *
  * Me NEVER guess `other`. No know country, no stones, no place (money, cave-dwelling, old-man
  * fund) — all mean SAME THING: me not know. Not know is not a place. Me let tile say it out loud.
@@ -131,56 +133,6 @@ export function countryToRegion(country: string | null | undefined): GeographicA
   return COUNTRY_TO_REGION[country] ?? null;
 }
 
-/**
- * Boss override. For fund where ten big stones lie about whole fund.
- * Normal way = look inside fund. Fund listed here = boss already decide sample lie.
- * World/All-World fund: without this, me read "Nord America" and me wrong — big stones be American
- * computer stone, but fund hold all world.
- */
-export const ISIN_TO_GEOGRAPHIC_AREA: Readonly<Record<string, GeographicArea>> = {
-  // Global
-  IE00BK5BQT80: 'global', // Vanguard FTSE All-World (VWCE)
-  IE00B4L5Y983: 'global', // iShares Core MSCI World — identity measured via OpenFIGI
-  IE00B3RBWM25: 'global', // Vanguard FTSE All-World High Dividend Yield
-  IE00BFY0GT14: 'global', // Invesco MSCI World
-  IE00BTJRMP35: 'global', // Xtrackers MSCI World ESG
-  IE00B4JNQZ49: 'global', // Vanguard FTSE All-World (second line)
-  IE00B468XW29: 'global', // Vanguard FTSE All-World (third line)
-  LU0274208692: 'global', // Xtrackers MSCI World Swap
-  LU0356591882: 'global', // Amundi MSCI World
-  LU0498052551: 'global', // iShares Core MSCI World
-  LU1681043599: 'global', // Amundi Prime Global
-  LU1829220216: 'global', // Lyxor Core MSCI World
-
-  // North America / S&P 500 / Nasdaq
-  IE00B5BMR087: 'northAmerica', // iShares Core S&P 500 (CSSPX)
-  IE00B3XXRP09: 'northAmerica', // Vanguard S&P 500 (VUSA)
-  IE00BFMXXD54: 'northAmerica', // Vanguard S&P 500 (VUAA)
-  IE00BYQRR523: 'northAmerica', // iShares S&P 500 (SPY5)
-  IE00B3WJKG14: 'northAmerica', // iShares S&P 500 (IUSN)
-  IE00B53SZB19: 'northAmerica', // iShares Nasdaq 100
-  IE00BN633954: 'northAmerica', // iShares S&P 500 Information Technology
-  LU1681048804: 'northAmerica', // Amundi Prime USA
-
-  // Europe
-  IE00B53L3W79: 'europe', // iShares Core EURO STOXX 50 (CSSX5E)
-  IE00B3VTMJ91: 'europe', // iShares € Govt Bond 1-3yr — identity measured via OpenFIGI
-  IE00B14X4Q57: 'europe', // iShares Core FTSE 100
-  LU0908500753: 'europe', // Amundi Core STOXX Europe 600 (MEUD)
-  LU0274211217: 'europe', // Xtrackers Euro Stoxx 50
-
-  // Emerging Markets
-  IE00BKM4GZ66: 'emergingMarkets', // iShares Core MSCI EM IMI (EIMI)
-  IE00BTJRMP46: 'emergingMarkets', // Xtrackers MSCI Emerging Markets
-  LU1681045370: 'emergingMarkets', // Amundi MSCI Emerging Markets
-  IE00B469F816: 'emergingMarkets', // iShares MSCI EM Asia
-
-  // Asia Pacific
-  IE00B52MJY50: 'asiaPacific', // iShares Core MSCI Pacific ex-Japan
-  IE00B42Z5J44: 'asiaPacific', // iShares Core MSCI Japan
-  LU0328474803: 'asiaPacific', // Xtrackers MSCI Pacific ex Japan
-};
-
 /** Two letter head of a DIRECT thing: one bond, one stock. Me read head, me get country. */
 const ISIN_PREFIX_TO_AREA: Readonly<Record<string, GeographicArea>> = {
   IT: 'italy',
@@ -233,13 +185,6 @@ export function inferGeographicArea(input: {
 
   // Yahoo own answer, for one stock whose head me not carry.
   return countryToRegion(input.country);
-}
-
-/** Boss override for fund. `null` = no boss say, me must look inside fund. */
-export function curatedFundArea(isin: string | null | undefined): GeographicArea | null {
-  const key = isin?.trim().toUpperCase();
-  if (!key) return null;
-  return ISIN_TO_GEOGRAPHIC_AREA[key] ?? null;
 }
 
 /** One stone inside fund, as Yahoo tell me. */

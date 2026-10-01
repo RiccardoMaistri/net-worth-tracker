@@ -1,10 +1,16 @@
 /**
  * The geographic aggregation inside `computePortfolioExposure` — the wiring the pure rules in
- * `geographicAreas.test.ts` cannot see: which source of truth WINS, and what is kept out.
+ * `geographicAreas.test.ts` and `indexRegionCompositions.test.ts` cannot see: which source of truth
+ * WINS, in what order, and what is kept out.
  *
- * The two failures this suite exists to catch are the ones a Scalable/Trade Republic portfolio
- * actually produced: every fund read as «Altro» because the inference asked a fund for its
- * domicile, and «Altro» then swallowed the cash, the flat and the pension fund along with it.
+ * Three failures this suite exists to catch, all of them measured on a real portfolio rather than
+ * imagined:
+ *   1. an asset Yahoo cannot QUOTE contributes to nothing, in all three cuts at once — so a raw ISIN
+ *      left in `ticker` by a broker import used to silence a fund's holdings, its sectors AND its
+ *      area, and those euros landed in «Resto del portafoglio»;
+ *   2. a fund's area read off Yahoo's ten largest positions: on a global index those are almost all
+ *      American, so an All-World fund read «Nord America»;
+ *   3. cash, a flat and a pension fund ranked as geographies they do not have.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -19,7 +25,9 @@ import { MIN_FUND_COVERAGE } from '@/lib/constants/geographicAreas';
  */
 const yahoo = vi.hoisted(() => ({
   calls: [] as string[],
+  searched: [] as string[],
   answer: (ticker: string): Record<string, unknown> => (ticker ? {} : {}),
+  searchAnswer: (): Record<string, unknown> => ({ quotes: [] }),
 }));
 
 vi.mock('yahoo-finance2', () => ({
@@ -27,6 +35,10 @@ vi.mock('yahoo-finance2', () => ({
     quoteSummary(ticker: string) {
       yahoo.calls.push(ticker);
       return Promise.resolve().then(() => yahoo.answer(ticker));
+    }
+    search(query: string) {
+      yahoo.searched.push(query);
+      return Promise.resolve().then(() => yahoo.searchAnswer());
     }
   },
 }));
@@ -59,6 +71,28 @@ const QUOTES: Record<string, Record<string, unknown>> = {
       ],
       sectorWeightings: [],
     },
+  },
+  // The same fund with a name. A World index, told to the service by the fund's OWN NAME — the one
+  // thing that describes the whole fund rather than its ten largest holdings. Its positions are
+  // American on purpose: if they were ever read, this fund would come back «Nord America», which is
+  // the bug this pair of fixtures exists to catch.
+  WORLDNAMED: {
+    price: { longName: 'iShares Core MSCI World UCITS ETF USD (Acc)' },
+    topHoldings: {
+      holdings: [
+        { symbol: 'AAPL', holdingName: 'Apple', holdingPercent: 0.05 },
+        { symbol: 'MSFT', holdingName: 'Microsoft', holdingPercent: 0.04 },
+        { symbol: 'ASML', holdingName: 'ASML', holdingPercent: 0.03 },
+        { symbol: '7203.T', holdingName: 'Toyota', holdingPercent: 0.03 },
+        { symbol: 'RELIANCE.NS', holdingName: 'Reliance', holdingPercent: 0.02 },
+      ],
+      sectorWeightings: [{ technology: 0.6 }, { financial_services: 0.4 }],
+    },
+  },
+  // An ETF the broker import left as a bare ISIN: Yahoo answers `search`, not `quoteSummary`.
+  SMALLCAP: {
+    price: { longName: 'iShares Core MSCI World UCITS ETF USD (Acc)' },
+    topHoldings: { holdings: [{ symbol: 'AAPL', holdingName: 'Apple', holdingPercent: 0.1 }], sectorWeightings: [{ technology: 0.8 }, { utilities: 0.2 }] },
   },
   BTP2035: { assetProfile: { sector: null, country: 'Italy' } },
   ENI: { assetProfile: { sector: 'Energy', country: 'Italy' } },
@@ -93,6 +127,8 @@ const byKey = (regions: readonly { key: string; exposureEur: number }[]) =>
 
 beforeEach(() => {
   yahoo.calls = [];
+  yahoo.searched = [];
+  yahoo.searchAnswer = () => ({ quotes: [] });
   yahoo.answer = (ticker) => {
     const answer = QUOTES[ticker];
     if (!answer) throw new Error(`no quote for ${ticker}`);
@@ -102,9 +138,10 @@ beforeEach(() => {
 
 describe('computePortfolioExposure — the geographic cut', () => {
   it('reads a fund by where its positions are, split across the areas they sit in', async () => {
-    // The fund is 20000 € and every one of its five stones placed, so the money splits by the
-    // sample: 0.16 American of 0.20 disclosed is 80%, the Dutch and the German 20%. One row per
-    // area, both naming the same instrument with the weight that produced it.
+    // SP500 declares no index in its name, so the sample decides. The fund is 20000 € and every one
+    // of its five stones placed, so the money splits by the sample: 0.16 American of 0.20 disclosed
+    // is 80%, the Dutch and the German 20%. One row per area, both naming the same instrument with
+    // the weight that produced it.
     const exposure = await computePortfolioExposure([asset({ id: 'SP500', quantity: 200 })]);
     expect(byKey(exposure.regions!)).toEqual({ northAmerica: 16000, europe: 4000 });
     expect(exposure.totalPortfolioValue).toBe(20000);
@@ -130,19 +167,61 @@ describe('computePortfolioExposure — the geographic cut', () => {
     expect(new Set(asked).size).toBe(asked.length);
   });
 
-  it('lets the curated table overrule a sample that misstates the fund', async () => {
-    // The same American-leaning stones; the fund is a World index, so the owner ruled it «Globale».
+  it('splits a World fund by its INDEX, not by the American ten it discloses', async () => {
+    // MSCI World is 72/18/10. The five positions Yahoo discloses are three American, one Dutch and
+    // one Japanese, so reading them would file a World fund as «Nord America» — which is what the
+    // tile showed before this rule existed.
     const exposure = await computePortfolioExposure([
-      asset({ id: 'WORLDFUND', isin: 'IE00BK5BQT80', quantity: 100 }),
+      asset({ id: 'WORLDNAMED', ticker: 'WORLDNAMED', quantity: 100 }),
     ]);
-    expect(byKey(exposure.regions!)).toEqual({ global: 10000 });
-    // The override short-circuits, so the positions inside it are never asked about.
+    expect(byKey(exposure.regions!)).toEqual({
+      northAmerica: 7200,
+      europe: 1800,
+      asiaPacific: 1000,
+    });
+    // The index short-circuits the country pass, so the fund's positions cost nothing — which is
+    // also what makes this the cheapest possible answer for the most common fund in a portfolio.
     expect(yahoo.calls.filter((ticker) => POSITIONS.includes(ticker))).toHaveLength(0);
   });
 
-  it('lets the user overrule the table and the look-through both', async () => {
+  it('finds a fund Yahoo quotes only by its ISIN, and reads it there too', async () => {
+    // The broker import writes the raw ISIN in `ticker` whenever it has no mapping, and Yahoo
+    // quotes no ISIN: before this, such an asset was worth nothing to all three cuts at once and its
+    // euros fell into «Resto del portafoglio». `search` is Yahoo's own answer, and it returns the
+    // listing the fund is actually quoted under.
+    yahoo.searchAnswer = () => ({ quotes: [{ quoteType: 'ETF', symbol: 'SMALLCAP', longname: 'World' }] });
     const exposure = await computePortfolioExposure([
-      asset({ id: 'SP500', isin: 'IE00B5BMR087', geographicArea: 'asiaPacific', quantity: 100 }),
+      asset({ id: 'SMALLCAP', ticker: 'IE00BJ0GPQ20', isin: 'IE00BJ0GPQ20', quantity: 100 }),
+    ]);
+    expect(yahoo.searched).toContain('IE00BJ0GPQ20');
+    expect(yahoo.calls).toContain('SMALLCAP');
+    expect(byKey(exposure.regions!)).toEqual({ northAmerica: 7200, europe: 1800, asiaPacific: 1000 });
+    // The same resolution feeds the sector cut: a fund nobody can quote has no sectors either.
+    expect(exposure.sectors.map((s) => s.key)).toEqual(['technology', 'utilities']);
+  });
+
+  it('asks the ISIN of a fund whose ticker is already a symbol for nothing', async () => {
+    // `search` is one request per unknown ISIN. Firing it for instruments that already have a
+    // quotable ticker would double the cost of the common case to fix a rare one.
+    await computePortfolioExposure([asset({ id: 'SP500', quantity: 100 })]);
+    expect(yahoo.searched).toEqual([]);
+  });
+
+  it('leaves an unquotable fund to the sample, and a fund Yahoo cannot find at all out', async () => {
+    yahoo.searchAnswer = () => ({ quotes: [] });
+    const exposure = await computePortfolioExposure([
+      asset({ id: 'SMALLCAP', ticker: 'IE00BJ0GPQ20', isin: 'IE00BJ0GPQ20', quantity: 100 }),
+    ]);
+    // The raw ISIN goes to `quoteSummary`, which is not in the fixture, so the fetch fails and the
+    // asset is left out rather than attributed to a region nobody measured.
+    expect(exposure.regions).toEqual([]);
+    expect(exposure.regionAssets).toBe(0);
+    expect(exposure.totalPortfolioValue).toBe(10000);
+  });
+
+  it('lets the user overrule the index and the sample both', async () => {
+    const exposure = await computePortfolioExposure([
+      asset({ id: 'WORLDNAMED', ticker: 'WORLDNAMED', geographicArea: 'asiaPacific', quantity: 100 }),
     ]);
     expect(byKey(exposure.regions!)).toEqual({ asiaPacific: 10000 });
   });

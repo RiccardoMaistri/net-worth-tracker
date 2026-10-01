@@ -640,11 +640,26 @@ describe('describeExposure', () => {
   it('has an aside and a footer', () => {
     expect(describeExposureAside({ analyzedAssets: 12, totalAssets: 16 }, 'holdings')).toBe('12 asset su 16 analizzati · % del portafoglio');
     expect(describeExposureFooter('2026-08-24T06:15:00.000Z')).toBe(
-      'Prime ~10 posizioni per ETF da Yahoo Finance: approssimato per i fondi molto diversificati. Le aree geografiche usano le stesse posizioni, quindi la coda di un fondo ampio resta non classificata. Aggiornato il 24/08/2026.',
+      'Prime ~10 posizioni per ETF da Yahoo Finance: la lista dei titoli è un campione dei fondi molto diversificati. Aggiornato il 24/08/2026.',
     );
     expect(describeExposureFooter(null)).toBe(
-      'Prime ~10 posizioni per ETF da Yahoo Finance: approssimato per i fondi molto diversificati. Le aree geografiche usano le stesse posizioni, quindi la coda di un fondo ampio resta non classificata.',
+      'Prime ~10 posizioni per ETF da Yahoo Finance: la lista dei titoli è un campione dei fondi molto diversificati.',
     );
+  });
+
+  it('declares each view\'s own method, and never promises a sample for the area view', () => {
+    // The three cuts are NOT read the same way. One shared sentence had already gone stale on the
+    // areas — it promised the top ~10 positions for every cut while the area of a fund is its index
+    // — and a reader who is told «the area is a sample of ten positions» stops believing the tile.
+    expect(describeExposureFooter(null, 'sectors')).toContain('Composizione settoriale completa');
+    expect(describeExposureFooter(null, 'sectors')).not.toContain('~10 posizioni');
+    expect(describeExposureFooter(null, 'regions')).toContain('indice');
+    expect(describeExposureFooter(null, 'regions')).toContain('campione');
+    // Each view keeps its own sentence: a reader who switches tabs must not read the last one's.
+    const methods = (['holdings', 'sectors', 'regions'] as const).map((view) =>
+      describeExposureFooter(null, view)
+    );
+    expect(new Set(methods).size).toBe(3);
   });
 });
 

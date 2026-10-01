@@ -617,12 +617,12 @@ export function describeExposureEmpty(view: ExposureViewKey): string {
     case 'sectors':
       return 'Nessun dato settoriale per gli ETF in portafoglio.';
     default:
-      return 'Nessuna area riconosciuta: gli ETF sono classificati dalle loro posizioni, quindi servono ticker noti a Yahoo Finance. Puoi anche fissare l\u0027area a mano sull\u0027asset.';
+      return 'Nessuna area riconosciuta: l\u0027area di un ETF viene dal suo indice, altrimenti dalle sue prime ~10 posizioni. Serve un ticker noto a Yahoo Finance. Puoi anche fissare l\u0027area a mano sull\u0027asset.';
   }
 }
 
 /**
- * «12 asset su 16 analizzati · % del portafoglio» — the tile's aside.
+ * `X asset su Y con un'area · % del portafoglio` — the tile's aside.
  *
  * The second half names the base of the percentage column, which is the WHOLE portfolio: the
  * reading beside it and the row under it must be on the same base, or the tile prints two true
@@ -644,16 +644,26 @@ export function describeExposureAside(
   return `${input.analyzedAssets} asset su ${input.totalAssets} analizzati · % del portafoglio`;
 }
 
-const EXPOSURE_METHOD =
-  'Prime ~10 posizioni per ETF da Yahoo Finance: approssimato per i fondi molto diversificati. Le aree geografiche usano le stesse posizioni, quindi la coda di un fondo ampio resta non classificata.';
+/**
+ * The method, ONE SENTENCE PER VIEW — the three cuts are not read the same way, and a single shared
+ * line had already gone stale on the areas (it promised the sample for every cut, while the area is
+ * now the fund's index).
+ */
+const EXPOSURE_METHOD: Record<ExposureViewKey, string> = {
+  holdings: 'Prime ~10 posizioni per ETF da Yahoo Finance: la lista dei titoli è un campione dei fondi molto diversificati.',
+  sectors: 'Composizione settoriale completa di ciascun ETF da Yahoo Finance, più il settore di ogni titolo posseduto direttamente.',
+  regions:
+    "L'area di un ETF è quella del suo indice, riconosciuto dal nome del fondo; solo dove l'indice non è riconosciuto si usano le prime ~10 posizioni, e la lettura è un campione. Contanti, fondo pensione e immobili non hanno un'area e restano fuori.",
+};
 
-/** The tile's footer: the method, then the day of the last computation when known. */
-export function describeExposureFooter(computedAt: string | null): string {
-  if (!computedAt) return EXPOSURE_METHOD;
+/** The tile's footer: the method of the view on screen, then the day of the last computation. */
+export function describeExposureFooter(computedAt: string | null, view: ExposureViewKey = 'holdings'): string {
+  const method = EXPOSURE_METHOD[view];
+  if (!computedAt) return method;
   const date = new Date(computedAt);
-  if (Number.isNaN(date.getTime())) return EXPOSURE_METHOD;
+  if (Number.isNaN(date.getTime())) return method;
   const day = new Intl.DateTimeFormat('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Rome' }).format(date);
-  return `${EXPOSURE_METHOD} Aggiornato il ${day}.`;
+  return `${method} Aggiornato il ${day}.`;
 }
 
 // ─── Sovrapposizioni ──────────────────────────────────────────────────────────

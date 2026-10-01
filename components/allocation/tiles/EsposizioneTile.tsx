@@ -236,7 +236,7 @@ export function EsposizioneTile({ userId, className }: EsposizioneTileProps) {
 
       <div className="mt-auto flex items-center justify-between gap-3 border-t border-border pt-3.5 text-[11px] leading-[1.5] text-muted-foreground">
         <p>
-          {describeExposureFooter(exposure?.computedAt ?? null)}
+          {describeExposureFooter(exposure?.computedAt ?? null, view)}
           {cached ? ' Dalla cache.' : ''}
         </p>
         <Button
