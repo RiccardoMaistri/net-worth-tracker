@@ -192,6 +192,19 @@ function sideFromSubtitle(subtitle: unknown): 'buy' | 'sell' | null {
   return null;
 }
 
+/**
+ * Executed broker trades settle cash in exactly one direction: purchase debits, sale credits.
+ *
+ * The timeline's `subtitle` is presentation text and can be empty for an older localized row;
+ * its `amount` is the settlement fact. This is used ONLY after restricting the event type to an
+ * executed trade, so a card or cash movement can never be mistaken for an order.
+ */
+function sideFromCashAmount(row: JsonObject): 'buy' | 'sell' | null {
+  const amount = readCashAmount(row);
+  if (amount === null || amount === 0) return null;
+  return amount > 0 ? 'sell' : 'buy';
+}
+
 function mapTrade(row: JsonObject, detail: JsonObject, side: 'buy' | 'sell'): BrokerTrade | { reason: string } {
   const sourceRef = readString(row, 'id') as string;
   const label = readString(row, 'title') ?? sourceRef;
@@ -252,7 +265,7 @@ export function parseTradeRepublicTrades(timeline: unknown, detailsByPayload: Re
       continue;
     }
 
-    const side = sideFromSubtitle(readString(row, 'subtitle'));
+    const side = sideFromSubtitle(readString(row, 'subtitle')) ?? sideFromCashAmount(row);
     if (!side) {
       skipped.push({ sourceRef, label, ...(date ? { date } : {}), reason: 'Lato dell’ordine non riconosciuto: operazione esclusa.' });
       continue;

@@ -377,7 +377,11 @@ type JsonRecord = Record<string, unknown>;
  */
 function tradeRowsNeedingDetail(timeline: unknown): { sourceRef: string; detailId: string }[] {
   const root = readJsonPayload(timeline);
-  const items = Array.isArray(root?.items) ? root.items : [];
+  // SDK `getTimelineTransactions()` returns `TimelineTransaction[]`, while a raw topic response
+  // is `{ items: [...] }`. The importer parses both forms, but this reader initially accepted only
+  // the latter and therefore requested ZERO `timelineDetailV2` records: every valid order then
+  // showed as «Dettaglio dell’operazione non disponibile».
+  const items = Array.isArray(timeline) ? timeline : Array.isArray(root?.items) ? root.items : [];
   const rows: { sourceRef: string; detailId: string }[] = [];
   for (const item of items) {
     const row = readJsonPayload(item);
