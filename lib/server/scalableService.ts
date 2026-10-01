@@ -15,6 +15,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
+  runScalableTradeCommand,
   SCALABLE_LOGIN_ARGS,
   ensureScalableConfigFile,
   scalableCliPath,
@@ -175,6 +176,81 @@ export function parseScalableLoginPrompt(output: string): { verificationUri: str
 
 // ─── ScalableService Class ──────────────────────────────────────────────────
 
+/**
+ * How many per-transaction detail reads one history fetch may spawn.
+ *
+ * A hard bound, not a tuning knob: every detail is a separate process spawn, so an unbounded
+ * fan-out over a broker account would turn one preview click into hundreds of children. The
+ * measured account holds 69 rows, so this is generous; past it the parser reports the rows it could
+ * not detail as skipped, which makes the truncation visible instead of silent.
+ */
+const MAX_DETAIL_READS = 300;
+
+/**
+ * How many `broker transactions` pages one history fetch will read.
+ *
+ * A bound on the round trips, not a limit on the account: each page is the CLI's own maximum (100)
+ * rows, so 20 pages is 2,000 operations. The measured account answers in ONE page; the bound
+ * exists so a broker that never exhausts its cursor cannot keep one preview alive indefinitely.
+ */
+const MAX_TRANSACTION_PAGES = 20;
+
+/**
+ * Re-assemble paged responses into the ONE list shape the parser reads.
+ *
+ * `items` is concatenated and the LAST non-empty cursor wins, because the cursor is a position,
+ * not a value: carrying page 1's cursor forward would make the next read return page 1 again. The
+ * rest of the envelope (`total`, `input`) is taken from the first page, which is the one that
+ * describes the query rather than the page. A page without `items` is skipped, not merged as an
+ * empty one, so a stray envelope cannot blank a history already read.
+ */
+function mergeTransactionPages(pages: unknown[]): unknown {
+  const withItems = pages.filter(
+    (page) => Array.isArray((page as { items?: unknown } | null)?.items)
+  );
+  const first = withItems[0] as Record<string, unknown> | undefined;
+  if (!first) return { items: [] };
+  const items = withItems.flatMap((page) => (page as { items: unknown[] }).items);
+  const cursors = withItems
+    .map((page) => (page as { cursor?: unknown }).cursor)
+    .filter((cursor): cursor is string => typeof cursor === 'string' && cursor !== '');
+  return { ...first, items, ...(cursors.length > 0 ? { cursor: cursors[cursors.length - 1] } : {}) };
+}
+
+/** Parse CLI stdout, tolerating the non-JSON noise a login prompt or warning can prepend. */
+function safeJsonParse(stdout: string): unknown {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    // A payload the CLI could not print as JSON is an empty history, not a crash: the preview then
+    // shows «nessuna operazione» and the raw text is still available to paste by hand.
+    return null;
+  }
+}
+
+/**
+ * The ids of the rows that need a detail read, from a MERGED page set: the security transactions,
+ * and only those.
+ *
+ * Cash rows are excluded HERE rather than in the parser, because each of them would otherwise cost
+ * a process spawn to learn it carries no trade. The broker id shape is re-checked here so a
+ * malformed row can never become a command-line argument.
+ */
+function securityTransactionIdsFromPages(pages: unknown[]): string[] {
+  const ids: string[] = [];
+  for (const page of pages) {
+    const root = page as { items?: unknown } | null;
+    if (!Array.isArray(root?.items)) continue;
+    for (const item of root.items) {
+      const row = item as { id?: unknown; type?: unknown } | null;
+      if (!row || row.type !== 'SECURITY_TRANSACTION') continue;
+      if (typeof row.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(row.id)) continue;
+      ids.push(row.id);
+    }
+  }
+  return ids;
+}
+
 export class ScalableService {
   /**
    * Run one whitelisted read command under the profile's own `XDG_CONFIG_HOME` — the child
@@ -253,6 +329,77 @@ export class ScalableService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * The TRADE history: the `transactions` list plus one `details` read per security trade.
+   *
+   * WHY THE LIST IS PAGED AND THEN FILTERED: `broker transactions` returns one page at a time with
+   * a cursor, and the measured account holds 69 rows — one page. A longer history must not be
+   * truncated to whatever fits, so the pages are followed until one comes back empty or the cap is
+   * reached, and every page is handed to the parser merged as ONE list. The cap truncates the
+   * OLDEST end, which is the safe direction: the newest trades are the ones being reconciled.
+   *
+   * WHY THE DETAIL READS ARE SEQUENTIAL AND BOUNDED: each is a separate process spawn, and a
+   * 69-row history would otherwise be 69 concurrent processes. The cap is a hard limit, not a
+   * tuning knob: a broker that answers with thousands of rows must not turn one preview into an
+   * unbounded fan-out, and the parser reports every row it could not detail as skipped (with a
+   * reason), so the truncation is visible rather than silent.
+   *
+   * NOT CACHED, unlike the three asset reads: this runs on demand, from a preview the user opened,
+   * and a 60s-stale trade list is precisely what an import must not act on.
+   */
+  static async getTrades(profile: string): Promise<{ list: unknown; details: Record<string, unknown> }> {
+    const env = { XDG_CONFIG_HOME: getProfileXdgConfigHome(profile) };
+    const pages = await this.readTransactionPages(env);
+
+    const details: Record<string, unknown> = {};
+    const ids = securityTransactionIdsFromPages(pages);
+    const budget = Math.min(ids.length, MAX_DETAIL_READS);
+    for (const id of ids.slice(0, budget)) {
+      try {
+        const stdout = await runScalableTradeCommand('transaction-details', { env, transactionId: id });
+        const parsed = safeJsonParse(stdout);
+        // Keyed by the id WE asked for, never by the payload's own `id`: a detail that names a
+        // different operation would otherwise land under the wrong key and import wrong numbers.
+        details[id] = parsed;
+      } catch {
+        // One unreadable detail must not fail the whole history: the parser skips that row with a
+        // reason and the next sync retries it.
+      }
+    }
+    // The parser reads ONE list shape, so the pages are re-assembled into it here rather than in
+    // the parser: paging is this broker's transport detail, and nothing downstream should know a
+    // cursor ever existed.
+    return { list: mergeTransactionPages(pages), details };
+  }
+
+  /**
+   * Follow `broker transactions` pages until the account is exhausted or the cap is hit.
+   *
+   * A `null` page (unparseable stdout) ends the walk rather than throwing: a truncated history
+   * still previews, and the missing rows are visible as an absence rather than as a crash. A
+   * repeated cursor would otherwise loop forever, so the seen-cursor set is the termination guard
+   * that actually fires if the broker misbehaves.
+   */
+  private static async readTransactionPages(env: { XDG_CONFIG_HOME: string }): Promise<unknown[]> {
+    const pages: unknown[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let pageIndex = 0; pageIndex < MAX_TRANSACTION_PAGES; pageIndex++) {
+      const stdout = await runScalableTradeCommand('transactions', {
+        env,
+        ...(cursor ? { cursor } : {}),
+      });
+      const page = safeJsonParse(stdout);
+      if (page === null) break;
+      pages.push(page);
+      const next = (page as { cursor?: unknown }).cursor;
+      if (typeof next !== 'string' || next === '' || seenCursors.has(next)) break;
+      seenCursors.add(next);
+      cursor = next;
+    }
+    return pages;
   }
 
   /**

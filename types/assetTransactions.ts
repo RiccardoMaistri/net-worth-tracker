@@ -28,6 +28,21 @@ export function isLedgerAssetType(type: AssetType): boolean {
 export type AssetTransactionType = 'buy' | 'sell' | 'adjustment';
 
 /**
+ * Broker a trade was imported FROM, or undefined for a hand-entered one.
+ *
+ * This exists for exactly one reason: IDEMPOTENCY. Without it a broker sync has no way to tell
+ * «a trade the ledger already holds» from «a new one», so every sync duplicates the whole
+ * history and the replay double-counts quantity, PMC and realized P&L. `sourceRef` is the
+ * broker's OWN stable id for the operation (never a row index), so the same trade maps to the
+ * same key on every run and on any machine.
+ *
+ * Read as «where did this come from», never as a sync cursor: a trade the user later EDITS keeps
+ * both fields, so re-syncing repairs nothing and overwrites nothing. Edits are the user's, and a
+ * broker read must never revert one.
+ */
+export type AssetTransactionSource = 'scalable' | 'traderepublic';
+
+/**
  * One trade in the asset ledger.
  *
  * Semantics by type:
@@ -59,6 +74,12 @@ export interface AssetTransaction {
   // replaces the estimate in the period readings (periodSales); realized P&L and XIRR stay
   // gross of it. Absent on every sell recorded before 2026-09-20 — those read the estimate.
   withheldTaxEur?: number;
+  // Broker provenance. Both fields travel together: `sourceRef` is meaningless without the broker
+  // that issued the id, and an id minted by one broker must never be matched against another's.
+  // Never indexed as a uniqueness constraint in Firestore rules — the importer checks it, because
+  // the pair is unique per BROKER OWNER, and ownership is what a rules-level constraint cannot see.
+  source?: AssetTransactionSource;
+  sourceRef?: string;
   isBaseline?: boolean;     // migration-created opening position; always type 'buy'
   // BTP€i only: the indexation coefficient the Borsa Italiana quote was multiplied by to reach
   // pricePerUnit (quote/100 × nominal × coefficient). Metadata for the edit form's back-conversion;
@@ -81,6 +102,12 @@ export interface AssetTransactionFormData {
   withheldTaxEur?: number;
   indexationCoefficient?: number;
   note?: string;
+  // Broker provenance, written ONLY by the broker importer. Exposed on the form data (rather
+  // than a server-only import input) so the write goes through the SAME schema and the SAME
+  // prepare/commit path as a hand-entered trade — one writer, one validation, one replay.
+  // Absent on a hand-entered trade, which is what makes it «imported» rather than «synced».
+  source?: AssetTransactionSource;
+  sourceRef?: string;
   // priceEur is NOT part of the form: the server resolves it, so the client
   // can never write an inconsistent FX value.
 }

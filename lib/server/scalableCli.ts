@@ -22,6 +22,22 @@ const execFileAsync = promisify(execFile);
 
 export type ScalableReadCommand = 'holdings' | 'overview' | 'overnight';
 
+/**
+ * The TRADE read surface. Separate from `ScalableReadCommand` because these two take an ARGUMENT
+ * and the existing whitelist is a closed map of fixed argv arrays with no room for one.
+ *
+ * Nothing here can write: `broker transactions` and `broker transaction details` are both reads,
+ * and they run under the same `--local-read-only` session as everything else, so the write
+ * guarantee in the header is unchanged. They are deliberately NOT folded into the fixed-argv map:
+ * a command whose argv carries a caller-supplied value is a different risk shape, and the argument
+ * is validated against a broker id pattern BEFORE it can reach `execFile` (see
+ * `runScalableTradeCommand`).
+ */
+export type ScalableTradeReadCommand = 'transactions' | 'transaction-details';
+
+/** Page size for `broker transactions`. The CLI caps this at 100, which is also the widest page. */
+const TRADE_PAGE_SIZE = 100;
+
 /** The complete read surface: nothing outside these three argv arrays can ever run. */
 const READ_COMMAND_ARGS: Record<ScalableReadCommand, string[]> = {
   holdings: ['broker', 'holdings', '--json'],
@@ -178,6 +194,94 @@ export async function runScalableReadCommand(
     const stderr = typeof err?.stderr === 'string' ? err.stderr : '';
     const combined = `${stdout}\n${stderr}`;
     if (isLoginFailure(combined)) {
+      throw new ScalableCliError(
+        401,
+        'Sessione Scalable scaduta o assente: clicca su «Collega con codice» in Impostazioni › Collegamenti e riprova.'
+      );
+    }
+    const detail = extractErrorMessage(stdout, stderr);
+    throw new ScalableCliError(
+      502,
+      detail !== '' ? `Scalable ha risposto con un errore: ${detail}` : 'Lettura da Scalable non riuscita: riprova.'
+    );
+  }
+}
+
+/**
+ * A broker operation id, as accepted on a command line.
+ *
+ * This is the ONLY untrusted value that reaches `execFile` anywhere in this module, so it is
+ * validated rather than escaped: `execFile` takes no shell, but an argument starting with `-` would
+ * still be read by the CLI as a FLAG and not as the id we meant (`--json` would silently become the
+ * transaction id and the read would report a confusing failure). Scalable ids are alphanumeric,
+ * so anything outside this class is refused before a process is ever spawned. The value is passed
+ * as a separate argv element regardless — never concatenated into a string.
+ */
+const BROKER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Run one whitelisted TRADE read.
+ *
+ * `transactionId` is required only for `transaction-details`; for `transactions` it must be
+ * omitted rather than empty, because `--transaction-id` with a blank value is a different command
+ * to the CLI than no flag at all.
+ */
+export async function runScalableTradeCommand(
+  command: ScalableTradeReadCommand,
+  options?: RunScalableReadOptions & { transactionId?: string; cursor?: string; pageSize?: number }
+): Promise<string> {
+  if (command === 'transaction-details') {
+    const id = options?.transactionId;
+    if (!id || !BROKER_ID_PATTERN.test(id)) {
+      throw new ScalableCliError(400, 'Identificativo operazione non valido.');
+    }
+  } else if (options?.transactionId !== undefined) {
+    throw new ScalableCliError(400, 'Comando non accetta un identificativo operazione.');
+  }
+
+  // A cursor is the SECOND untrusted value that can reach a command line, so it is refused on the
+  // one property that matters: a leading `-` would be read by the CLI as a flag. The measured shape
+  // is `1788739200000|CASH_7tq...|8DBK...`, so a character class is too strict here and only the
+  // leading dash plus control characters are rejected. The CLI mints the value and we only ever
+  // hand back one it gave us.
+  if (options?.cursor !== undefined && !/^[A-Za-z0-9][A-Za-z0-9|_-]*$/.test(options.cursor)) {
+    throw new ScalableCliError(400, 'Cursore di paginazione non valido.');
+  }
+
+  const args: string[] =
+    command === 'transactions'
+      ? ['broker', 'transactions', '--json', '--page-size', String(options?.pageSize ?? TRADE_PAGE_SIZE)]
+      : ['broker', 'transaction', 'details', '--transaction-id', options!.transactionId!, '--json'];
+  if (command === 'transactions' && options?.cursor) {
+    args.push('--cursor', options.cursor);
+  }
+
+  ensureScalableConfigFile(options?.env?.XDG_CONFIG_HOME);
+  const bin = scalableCliPath();
+  const env = options?.env ? { ...process.env, ...options.env } : undefined;
+  try {
+    const { stdout } = await execFileAsync(bin, args, {
+      timeout: 60_000,
+      maxBuffer: 10 * 1024 * 1024,
+      ...(env ? { env } : {}),
+    });
+    assertBrokerOk(stdout);
+    return stdout;
+  } catch (error) {
+    if (error instanceof ScalableCliError) throw error;
+    const err = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; killed?: boolean };
+    if (err?.code === 'ENOENT') {
+      throw new ScalableCliError(
+        503,
+        'Comando `sc` non trovato su questa macchina: installalo ed esegui `sc login`, oppure incolla l’output qui sotto a mano.'
+      );
+    }
+    if (err?.killed) {
+      throw new ScalableCliError(504, 'La lettura da Scalable ha impiegato troppo tempo: riprova.');
+    }
+    const stdout = typeof err?.stdout === 'string' ? err.stdout : '';
+    const stderr = typeof err?.stderr === 'string' ? err.stderr : '';
+    if (isLoginFailure(`${stdout}\n${stderr}`)) {
       throw new ScalableCliError(
         401,
         'Sessione Scalable scaduta o assente: clicca su «Collega con codice» in Impostazioni › Collegamenti e riprova.'

@@ -73,6 +73,20 @@ export const dividendDataSchema = z.object({
  */
 const assetTransactionTypeSchema = z.enum(['buy', 'sell', 'adjustment']);
 
+/** The two brokers the importer speaks to. A closed enum: provenance is not a free-text field. */
+const assetTransactionSourceSchema = z.enum(['scalable', 'traderepublic']);
+
+/**
+ * The broker's OWN id for the operation. Only ever a value a broker returned, so the shape is
+ * bounded to what both are measured to emit (Scalable alnum/underscore/hyphen, TR a UUID): the
+ * point is to refuse a value that could never be an id, not to police the broker.
+ */
+const brokerSourceRefSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_-]+$/, 'Identificativo operazione broker non valido.');
+
 /**
  * Base object shape, without cross-field refinements. Extracted so the update schema can build on
  * it with `.partial()`/`.omit()`: those methods live on ZodObject, and adding a `.superRefine()`
@@ -92,6 +106,11 @@ const assetTransactionBaseSchema = z.object({
   // BTP€i: the indexation coefficient behind pricePerUnit (metadata for the edit form; > 0).
   indexationCoefficient: z.number().finite().positive().optional(),
   note: z.string().max(500).optional(),
+  // Broker provenance - the idempotency key, written only by the importer. Both fields travel
+  // together (enforced in the refinement below): `sourceRef` is meaningless without the broker
+  // that issued it, and an id from one broker must never be matched against another's.
+  source: assetTransactionSourceSchema.optional(),
+  sourceRef: brokerSourceRefSchema.optional(),
 });
 
 /** Cross-field rules shared by create and update. `type`/`quantity` may be absent on an update. */
@@ -102,9 +121,21 @@ function refineAssetTransaction(
     fees?: number;
     linkedCashAssetId?: string;
     withheldTaxEur?: number;
+    source?: 'scalable' | 'traderepublic';
+    sourceRef?: string;
   },
   ctx: z.RefinementCtx
 ): void {
+  // Provenance is a PAIR, and a half-pair is worse than none: a `sourceRef` with no broker to
+  // read it against could never be matched, so every later sync would import that trade again.
+  // Forcing the pair here means a caller cannot create a row that is permanently un-deduplicable.
+  if ((data.source === undefined) !== (data.sourceRef === undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [data.source === undefined ? 'source' : 'sourceRef'],
+      message: 'Origine e identificativo broker viaggiano sempre insieme.',
+    });
+  }
   // buy/sell need a strictly positive quantity; adjustment allows 0 (position-close correction).
   if (data.type !== undefined && data.type !== 'adjustment' && data.quantity !== undefined && data.quantity <= 0) {
     ctx.addIssue({

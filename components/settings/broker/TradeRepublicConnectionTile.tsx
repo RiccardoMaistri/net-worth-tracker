@@ -30,7 +30,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { ExternalLink, Link2, Loader2, LogOut, QrCode, RefreshCw } from 'lucide-react';
+import { ArrowLeftRight, ExternalLink, Link2, Loader2, LogOut, QrCode, RefreshCw } from 'lucide-react';
 import Image from 'next/image';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -45,6 +45,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tile } from '@/components/ui/tile';
+import { BrokerTradeImportDialog } from '@/components/settings/broker/BrokerTradeImportDialog';
 import { describeBrokerConnections } from '@/lib/utils/settingsNarrative';
 import { authenticatedFetch } from '@/lib/utils/authFetch';
 import { formatCurrency, formatDate, formatNumberIt } from '@/lib/utils/formatters';
@@ -226,6 +227,8 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
   const [qr, setQr] = useState<QrView | null>(null);
   const [linking, setLinking] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  /** The trade-ledger import is a separate modal, not a step of the portfolio sync above. */
+  const [tradeImportOpen, setTradeImportOpen] = useState(false);
   /**
    * Whether a SESSION exists, asked of the server — not inferred from the sync metadata, which
    * would call someone «non collegato» for having linked and not yet pressed Sincronizza.
@@ -521,6 +524,27 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
           )}
         </div>
 
+        {/* The ledger import is a SEPARATE act from the portfolio sync, and a second button rather
+            than another step inside «Sincronizza» for one reason: the two write different things.
+            The sync reconciles positions and cash and never touches the trade ledger; the import is
+            the only path that writes operations, and it previews before it does. One button would
+            make «I synced» and «I imported my history» indistinguishable in the toast, and the
+            second is the one that changes plusvalenze. */}
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          <Button
+            variant="outline"
+            onClick={() => setTradeImportOpen(true)}
+            disabled={disabled || !connected}
+            className="h-10"
+          >
+            <ArrowLeftRight className="h-4 w-4" />
+            Importa operazioni
+          </Button>
+          <span className="text-[11px] text-muted-foreground">
+            Porta acquisti e vendite nel registro operazioni.
+          </span>
+        </div>
+
         {qr && (
           <div className="flex flex-col gap-3 rounded-lg bg-muted p-3">
             <p className="text-[13px] leading-[1.45]">
@@ -760,6 +784,13 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
           </div>
         )}
       </div>
+      <BrokerTradeImportDialog
+        open={tradeImportOpen}
+        onClose={() => setTradeImportOpen(false)}
+        ownerId={ownerId}
+        source="traderepublic"
+        brokerName="Trade Republic"
+      />
     </Tile>
   );
 }
