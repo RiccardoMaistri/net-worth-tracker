@@ -10,6 +10,21 @@
  * (same rule as `resolveAllocationRole` in allocationUtils.ts). It is purely a display label.
  */
 import type { Asset, AssetClass, AssetComposition } from '@/types/assets';
+
+/** Group bucket for an asset with no `exchange` — hand-added rows and anything unclassified. */
+export const BROKER_GROUP_FALLBACK = 'Altro';
+
+/**
+ * The broker/exchange bucket a row groups under. Reads `asset.exchange` verbatim (trimmed):
+ * the broker bridges write their own name there (`Trade Republic`, `Scalable Capital`), so no
+ * mapping is needed — and none is wanted, since a mapping would silently merge a venue the
+ * user typed (`Nasdaq`) into a broker it is not. Display only, like everything else here:
+ * grouping never rewrites the field. Empty stays a bucket of its own rather than vanishing.
+ */
+export function resolveBrokerGroup(asset: Pick<Asset, 'exchange'>): string {
+  const venue = asset.exchange?.trim();
+  return venue && venue !== '' ? venue : BROKER_GROUP_FALLBACK;
+}
 import { ASSET_CLASS_LABELS as labels } from './allocationUtils';
 import { formatPercentageIt } from './formatters';
 

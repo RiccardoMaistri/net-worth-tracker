@@ -10,7 +10,7 @@
  * assetService.ts imports the client Firebase SDK at module load time — mock it out so the suite
  * doesn't need real Firebase env vars (same convention as __tests__/assetExposure.test.ts).
  */
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import type { Asset } from '@/types/assets';
 
 vi.mock('@/lib/firebase/config', () => ({ db: {} }));
@@ -31,11 +31,14 @@ vi.mock('firebase/firestore', () => ({
   getDocs: vi.fn(),
 }));
 
+import { deleteField, getDoc, updateDoc } from 'firebase/firestore';
 import {
   calculateStampDuty,
   calculateTotalEstimatedTaxes,
   calculateTotalUnrealizedGains,
   calculateUnrealizedGains,
+  updateAsset,
+  updateAssetMetadata,
 } from '@/lib/services/assetService';
 import { summarizeUnrealizedGains } from '@/lib/utils/patrimonioSummary';
 
@@ -167,5 +170,62 @@ describe('calculateUnrealizedGains', () => {
     ];
     expect(calculateTotalUnrealizedGains(assets)).toBeCloseTo(summarizeUnrealizedGains(assets).gainLoss, 6);
     expect(calculateTotalUnrealizedGains(assets)).toBeCloseTo(390 + 190 + 40, 6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The clearable-optional rule
+// emptying a field must DELETE it, not leave the old value. `removeUndefinedFields` drops an
+// `undefined`, so without the `deleteField()` sentinel a note the user erased would silently
+// come back on the next load.
+describe('the notes field is user-clearable', () => {
+  const SENTINEL = Symbol('deleteField');
+
+  beforeEach(() => {
+    vi.mocked(updateDoc).mockClear();
+    vi.mocked(deleteField).mockReturnValue(SENTINEL as never);
+    vi.mocked(updateDoc).mockResolvedValue(undefined as never);
+    vi.mocked(getDoc).mockResolvedValue({ data: () => ({ userId: 'u1', quantity: 5 }) } as never);
+  });
+
+  it('deletes the note when the caller sends the key undefined (the emptied textarea)', async () => {
+    await updateAsset('a1', { notes: undefined });
+    const payload = vi.mocked(updateDoc).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect(payload.notes).toBe(SENTINEL);
+  });
+
+  it('leaves the note alone for a partial caller that never mentions it', async () => {
+    await updateAsset('a1', { currentPrice: 101 });
+    const payload = vi.mocked(updateDoc).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect('notes' in payload).toBe(false);
+  });
+
+  it('deletes the crowdfunding pair when the fields are emptied, on both write paths', async () => {
+    await updateAsset('a1', { investedCapital: undefined, maturityDate: undefined, expectedRoi: undefined });
+    let payload = vi.mocked(updateDoc).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect(payload.investedCapital).toBe(SENTINEL);
+    expect(payload.maturityDate).toBe(SENTINEL);
+    expect(payload.expectedRoi).toBe(SENTINEL);
+
+    vi.mocked(updateDoc).mockClear();
+    await updateAssetMetadata('a1', { investedCapital: undefined, maturityDate: undefined, expectedRoi: undefined });
+    payload = vi.mocked(updateDoc).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect(payload.investedCapital).toBe(SENTINEL);
+    expect(payload.maturityDate).toBe(SENTINEL);
+    expect(payload.expectedRoi).toBe(SENTINEL);
+  });
+
+  it('leaves the crowdfunding fields alone for a partial caller', async () => {
+    await updateAsset('a1', { currentPrice: 101 });
+    const payload = vi.mocked(updateDoc).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect('investedCapital' in payload).toBe(false);
+    expect('maturityDate' in payload).toBe(false);
+    expect('expectedRoi' in payload).toBe(false);
+  });
+
+  it('deletes the note on the metadata path too (the ledger edit form)', async () => {
+    await updateAssetMetadata('a1', { notes: undefined });
+    const payload = vi.mocked(updateDoc).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect(payload.notes).toBe(SENTINEL);
   });
 });

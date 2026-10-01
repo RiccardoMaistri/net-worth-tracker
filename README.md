@@ -21,6 +21,7 @@ The app integrates with Yahoo Finance for real-time price updates and includes a
 - Multi-asset tracking across stocks, ETFs, bonds, crypto, real estate, commodities, pension funds, and cash — added via a guided two-step dialog: pick the asset type first, then fill in only the relevant fields for that type
 - Multi-currency support: assets priced in USD, GBP, CHF, etc. are automatically converted to EUR for all portfolio calculations using live Frankfurter exchange rates; LSE pence (GBp) normalized to GBP automatically
 - Automatic price updates via Yahoo Finance (all assets) and Borsa Italiana (Italian bonds with ISIN)
+- **Scalable Capital Integration (Unofficial API/CLI)** — server-side integration with Scalable Capital via the `sc` CLI, supporting read-only syncing for overall portfolio value, cash, holdings, quantities, FIFO average cost, current prices, profit/loss, performance, and overnight deposit ("Deposito non vincolato"). Session files are persisted per-profile (`XDG_CONFIG_HOME=/home/nextjs/.config/scalable-cli/profiles/<profile>`) in Docker volumes across restarts/redeploys, with strict case-insensitive Google Auth email authorization for `rykymai@gmail.com` (Riccardo) and `michele.maistri@gmail.com` (Michele). Zero Scalable credentials, tokens, or cookies cross to the browser frontend.
 - **Ticker display alias**: give any investment a short, readable label (e.g. "CL2" instead of "CL2.MI") shown everywhere across the app instead of the raw ticker — automatic price updates keep using the real ticker underneath, unaffected
 - Bond coupon scheduling: automatic coupon generation with step-up rate tiers and final premium (Premio Finale) support — full BTP Valore compatible; inflation-linked coupons for BTP Italia (FOI added per period) and BTP€i (real rate × the HICP indexation coefficient you enter, which also scales the market value); a zero-coupon bond saves its details and generates nothing
 - Average cost tracking with 4-decimal precision, including a built-in multi-broker PMC calculator for positions spread across multiple brokers. Every gain, tax estimate, yield on cost and sale simulation is measured against the **euro cost of the position at the trade-date rates, purchase fees included** — the fiscal cost — so a foreign-currency instrument is never measured against its own-currency PMC; the table prints that euro PMC and, on a foreign-currency row, the native one under it
@@ -201,7 +202,7 @@ See [`.env.local.example`](.env.local.example) for detailed comments on each var
 │  Firebase Auth  │  Firestore DB     │
 └─────────────────┴───────────────────┘
          External APIs:
-   Yahoo Finance · Frankfurter · Borsa Italiana · Anthropic · FRED
+   Yahoo Finance · Frankfurter · Borsa Italiana · Anthropic · FRED · Scalable Capital CLI
 ```
 
 **Key design patterns:**

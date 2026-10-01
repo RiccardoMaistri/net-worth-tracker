@@ -2,14 +2,15 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronDown, Pencil, Trash2, Calculator, ArrowLeftRight, ScrollText, PiggyBank, Info } from 'lucide-react';
+import { ChevronDown, Pencil, Trash2, Calculator, ArrowLeftRight, ScrollText, PiggyBank, Info, StickyNote } from 'lucide-react';
 import type { Asset } from '@/types/assets';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { formatCurrency, formatNumber, formatPercentage } from '@/lib/services/chartService';
 import { calculateAssetValue } from '@/lib/services/assetService';
 import { computeUnrealizedGain, resolveBondRowFacts } from '@/lib/utils/patrimonioSummary';
-import { describeBondRow, describeManualValuation } from '@/lib/utils/patrimonioNarrative';
+import { describeBondRow, describeCrowdfundingRow, describeManualValuation } from '@/lib/utils/patrimonioNarrative';
 import { costBasisPerUnitEur, isEurNative } from '@/lib/utils/costBasisEur';
 import { hasMarketPrice } from '@/lib/utils/assetPricing';
 import { toDate } from '@/lib/utils/dateHelpers';
@@ -31,12 +32,54 @@ export function formatDeltaPercent(delta: number | null): string {
   return `${delta >= 0 ? '+' : '−'}${formatPercentage(Math.abs(delta), 1)}`;
 }
 
+/** A note with nothing but whitespace in it is an absence, not a note. */
+export function hasAssetNote(asset: Pick<Asset, 'notes'>): boolean {
+  return !!asset.notes && asset.notes.trim() !== '';
+}
+
+/**
+ * The note indicator: an icon that IS the signal («there is more here»), the full text in its
+ * popover. A truncated note beside the name would be unreadable, and a `title` is not an accessible
+ * name and never fires on touch (AGENTS.md → Accessibility) — neither does a Radix `Tooltip`, which
+ * is why this is a `Popover` (opens on click, so touch reaches it).
+ *
+ * The icon stays small and the TARGET is the 32px dense-list floor, folded into the label row with
+ * a negative margin so it costs the row no height — the AssetMovementsDialog info icon, same shape.
+ */
+export function AssetNoteMarker({ note }: { note: string }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="-my-2.5 flex h-8 w-8 flex-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label="Leggi la nota dello strumento"
+        >
+          <StickyNote className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="max-w-xs text-xs leading-relaxed whitespace-pre-wrap">
+        {note}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /**
  * The sub-line under an instrument's name, shared by the desktop table and the mobile row:
  * a bond says when it matures and when its next coupon falls; a hand-valued holding says when
  * its value was last typed. Null for a quoted instrument, whose ticker is enough.
  */
 export function describeAssetRowSubLine(asset: Asset, now: Date): string | null {
+  const crowdfunding = describeCrowdfundingRow(
+    {
+      investedCapital: asset.investedCapital,
+      maturityDate: asset.maturityDate,
+      expectedRoi: asset.expectedRoi,
+    },
+    now
+  );
+  if (crowdfunding) return crowdfunding;
   const bond = resolveBondRowFacts(asset);
   if (bond) return describeBondRow(bond, bond.nextCoupon, now);
   if (!hasMarketPrice(asset.type, asset.subCategory)) return describeManualValuation(toDate(asset.lastPriceUpdate), now);
@@ -331,6 +374,10 @@ export function AssetRow({
           aria-hidden="true"
         />
         </button>
+        {/* The note is a SIBLING of the disclosure button, never a child of it: a button inside a
+            button is invalid HTML, and tapping the note would also have opened the row. It sits on
+            the right edge, past the chevron, so it cannot be mistaken for the row's own control. */}
+        {hasAssetNote(asset) && <AssetNoteMarker note={(asset.notes ?? '').trim()} />}
       </div>
 
       <div

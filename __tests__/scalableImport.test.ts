@@ -240,7 +240,10 @@ describe('mapScalableType / mapHoldingToAssetFormData', () => {
       averageCost: 88.1,
     };
     expect(mapHoldingToAssetFormData(holding)).toMatchObject({
-      ticker: 'IE00B4L5Y983',
+      // The bridge: `sc` sends no ticker, so without the shared catalogue this stayed the ISIN and
+      // Yahoo could never see inside the fund. `IE00B4L5Y983` is iShares Core MSCI World and
+      // `SWDA.MI` is its Milan listing (measured via OpenFIGI).
+      ticker: 'SWDA.MI',
       displayTicker: 'iShares Core MSCI World',
       name: 'iShares Core MSCI World',
       type: 'etf',
@@ -308,6 +311,70 @@ describe('buildScalableImportPlan', () => {
     const plan = buildScalableImportPlan(holdings, null, []);
     expect(plan.holdings[0].formData.type).toBe('etf');
     expect(plan.warnings[0]).toContain('non riconosciuto');
+  });
+
+  it('gives a new position a Yahoo symbol when the catalogue knows its ISIN', () => {
+    // The whole point of the bridge: `sc` sends no ticker and no WKN, so without this the fund is
+    // permanently unquotable and the exposure service can never see inside it.
+    const { holdings } = parseScalableHoldingsJson(
+      JSON.stringify([{ isin: 'IE00BK5BQT80', name: 'Vanguard FTSE All-World', type: 'ETF', quantity: 10, price: 120, currency: 'EUR' }])
+    );
+    const [diff] = buildScalableImportPlan(holdings, null, []).holdings;
+    expect(diff.formData.ticker).toBe('VWCE.MI');
+    // The broker still feeds the price: a real symbol must NOT switch Yahoo pricing on.
+    expect(diff.formData.autoUpdatePrice).toBe(false);
+    expect(diff.formData.isin).toBe('IE00BK5BQT80');
+  });
+
+  it('keeps the ISIN as the ticker for a fund the catalogue does not know', () => {
+    // `IE00B6R52259` is deliberately absent from the catalogue. The ISIN is the status quo, so a
+    // fund nobody has verified keeps the exact behaviour it had before the bridge existed.
+    const { holdings } = parseScalableHoldingsJson(
+      JSON.stringify([{ isin: 'IE00B6R52259', name: 'Fondo Non Verificato', type: 'ETF', quantity: 10, price: 50, currency: 'EUR' }])
+    );
+    const [diff] = buildScalableImportPlan(holdings, null, []).holdings;
+    expect(diff.formData.ticker).toBe('IE00B6R52259');
+  });
+
+  it('offers to replace an ISIN ticker on a position imported before the bridge', () => {
+    const { holdings } = parseScalableHoldingsJson(
+      JSON.stringify([{ isin: 'IE00BK5BQT80', name: 'Vanguard FTSE All-World', type: 'ETF', quantity: 10, price: 120, currency: 'EUR' }])
+    );
+    // The tracked asset still carries its ISIN, so the fund is opaque until this is written.
+    const plan = buildScalableImportPlan(holdings, null, [
+      { ...existingAsset(), isin: 'IE00BK5BQT80', ticker: 'IE00BK5BQT80', name: 'Vanguard FTSE All-World', quantity: 10, currentPrice: 120 },
+    ]);
+    const [diff] = plan.holdings;
+    expect(diff.kind).toBe('unchanged');
+    expect(diff.tickerUpdate).toBe('VWCE.MI');
+    expect(plan.stats.tickerUpdateCount).toBe(1);
+  });
+
+  it('never re-offers a symbol the tracked ticker already is', () => {
+    // FALSIFICATION: without the ticker comparison this proposes a write on EVERY sync of a
+    // position that is already correct, which is a Firestore write per holding per sync for
+    // nothing. It has to be gated on the tracked ticker actually being the ISIN.
+    const { holdings } = parseScalableHoldingsJson(
+      JSON.stringify([{ isin: 'IE00BK5BQT80', name: 'Vanguard FTSE All-World', type: 'ETF', quantity: 10, price: 120, currency: 'EUR' }])
+    );
+    const plan = buildScalableImportPlan(holdings, null, [
+      { ...existingAsset(), isin: 'IE00BK5BQT80', ticker: 'VWCE.MI', currentPrice: 120 },
+    ]);
+    expect(plan.holdings[0].tickerUpdate).toBeNull();
+    expect(plan.stats.tickerUpdateCount).toBe(0);
+  });
+
+  it('proposes no symbol for a fund the catalogue does not know, however its ticker looks', () => {
+    // The ISIN IS the tracked ticker here, which is exactly the shape that triggers a repair for a
+    // KNOWN fund. With the catalogue silent the plan must still propose nothing.
+    const { holdings } = parseScalableHoldingsJson(
+      JSON.stringify([{ isin: 'IE00B6R52259', name: 'Fondo Non Verificato', type: 'ETF', quantity: 10, price: 50, currency: 'EUR' }])
+    );
+    const plan = buildScalableImportPlan(holdings, null, [
+      { ...existingAsset(), isin: 'IE00B6R52259', ticker: 'IE00B6R52259', name: 'Fondo Non Verificato', quantity: 10, currentPrice: 50 },
+    ]);
+    expect(plan.holdings[0].tickerUpdate).toBeNull();
+    expect(plan.stats.tickerUpdateCount).toBe(0);
   });
 
   it('names the suggested cash account', () => {

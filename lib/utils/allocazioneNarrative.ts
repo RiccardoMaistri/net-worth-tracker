@@ -556,95 +556,114 @@ export function describeClasses(gaps: ClassGap[], band: RebalanceBand): Narrativ
 
 /**
  * «Il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti); il primo settore è
- * Tecnologia (24,3%) e iShares emette il 61% degli ETF.» Null when nothing was analysed.
+ * Tecnologia (24,3%) e la prima area geografica è Nord America (41,2%).» Null when nothing was
+ * analysed.
  *
  * The clause of the view the reader is IN comes first. The tile shows one list at a time, and a
- * reading that opened on the heaviest holding while the list ranked issuers answered a question
+ * reading that opened on the heaviest holding while the list ranked sectors answered a question
  * nobody had asked — it was the only reading on the page that did not answer the state it was in.
  * All three facts stay: the tile is one question («cosa possiedo davvero?») and the other two are
  * the context that makes the first one worth reading.
  */
 export function describeExposure(highlights: ExposureHighlights, view: ExposureViewKey = 'holdings'): Narrative | null {
-  /**
-   * A clause that OPENS on a proper name is never capitalised: the issuer's own spelling is the
-   * fact, and «iShares» turned into «IShares» is the app correcting a brand.
-   */
-  type Clause = { narrative: Narrative; opensOnProperName: boolean };
+  type Clause = { narrative: Narrative };
 
   const holdingClause = (): Clause | null => {
     if (!highlights.topHolding) return null;
     const { name, pct, sourceCount } = highlights.topHolding;
     return {
       narrative: [prose(`il titolo più pesante è ${name} (`), percent(pct, 1), prose(` del portafoglio, in ${sourceCount} strument${sourceCount === 1 ? 'o' : 'i'})`)],
-      opensOnProperName: false,
     };
   };
   const sectorClause = (): Clause | null =>
     highlights.topSector
       ? {
           narrative: [prose(`il primo settore è ${highlights.topSector.label} (`), percent(highlights.topSector.pct, 1), prose(')')],
-          opensOnProperName: false,
         }
       : null;
-  const issuerClause = (): Clause | null => {
-    if (!highlights.topIssuer) return null;
-    const share = highlights.topIssuer.etfShare;
-    return {
-      narrative: [prose(`${highlights.topIssuer.family} emette ${articleForPercent(share, 0)}`), figure(`${share}%`), prose(' degli ETF')],
-      opensOnProperName: true,
-    };
-  };
+  const regionClause = (): Clause | null =>
+    highlights.topRegion
+      ? {
+          narrative: [prose(`la prima area geografica è ${highlights.topRegion.label} (`), percent(highlights.topRegion.pct, 1), prose(')')],
+        }
+      : null;
 
+  // Each view opens on its own clause; the other two follow in a fixed relative order, so two
+  // readings never differ only by which context they happened to lead with.
   const order: Array<Clause | null> =
     view === 'sectors'
-      ? [sectorClause(), holdingClause(), issuerClause()]
-      : view === 'issuers'
-        ? [issuerClause(), holdingClause(), sectorClause()]
-        : [holdingClause(), sectorClause(), issuerClause()];
+      ? [sectorClause(), holdingClause(), regionClause()]
+      : view === 'regions'
+        ? [regionClause(), holdingClause(), sectorClause()]
+        : [holdingClause(), sectorClause(), regionClause()];
 
   const clauses = order.filter((clause): clause is Clause => clause !== null);
   if (clauses.length === 0) return null;
   const [first, ...rest] = clauses;
-  const sentence: Narrative = first.opensOnProperName
-    ? [...first.narrative]
-    : [prose(capitalize(first.narrative[0].text)), ...first.narrative.slice(1)];
+  // Every clause opens on a lowercase word the app itself wrote («il titolo più pesante», «il
+  // primo settore», «la prima area»), so the first segment is always capitalised. The branch that
+  // skipped it existed for the removed «Emittenti» clause, which opened on a brand's own spelling.
+  const sentence: Narrative = [prose(capitalize(first.narrative[0].text)), ...first.narrative.slice(1)];
   if (rest.length > 0) sentence.push(prose('; '), ...joinList(rest.map((clause) => clause.narrative)));
   sentence.push(prose('.'));
   return sentence;
 }
 
 /** What an empty exposure view means — the rule each list encoded, one line, no figure. */
-export function describeExposureEmpty(view: 'holdings' | 'sectors' | 'issuers'): string {
+export function describeExposureEmpty(view: ExposureViewKey): string {
   switch (view) {
     case 'holdings':
       return 'Nessun titolo riconosciuto: verifica che i ticker degli ETF siano noti a Yahoo Finance.';
     case 'sectors':
       return 'Nessun dato settoriale per gli ETF in portafoglio.';
     default:
-      return 'Nessun ETF in portafoglio.';
+      return 'Nessuna area riconosciuta: l\u0027area di un ETF viene dal suo indice, altrimenti dalle sue prime ~10 posizioni. Serve un ticker noto a Yahoo Finance. Puoi anche fissare l\u0027area a mano sull\u0027asset.';
   }
 }
 
 /**
- * «12 asset su 16 analizzati · % del portafoglio» — the tile's aside.
+ * `X asset su Y con un'area · % del portafoglio` — the tile's aside.
  *
  * The second half names the base of the percentage column, which is the WHOLE portfolio: the
- * reading beside it says an issuer emits «il 46% degli ETF» and the row under it printed «29%» for
- * the same issuer, two true figures on two bases with only one of them declared.
+ * reading beside it and the row under it must be on the same base, or the tile prints two true
+ * figures on two different denominators with only one of them declared.
+ *
+ * The count follows the VIEW, because the views do not read the same assets. The area view counts
+ * `regionAssets` — bonds carry a country of issue and join it, while cash, a flat and a pension
+ * fund stay out of it — so printing `analyzedAssets` beside an area bar would describe a
+ * different cut from the one on screen.
  */
-export function describeExposureAside(input: { analyzedAssets: number; totalAssets: number }): string {
+export function describeExposureAside(
+  input: { analyzedAssets: number; totalAssets: number; regionAssets?: number },
+  view: ExposureViewKey
+): string {
+  if (view === 'regions') {
+    const classified = input.regionAssets ?? 0;
+    return `${classified} asset su ${input.totalAssets} con un'area · % del portafoglio`;
+  }
   return `${input.analyzedAssets} asset su ${input.totalAssets} analizzati · % del portafoglio`;
 }
 
-const EXPOSURE_METHOD = 'Prime ~10 posizioni per ETF da Yahoo Finance: approssimato per i fondi molto diversificati. Nessuna copertura geografica.';
+/**
+ * The method, ONE SENTENCE PER VIEW — the three cuts are not read the same way, and a single shared
+ * line had already gone stale on the areas (it promised the sample for every cut, while the area is
+ * now the fund's index).
+ */
+const EXPOSURE_METHOD: Record<ExposureViewKey, string> = {
+  holdings: 'Prime ~10 posizioni per ETF da Yahoo Finance: la lista dei titoli è un campione dei fondi molto diversificati.',
+  sectors: 'Composizione settoriale completa di ciascun ETF da Yahoo Finance, più il settore di ogni titolo posseduto direttamente.',
+  regions:
+    "L'area di un ETF è quella del suo indice, riconosciuto dal nome del fondo; solo dove l'indice non è riconosciuto si usano le prime ~10 posizioni, e la lettura è un campione. Contanti, fondo pensione e immobili non hanno un'area e restano fuori.",
+};
 
-/** The tile's footer: the method, then the day of the last computation when known. */
-export function describeExposureFooter(computedAt: string | null): string {
-  if (!computedAt) return EXPOSURE_METHOD;
+/** The tile's footer: the method of the view on screen, then the day of the last computation. */
+export function describeExposureFooter(computedAt: string | null, view: ExposureViewKey = 'holdings'): string {
+  const method = EXPOSURE_METHOD[view];
+  if (!computedAt) return method;
   const date = new Date(computedAt);
-  if (Number.isNaN(date.getTime())) return EXPOSURE_METHOD;
+  if (Number.isNaN(date.getTime())) return method;
   const day = new Intl.DateTimeFormat('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Rome' }).format(date);
-  return `${EXPOSURE_METHOD} Aggiornato il ${day}.`;
+  return `${method} Aggiornato il ${day}.`;
 }
 
 // ─── Sovrapposizioni ──────────────────────────────────────────────────────────

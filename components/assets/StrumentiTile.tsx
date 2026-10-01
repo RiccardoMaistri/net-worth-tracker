@@ -27,11 +27,12 @@
  */
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeftRight,
   ArrowUpDown,
+  Building2,
   Calculator,
   ChevronDown,
   ChevronRight,
@@ -54,7 +55,7 @@ import { useDeleteAsset } from '@/lib/hooks/useAssets';
 import { useArmedDelete } from '@/lib/hooks/useArmedDelete';
 import { useRovingFocus } from '@/lib/hooks/useRovingFocus';
 import { Checkbox } from '@/components/ui/checkbox';
-import { resolveDisplayAssetClass } from '@/lib/utils/assetDisplayClass';
+import { resolveBrokerGroup, resolveDisplayAssetClass } from '@/lib/utils/assetDisplayClass';
 import { getAssetDisplayTicker } from '@/lib/utils/assetDisplay';
 import { hasMarketPrice, requiresManualPricing } from '@/lib/utils/assetPricing';
 import { costBasisPerUnitEur, isEurNative } from '@/lib/utils/costBasisEur';
@@ -69,7 +70,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Tile, TILE_SUB_EYEBROW_CLASS } from '@/components/ui/tile';
 import {
   AssetClassChip,
+  AssetNoteMarker,
   AssetRow,
+  hasAssetNote,
   InstrumentClassChip,
   RealEstateValueTooltip,
   describeAssetRowSubLine,
@@ -107,13 +110,30 @@ const MANUAL_ROW_TINT = 'bg-[color-mix(in_oklch,var(--chart-3)_6%,var(--card))]'
 const STICKY_ACTIONS_CLASS = 'sticky right-0 z-[1] bg-card';
 
 /** The two toggles are remembered per browser: a monthly reader keeps the Δ windows on. */
-const STORAGE_KEYS = { showDeltas: 'patrimonio.strumenti.andamento', groupByClass: 'patrimonio.strumenti.raggruppa' } as const;
+const STORAGE_KEYS = { showDeltas: 'patrimonio.strumenti.andamento', groupBy: 'patrimonio.strumenti.raggruppa-per' } as const;
+/** The pre-broker boolean key: `1` meant «group by class». Read once, then forgotten. */
+const LEGACY_GROUP_BY_CLASS_KEY = 'patrimonio.strumenti.raggruppa';
+
+/** Grouping dimension. ONE state by design: two booleans (classe/broker) could drift apart. */
+type GroupMode = 'none' | 'class' | 'broker';
 
 function readStoredToggle(key: string): boolean {
   try {
     return typeof window !== 'undefined' && window.localStorage.getItem(key) === '1';
   } catch {
     return false;
+  }
+}
+
+function readStoredGroupMode(): GroupMode {
+  try {
+    if (typeof window === 'undefined') return 'none';
+    const stored = window.localStorage.getItem(STORAGE_KEYS.groupBy);
+    if (stored === 'class' || stored === 'broker') return stored;
+    if (window.localStorage.getItem(LEGACY_GROUP_BY_CLASS_KEY) === '1') return 'class';
+    return 'none';
+  } catch {
+    return 'none';
   }
 }
 
@@ -302,7 +322,7 @@ export function StrumentiTile({
   // Off by default: the Δ view replaces the price columns (see `showPriceColumns`). Both
   // toggles come back the way the reader left them (per browser).
   const [showDeltas, setShowDeltas] = useState(() => readStoredToggle(STORAGE_KEYS.showDeltas));
-  const [groupByClass, setGroupByClass] = useState(() => readStoredToggle(STORAGE_KEYS.groupByClass));
+  const [groupBy, setGroupBy] = useState<GroupMode>(() => readStoredGroupMode());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [announcement, setAnnouncement] = useState('');
   // Bulk selection: ids the reader ticked for the armed «Elimina N». Pruned against the
@@ -325,7 +345,7 @@ export function StrumentiTile({
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [showDeltas, groupByClass, assets.length]);
+  }, [showDeltas, groupBy, assets.length]);
 
   // Sold-out rows stay in the table («Azzerato») but are not something the user owns: the
   // reading counts held positions only.
@@ -400,12 +420,22 @@ export function StrumentiTile({
     });
   };
 
-  const toggleGroupByClass = () => {
-    setGroupByClass((prev) => {
-      writeStoredToggle(STORAGE_KEYS.groupByClass, !prev);
-      return !prev;
+  /**
+   * One control, three positions: clicking the active mode switches grouping off, clicking the
+   * other switches dimension. Collapsed groups never survive a mode change — a key means a
+   * class in one mode and a broker in the other, so keeping the set would collapse strangers.
+   */
+  const setGroupMode = (mode: Exclude<GroupMode, 'none'>) => {
+    setGroupBy((prev) => {
+      const next: GroupMode = prev === mode ? 'none' : mode;
+      try {
+        window.localStorage.setItem(STORAGE_KEYS.groupBy, next);
+      } catch {
+        // A blocked storage only forgets the toggle; the table is unaffected.
+      }
+      return next;
     });
-    if (groupByClass) setCollapsedGroups(new Set());
+    setCollapsedGroups(new Set());
   };
 
   // First click defaults to desc for numeric columns, asc for alphabetical ones.
@@ -452,17 +482,18 @@ export function StrumentiTile({
     });
   }, [assets, sortState, performance]);
 
-  // Grouped mode: an ordered map keyed by display class, in first-occurrence order of the sort.
+  // Grouped mode: an ordered map keyed by display class or broker, in first-occurrence
+  // order of the sort. The key is display-only in both dimensions — never written back.
   const groupedAssets = useMemo(() => {
-    if (!groupByClass) return null;
+    if (groupBy === 'none') return null;
     const map = new Map<string, Asset[]>();
     for (const asset of sortedAssets) {
-      const key = resolveDisplayAssetClass(asset);
+      const key = groupBy === 'class' ? resolveDisplayAssetClass(asset) : resolveBrokerGroup(asset);
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(asset);
     }
     return map;
-  }, [groupByClass, sortedAssets]);
+  }, [groupBy, sortedAssets]);
 
   const toggleGroupCollapsed = (key: string) => {
     setCollapsedGroups((prev) => {
@@ -474,17 +505,17 @@ export function StrumentiTile({
   };
 
   // The desktop rows actually on screen, in the order they RENDER: grouped mode reorders by
-  // class, so the roving index must follow the DOM (a collapsed group hides its rows). The
-  // mobile list has no grouping and always shows the whole sort. Each checkbox list is one Tab stop.
+  // class or broker, so the roving index must follow the DOM (a collapsed group hides its rows).
+  // The mobile list has no grouping and always shows the whole sort. Each checkbox list is one Tab stop.
   const visibleDesktopAssets = useMemo(() => {
-    if (!groupByClass) return sortedAssets;
+    if (groupBy === 'none') return sortedAssets;
     const out: Asset[] = [];
-    for (const [cls, group] of groupedAssets ?? []) {
-      if (collapsedGroups.has(cls)) continue;
+    for (const [key, group] of groupedAssets ?? []) {
+      if (collapsedGroups.has(key)) continue;
       out.push(...group);
     }
     return out;
-  }, [groupByClass, sortedAssets, groupedAssets, collapsedGroups]);
+  }, [groupBy, sortedAssets, groupedAssets, collapsedGroups]);
   const desktopRoving = useRovingFocus(visibleDesktopAssets.length);
   const flatRoving = useRovingFocus(sortedAssets.length);
   const desktopIndex = useMemo(() => new Map(visibleDesktopAssets.map((a, i) => [a.id, i] as const)), [visibleDesktopAssets]);
@@ -532,14 +563,20 @@ export function StrumentiTile({
         <th scope="row" className={cn(CELL_CLASS, 'max-w-[260px] text-left font-normal')}>
           <div className="flex min-w-0 items-center gap-2">
             <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-1.5">
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="block truncate font-medium text-foreground">{asset.name}</span>
+                    <span className="min-w-0 truncate font-medium text-foreground">{asset.name}</span>
                   </TooltipTrigger>
                   <TooltipContent>{asset.name}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
+              {/* The marker is a SIBLING of the name's tooltip trigger, not a child of it: nesting a
+                  popover button inside another tooltip's trigger made hovering the note also raise
+                  the name tooltip, over a target the reader could not tell apart. */}
+              {hasAssetNote(asset) && <AssetNoteMarker note={(asset.notes ?? '').trim()} />}
+            </div>
               {/* pensionFund has no ticker input — a leftover raw value must not resurface. */}
               {(asset.ticker && asset.type !== 'pensionFund') || asset.exchange || subLine ? (
                 <span className="block truncate text-[11px] text-muted-foreground">
@@ -666,23 +703,23 @@ export function StrumentiTile({
     );
   };
 
-  const renderGroupHeader = (cls: string, groupAssets: Asset[]) => {
+  const renderGroupHeader = (key: string, groupAssets: Asset[], title: ReactNode) => {
     const groupTotal = groupAssets.reduce((sum, a) => sum + calculateAssetValue(a), 0);
     const groupWeight = totalValue > 0 ? (groupTotal / totalValue) * 100 : null;
-    const isCollapsed = collapsedGroups.has(cls);
+    const isCollapsed = collapsedGroups.has(key);
     const Chevron = isCollapsed ? ChevronRight : ChevronDown;
     return (
-      <tr key={`group-${cls}`} className="border-t border-border bg-muted/40">
+      <tr key={`group-${key}`} className="border-t border-border bg-muted/40">
         <td colSpan={columnCount} className="p-0">
           <button
             type="button"
-            onClick={() => toggleGroupCollapsed(cls)}
+            onClick={() => toggleGroupCollapsed(key)}
             aria-expanded={!isCollapsed}
             className="flex w-full items-center justify-between px-1.5 py-2 text-left hover:bg-muted/60"
           >
             <span className="flex items-center gap-2">
               <Chevron className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-              <AssetClassChip assetClass={cls} />
+              {title}
               <span className="text-[11px] text-muted-foreground">
                 {groupAssets.length} {groupAssets.length === 1 ? 'strumento' : 'strumenti'}
               </span>
@@ -718,14 +755,25 @@ export function StrumentiTile({
             </Button>
             <Button
               type="button"
-              variant={groupByClass ? 'default' : 'outline'}
+              variant={groupBy === 'class' ? 'default' : 'outline'}
               size="sm"
               className="h-8 px-2.5 text-[11px]"
-              onClick={toggleGroupByClass}
-              aria-pressed={groupByClass}
+              onClick={() => setGroupMode('class')}
+              aria-pressed={groupBy === 'class'}
             >
               <LayoutGrid className="h-3 w-3" aria-hidden="true" />
               Raggruppa per classe
+            </Button>
+            <Button
+              type="button"
+              variant={groupBy === 'broker' ? 'default' : 'outline'}
+              size="sm"
+              className="h-8 px-2.5 text-[11px]"
+              onClick={() => setGroupMode('broker')}
+              aria-pressed={groupBy === 'broker'}
+            >
+              <Building2 className="h-3 w-3" aria-hidden="true" />
+              Raggruppa per broker
             </Button>
           </div>
         ) : undefined
@@ -847,9 +895,17 @@ export function StrumentiTile({
               </thead>
               <tbody>
                 {groupedAssets
-                  ? Array.from(groupedAssets.entries()).flatMap(([cls, groupAssets]) => [
-                      renderGroupHeader(cls, groupAssets),
-                      ...(collapsedGroups.has(cls) ? [] : groupAssets.map(renderRow)),
+                  ? Array.from(groupedAssets.entries()).flatMap(([key, groupAssets]) => [
+                      renderGroupHeader(
+                        key,
+                        groupAssets,
+                        groupBy === 'broker' ? (
+                          <span className="text-[13px] font-medium text-foreground">{key}</span>
+                        ) : (
+                          <AssetClassChip assetClass={key} />
+                        )
+                      ),
+                      ...(collapsedGroups.has(key) ? [] : groupAssets.map(renderRow)),
                     ])
                   : sortedAssets.map(renderRow)}
               </tbody>

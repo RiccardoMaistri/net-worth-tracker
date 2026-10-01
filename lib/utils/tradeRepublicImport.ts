@@ -7,10 +7,18 @@
  * 1. **THE PORTFOLIO CARRIES NO PRICE.** `compactPortfolioByType` returns
  *    `{ isin, averageBuyIn, netSize, virtualSize, status, instrumentType, name }` and nothing
  *    quotable — Trade Republic quotes a security as `ticker` on `ISIN.EXCHANGE`, and the exchange
- *    suffix is not in the portfolio payload. So the bridge does NOT fetch a price: new assets are
- *    born with `autoUpdatePrice: TRUE` and the existing Yahoo path prices them like any other
- *    asset. Guessing an exchange suffix would put a wrong price on a real asset, which is worse
- *    than a price that arrives one cron later. Consequently the plan has NO price branch at all.
+ *    suffix is not in the portfolio payload. And the obvious fallback does not exist either:
+ *    Yahoo answers NO price for a bare ISIN (measured on a stock and an ETF ISIN), so quoting
+ *    `holding.isin` priced nothing and every synced position entered at 0 with a G/P of −100%.
+ *    New assets are therefore born with `autoUpdatePrice: TRUE` and the best ticker the sync
+ *    could resolve — the route's `yahooTicker` first (broker quote, table), the pure
+ *    `resolveTrYahooTicker` otherwise — with the preview's per-row field as the last word,
+ *    because guessing an exchange suffix would put a wrong price on a real asset, which is
+ *    worse than a price the user points at. Consequently the plan has NO price branch at all.
+ *    The one deterministic exception is crypto: its pseudo-ISIN (`XF000BTC0017`) carries the
+ *    coin code, and Yahoo lists every such coin as `<CODE>-EUR` — so `resolveTrYahooTicker`
+ *    writes that symbol directly, and a re-sync repairs a tracked asset whose ticker is still
+ *    the raw broker id (never a hand-fixed one).
  * 2. **CASH IS A REAL BALANCE, NOT A RESIDUAL.** Scalable's cash is `valuation − securities −
  *    crypto` because that is all its overview exposes; Trade Republic publishes the cash account
  *    itself (`cash` topic, amounts in MAJOR units — the SDK's `projectCash` maps `amount`
@@ -34,6 +42,7 @@
 
 import type { Asset, AssetClass, AssetFormData, AssetType } from '@/types/assets';
 import { isLedgerAssetType } from '@/types/assetTransactions';
+import { resolveYahooSymbolForIsin } from '@/lib/utils/yahooSymbolForIsin';
 
 // ─── Input shapes (what the three topics hold) ───────────────────────────────
 
@@ -49,11 +58,21 @@ export interface TrHoldingInput {
   /** Broker average buy-in, per unit, native currency (`averageBuyIn`). */
   averageCost?: number;
   /**
-   * Current quote per unit, filled in by the READ ROUTE from the ordinary Yahoo price service —
-   * NOT by the broker, which publishes no quote with the position. Absent when that lookup failed,
-   * and the plan then WARNS rather than creating the asset silently worthless.
+   * Current quote per unit, filled in by the READ ROUTE — first from the broker's own ticker
+   * topic (EUR, authoritative), then from the ordinary Yahoo price service. NOT by the
+   * positions payload, which publishes no quote. Absent when every lookup failed, and the plan
+   * then WARNS rather than creating the asset silently worthless. Attached only when the quote
+   * is in EUR: a foreign-currency price under the EUR holding currency would read as euros.
    */
   price?: number;
+  /**
+   * The Yahoo symbol this holding was priced under, when one is known — the curated table, the
+   * crypto derivation, in that order. The plan writes it as the
+   * asset's ticker so every later refresh keeps working; the `isin` stays the match key.
+   * Filled by the READ ROUTE alongside `price` (and for the paste-JSON path, absent — the
+   * pure layer still resolves what it can).
+   */
+  yahooTicker?: string;
   /** Broker status string (`status`), e.g. "active". */
   status: string;
   currency: string;
@@ -348,11 +367,69 @@ export function defaultTrTaxRateFor(type: AssetType): number {
 }
 
 /**
+ * The Yahoo symbol for a Trade Republic position's ISIN, or null when none is known.
+ *
+ * Yahoo quotes NEITHER real ISINs (measured: `quote('US0378331005')` → no price) NOR the
+ * pseudo-ISNs Trade Republic assigns to crypto (`XF000BTC0017` — `XF` is the user-assigned
+ * ISO block for exchange-issued identifiers, then the coin code, then digits). So the symbol
+ * has to come from somewhere, and there are exactly two honest sources:
+ *
+ *   1. **CRYPTO, derived.** The pseudo-ISIN carries the coin code and Yahoo lists every such
+ *      coin as `<CODE>-EUR` (measured: `BTC-EUR` → 73.340,13 €). Deterministic, no table.
+ *   2. **A curated table for the instruments a real account actually holds.** The alternative
+ *      is guessing the exchange suffix, which puts a WRONG price on a real asset — and the
+ *      suffix is not in the payload, so there is no way to derive it. Each entry below was
+ *      resolved against Yahoo and its quote verified to exist.
+ *
+ * Everything unmapped returns null: the asset is then created with the ISIN as ticker and the
+ * preview asks for the symbol (see `applyTrTickerOverride`). Never invent one.
+ */
+export const TR_YAHOO_TICKER_BY_ISIN: Readonly<Record<string, string>> = {
+  // Stocks — single listing, so the symbol is unambiguous.
+  US0231351067: 'AMZN', // Amazon.com
+  US4592001014: 'IBM', // IBM
+  US5951121038: 'MU', // Micron Technology
+  US88160R1014: 'TSLA', // Tesla
+  CH1134540470: 'ONON', // On Holding
+  // SpaceX and Bending Spoons are LISTED (measured `SPCX` 149,24 $ and `BSP` 32,76 $ on
+  // Nasdaq) — not private, as a stale assumption once said. `BSP` and not `BST`: that symbol
+  // belongs to an unrelated BlackRock fund.
+  US84615Q1031: 'SPCX', // SpaceX (Space Exploration Technologies)
+  IT0005717696: 'BSP', // Bending Spoons
+  // Stocks with a EUR listing.
+  NL00150001Q9: 'STLAM.MI', // Stellantis (Euronext Milan)
+  DE0007664039: 'VOW3.DE', // Volkswagen Vorzugsaktie
+};
+// The ETF rows that used to live here moved to `lib/utils/yahooSymbolForIsin.ts`, and three of them
+// were wrong — `IE00B3VTMJ91` was paired with `SWDA.MI`, which OpenFIGI measures as the London/Milan
+// listing of a DIFFERENT fund (IE00B4L5Y983), and two more echoed their own ISIN back with a `.SG`
+// suffix, which is not a ticker at all. One table, in a module both brokers read, is what stops the
+// next broker from growing its own mismatched copy. See CORRECTED_ISIN_PAIRS for the audit.
+
+export function resolveTrYahooTicker(holding: TrHoldingInput): string | null {
+  const { type } = mapTrType(holding.rawType, holding.rawCategory);
+  if (type === 'crypto') {
+    const coin = /^XF000([A-Z]{2,12})\d+$/.exec(holding.isin)?.[1];
+    return coin ? `${coin}-EUR` : null;
+  }
+  // The shared fund catalogue first, this account's own stock table second. A fund's identity is a
+  // public fact both brokers need, so it is written down once; a single stock's listing is
+  // whichever exchange this account holds it on, so it stays here.
+  return resolveYahooSymbolForIsin(holding.isin) ?? TR_YAHOO_TICKER_BY_ISIN[holding.isin.toUpperCase()] ?? null;
+}
+
+/**
  * A fresh `AssetFormData` for a Trade Republic position not yet tracked.
  *
  * `autoUpdatePrice: TRUE` — the opposite of the Scalable bridge, and the reason is in the header:
  * this broker publishes no quote with the position, so the price comes from the ordinary Yahoo
  * path, both now (filled in by the read route) and on every later refresh.
+ *
+ * The `ticker` is the Yahoo symbol when one is known (`holding.yahooTicker` from the route,
+ * else the pure `resolveTrYahooTicker`), otherwise the ISIN — which Yahoo CANNOT quote, so the
+ * asset enters at 0 until the user sets a real symbol (in the preview, or later on
+ * Patrimonio). The `isin` field always keeps the broker identifier: that is what the next
+ * sync matches on.
  *
  * `currentPrice` falls back to 0 when the quote lookup failed, and the plan pairs that with a
  * warning naming the position. A created asset at 0 is visible and fixable; a position missing
@@ -361,7 +438,7 @@ export function defaultTrTaxRateFor(type: AssetType): number {
 export function mapTrHoldingToAssetFormData(holding: TrHoldingInput): AssetFormData {
   const { type, assetClass } = mapTrType(holding.rawType, holding.rawCategory);
   return {
-    ticker: holding.isin,
+    ticker: holding.yahooTicker ?? resolveTrYahooTicker(holding) ?? holding.isin,
     displayTicker: holding.name,
     name: holding.name,
     type,
@@ -432,7 +509,18 @@ export interface TrImportPlan {
 
 const QTY_EPS = 1e-6;
 
-export type TrExistingAsset = Pick<Asset, 'id' | 'name' | 'isin' | 'type' | 'quantity'>;
+export type TrExistingAsset = Pick<Asset, 'id' | 'name' | 'isin' | 'type' | 'quantity' | 'ticker'>;
+
+/**
+ * Apply the preview's per-row ticker override to a creation payload. A blank override keeps
+ * the planned ticker: the field is an opt-in correction, and an accidental wipe must not
+ * silently re-point the asset at the unquotable ISIN.
+ */
+export function applyTrTickerOverride(formData: AssetFormData, ticker: string | undefined): AssetFormData {
+  const trimmed = ticker?.trim();
+  if (!trimmed || trimmed === formData.ticker) return formData;
+  return { ...formData, ticker: trimmed };
+}
 
 /**
  * Diff broker positions against the tracked assets (matched by ISIN). Only two things can come
@@ -463,11 +551,13 @@ export function buildTrImportPlan(
         );
       }
       // A position born at 0 would silently shrink the net worth by its whole value, so the
-      // missing quote is named instead. The asset is still created: it is a real holding, and
-      // `autoUpdatePrice` will fill the price on the next refresh.
+      // missing quote is named instead. The asset is still created: it is a real holding. But
+      // the price does NOT arrive on its own — Yahoo cannot quote the ISIN the ticker holds —
+      // so the warning says where to put the real Yahoo symbol (the row's ticker field, or
+      // later on Patrimonio): that is what every later refresh reads.
       if (holding.price === undefined) {
         warnings.push(
-          `«${holding.name}»: prezzo non trovato, la posizione entra a 0 e si aggiornerà alla prossima quotazione.`
+          `«${holding.name}»: prezzo non trovato (Yahoo non quota l'ISIN) — la posizione entra a 0: scrivi il simbolo Yahoo nella riga qui sotto (es. VWCE.MI, AAPL, BTC-EUR) oppure impostalo dopo su Patrimonio.`
         );
       }
       return {

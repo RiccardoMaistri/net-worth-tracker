@@ -252,6 +252,26 @@ export async function updateAsset(
     if ('exchange' in updates && updates.exchange === undefined) {
       cleanedUpdates.exchange = deleteField();
     }
+    // notes is optional and user-clearable (an emptied textarea). Same `in` guard as above: the
+    // form always sends the key, a partial caller never does.
+    if ('notes' in updates && updates.notes === undefined) {
+      cleanedUpdates.notes = deleteField();
+    }
+    // geographicArea is optional and user-clearable (automatic / unset). Same `in` guard.
+    if ('geographicArea' in updates && updates.geographicArea === undefined) {
+      cleanedUpdates.geographicArea = deleteField();
+    }
+    // The crowdfunding pair, same rule: emptied fields are deleted, and an instrument re-typed away
+    // from crowdfunding must not keep a capital and a maturity that no longer mean anything.
+    if ('investedCapital' in updates && updates.investedCapital === undefined) {
+      cleanedUpdates.investedCapital = deleteField();
+    }
+    if ('maturityDate' in updates && updates.maturityDate === undefined) {
+      cleanedUpdates.maturityDate = deleteField();
+    }
+    if ('expectedRoi' in updates && updates.expectedRoi === undefined) {
+      cleanedUpdates.expectedRoi = deleteField();
+    }
 
     // The debt and its TAN are user-clearable (the «Debito residuo» switch off, an emptied TAN).
     // The `in` guard keeps a partial caller — a price refresh — from wiping a debt it never sent;
@@ -307,7 +327,7 @@ export type AssetMetadataFormData = Omit<AssetFormData, 'quantity' | 'averageCos
  * sending quantity/averageCost would wipe the PMC on every metadata save. `updateAsset` is unchanged and still
  * used for cash/realestate.
  *
- * `taxRate`/`displayTicker`/`subCategory`/`exchange` keep the same undefined→deleteField() clearing as
+ * `taxRate`/`displayTicker`/`subCategory`/`exchange`/`notes` keep the same undefined→deleteField() clearing as
  * `updateAsset` (the form always sends the key, undefined when cleared). quantity/averageCost/holdingStartDate are
  * structurally absent from the payload type, so the ledger-derived fields can never be cleared by
  * a metadata edit.
@@ -340,6 +360,25 @@ export async function updateAssetMetadata(
     // exchange too — user-clearable from the dialog, same `in` guard.
     if ('exchange' in updates && updates.exchange === undefined) {
       cleanedUpdates.exchange = deleteField();
+    }
+    // notes too — the emptied textarea, same `in` guard.
+    if ('notes' in updates && updates.notes === undefined) {
+      cleanedUpdates.notes = deleteField();
+    }
+    // geographicArea too — macro-region, same `in` guard.
+    if ('geographicArea' in updates && updates.geographicArea === undefined) {
+      cleanedUpdates.geographicArea = deleteField();
+    }
+    // The crowdfunding pair on the metadata path too (a ledger edit never sends them, and the
+    // `in` guard keeps it that way).
+    if ('investedCapital' in updates && updates.investedCapital === undefined) {
+      cleanedUpdates.investedCapital = deleteField();
+    }
+    if ('maturityDate' in updates && updates.maturityDate === undefined) {
+      cleanedUpdates.maturityDate = deleteField();
+    }
+    if ('expectedRoi' in updates && updates.expectedRoi === undefined) {
+      cleanedUpdates.expectedRoi = deleteField();
     }
     // dividendCashAssetId is user-clearable («Predefinito» in AssetDialog). The `in` guard keeps a
     // partial caller — a price refresh — from wiping an account it never sent.

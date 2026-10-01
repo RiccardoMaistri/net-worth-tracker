@@ -170,6 +170,21 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
   dates the coupon scheduler already knows, `describeBondRow` in `patrimonioNarrative.ts` says them; the coupon
   clause drops for a zero coupon or a matured bond); the composition of the sub-line is `describeAssetRowSubLine` in
   `AssetRow.tsx`, shared by the table and the mobile row — NOT in the narrative module, which must stay SDK-free.
+- **La nota per strumento è un campo di sola lettura per i calcoli** (2026-09-30). `Asset.notes` /
+  `AssetFormData.notes` (max 500 caratteri, zod), scritta dal dialog sotto «Borsa» e letta da **nessun**
+  calcolo: nell'anteprima di Allocazione, nelle tile, in Cron non compare mai. È **cancellabile**, quindi
+  `updateAsset`/`updateAssetMetadata` la traducono in `deleteField()` con la guardia `'notes' in updates` —
+  senza, `removeUndefinedFields` la lascerebbe e la nota cancellata tornerebbe al prossimo caricamento. La
+  riga la mostra come **icona `StickyNote` accanto al nome** (`AssetNoteMarker`, testo pieno nel popover) e
+  NON come sotto-riga: una nota troncata accanto al nome non è leggibile, e una riga in più per 30 strumenti
+  è più rumore che informazione. `hasAssetNote` considera ASSENTE la nota tutta spazi. Tre trappole del marker,
+  tutte misurate: **`Popover`, non `Tooltip`** (il tooltip Radix non si apre al tocco, quindi su telefono la nota
+  era irraggiungibile); **il target è 32px (`h-8 w-8`) con l'icona a 14px**, `-my-2.5` per non far crescere la
+  riga — la stessa forma dell'informazione di `AssetMovementsDialog`; e **è un FRATELLO del trigger, mai un
+  figlio**: nella riga mobile il trigger è il `<button>` del disclosure, quindi il marker era un button dentro
+  un button (HTML non valido, e il tocco sulla nota apriva anche il dettaglio), e nella cella desktop era dentro
+  il `TooltipTrigger` del nome (l'hover sulla nota alzava anche il tooltip del nome). Il `aria-label` dice
+  «Leggi la nota dello strumento», non il testo: il testo è nel popover.
 - **Every delete on the page is `useArmedDelete`** (2026-09-14, owner's call: the table rows, `AssetRow` and the
   cash-account modal all lost the 3 s timer that dialog.md had kept «by design» on rows): the arm and the disarm
   are announced through ONE `role="status"` live region per tile (`StrumentiTile` passes `announce` to every
@@ -240,6 +255,26 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
 ## Per-page blind spots
 
 - **Patrimonio**: Δ columns are empty for pension funds and cash accounts by design; the Rendimento tile ranks only within the overview's `topAssets` (15 largest); «Movimenti del mese» reads the whole ledger and filters in memory; **«Andamento» hides Quantità/Prezzo/PMC/TER while it is on** (a view, not a bug — the footer says so); a hand-valued row shows «—» for quantity, price and PMC and has no G/P (its PMC is its price); `text-muted-foreground` on the tile surface measures 4,48:1 in light on the owner's named theme (0,02 under AA; the default theme passes — a theme issue, doc/guide/temi.md, not touched); **a foreign-currency position has no G/P, no YOC and no PMC in euro until its ledger has projected `averageCostEur`** (the backfill runs on the first visit to Patrimonio; before it, the Panoramica's «Asset principali» and the PDF print no return for it — never the old dollar-against-euro figure); a EUR position measured against the native PMC before the backfill reads a G/P higher by its purchase fees; `AssetDialog.tsx` carries 7 pre-existing `react-hooks` errors. **Two accepted side effects of the optional Sottocategoria** (2026-08-30; neither is new — without the asterisk they are only less signalled): a cash account without the «conti correnti» subcategory loses the 5.000 € stamp-duty threshold AND the flat fee — it pays the securities' rate on its balance (`calculateStampDuty`, a rule Impostazioni already states), and changing Tipo or Classe does not clear `subCategory`, so an out-of-class value can survive invisibly — Radix shows the placeholder because the value is not among the items. **The checking-account duty is a flat 34,20 € above 5.000 €** (`lib/constants/stampDuty.ts`, fixed 2026-09-24: until then the account paid `balance × 0,2%` while the comment beside it said the flat rule and the test pinned the wrong figure — 12 € on 6.000 €, 2.000 € on a million); the threshold reads TODAY's balance, while the law reads the year's average balance, which the app does not keep — an account that dips under 5.000 € on the day the Costi tile is read shows no duty.
+- **Crowdfunding immobiliare** (2026-09-30): `type: 'crowdfunding'`, classe `realestate`, ILLIQUIDA per
+  default (`suggestIsLiquid`) e a prezzo MANUALE (`MANUALLY_VALUED_TYPES`), quindi niente ticker, niente
+  refresh, e **nessun PMC**: il tipo è escluso da `newAsset_showCostBasis` insieme a `realestate`, perché
+  `gainBasisEur` (l'unica decisione sulla base del G/P) legge `investedCapital` e MAI `averageCost` — un
+  «Prezzo di carico» qui scriverebbe un campo che nessuna lettura consuma, e il tax rate non compare
+  (`paysDividends` è chiuso per tipo). Il G/P quindi **NON è «—»** quando il capitale è registrato: è
+  l'unica valutazione manuale che lo misura, `valore − investedCapital`, e resta «—» solo senza un
+  capitale sottoscritto (`hasCostBasis` false, `investedCapital` assente o 0 — una capitale zero è
+  un'assenza, non una sottoscrizione). Il ritorno è quindi leggibile: `investedCapital` (cifra
+  sottoscritta), `expectedRoi` (la promessa della piattaforma, un numero PERCENT come
+  `taxRate`/`debtInterestRate` — NON la frazione del TER) e
+  `maturityDate` (giorno di rimborso) stanno nella sotto-riga, in quest'ordine: `describeCrowdfundingRow`
+  in `patrimonioNarrative` (parole e formattazione, `formatPercentageIt` con un decimale), l'ordine dei
+  campi in `AssetRow.tsx`. Il ROI atteso è **testo neutro senza colore di segno**: i token di segno
+  indicano un guadagno o una perdita realizzati, una promessa non è né l'uno né l'altro. Il valore
+  resta il campo Quantità come per un immobile. Il tipo NON ha debito
+  residuo né «casa di abitazione» (quelli restano `type === 'realestate'`), non paga dividendi
+  (`paysDividends` è chiuso per tipo) e non è un tipo ledger. «Rendita/distribuzioni» NON esiste: non
+  chiesto, e nessun campo di `Asset` lo contiene. La sotto-riga può TRONCARSI a 1440px con i tre fatti
+  (colonna nome di 260px): se serve, si legge la finestra di modifica dell'asset.
 - **Composite chip**: sorting by «Classe» and the group headers still read the PREVALENT class only — a 60/40 fund
   sorts and groups with pure «Azioni» (one instrument, one row; the split lives in the chip); the chip's segments are
   the stored `composition`, never re-read from the market, so a fund whose mix drifted shows its last saved split.

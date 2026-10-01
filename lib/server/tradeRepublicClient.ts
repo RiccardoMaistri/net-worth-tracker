@@ -22,9 +22,14 @@
  * PERMISSIONS, and the reason this bridge is safe to expose: this client can SUBSCRIBE to topics
  * and it holds a session that could in principle place an order. Nothing here writes — the read
  * surface below is a closed list of three topic reads, and the app never calls a write accessor.
- * That is the same posture `scalableCli.ts` takes with `sc --local-read-only`, arrived at from the
- * other side: Trade Republic has no read-only session flag, so the guarantee is structural (a
+ * That is the same posture `scalableCli.ts` takes with `sc --local-read-only`, arrived at from
+ * the other side: Trade Republic has no read-only session flag, so the guarantee is structural (a
  * whitelist in this file) rather than a broker-side setting. Do not add a command here.
+ *
+ * The one deliberate exception below that line is `readTrTickerQuotes`: a read-only quote feed
+ * (`bid`/`ask`/`last`, no order accessor exists on the topic), used only to price positions the
+ * payload reports without a quote. It is NOT a route command — `TR_READ_COMMANDS` is unchanged —
+ * and it cannot fail a sync, by construction (per-instrument timeout, fail-open).
  */
 
 import 'server-only';
@@ -42,6 +47,17 @@ const SESSIONS_COLLECTION = 'brokerSessions';
 /** The three reads, and nothing else. See the header: this whitelist IS the write guarantee. */
 export const TR_READ_COMMANDS = ['positions', 'cash', 'savingsPlans'] as const;
 export type TrReadCommand = (typeof TR_READ_COMMANDS)[number];
+
+/**
+ * One instrument quote, in the venue's currency (EUR on Lang & Schwarz — the broker's own
+ * execution venue, where every position it reports is tradable by definition).
+ */
+export interface TrTickerQuote {
+  price: number;
+}
+
+/** How long one stalled quote may hold the sync before it is skipped, not awaited. */
+const TICKER_QUOTE_TIMEOUT_MS = 8_000;
 
 /** A dead session is a 401, a missing link is a 409: they need different words from the user. */
 export class TradeRepublicAuthError extends Error {
@@ -165,6 +181,48 @@ export function resetTradeRepublicClient(ownerId?: string): void {
 }
 
 // ─── The read surface ────────────────────────────────────────────────────────
+
+/**
+ * The broker's OWN quotes for a list of ISINs — `last`, falling back to `bid`.
+ *
+ * Why this exists beside the Yahoo path: the positions payload carries no quote, and Yahoo
+ * cannot quote a bare ISIN — so without this every synced position entered at 0. The `ticker`
+ * topic IS quotable per ISIN (`<ISIN>.LSX`, measured live: TSLA 310,7 €, VWCE 169,44 €), needs
+ * no session (it is a public topic, though it is read here through the session client for
+ * connection reuse), and quotes in EUR on the broker's own venue — no FX, no symbol mapping.
+ *
+ * FAIL-OPEN per instrument, always: an unquotable ISIN (or a stalled subscription — observed
+ * live: a quote that never arrives hangs `get()` forever, hence the timeout) is simply absent
+ * from the map, and the caller falls back to Yahoo / the manual field exactly as before. A
+ * quote read must never be able to break a sync.
+ *
+ * NOT a fourth route command: `TR_READ_COMMANDS` stays the user-facing surface (positions,
+ * cash, savings plans). This is an internal enrichment step, read-only market data — it does
+ * not touch the write guarantee the header describes.
+ */
+export async function readTrTickerQuotes(
+  ownerId: string,
+  isins: string[]
+): Promise<Map<string, TrTickerQuote>> {
+  const quotes = new Map<string, TrTickerQuote>();
+  if (isins.length === 0) return quotes;
+  const entry = await ownerClient(ownerId);
+  await Promise.all(
+    isins.map(async (isin) => {
+      const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), TICKER_QUOTE_TIMEOUT_MS));
+      try {
+        const tick = await Promise.race([entry.client.ticker.get({ id: `${isin}.LSX` }), timeout]);
+        if (!tick) return;
+        const raw = tick.last?.price ?? tick.bid?.price;
+        const price = typeof raw === 'string' ? Number.parseFloat(raw.replace(',', '.')) : NaN;
+        if (Number.isFinite(price) && price > 0) quotes.set(isin, { price });
+      } catch {
+        // Unquotable here is not an error: the Yahoo/manual path covers it.
+      }
+    })
+  );
+  return quotes;
+}
 
 async function securitiesAccountNumber(entry: OwnerClient): Promise<string> {
   if (entry.securitiesAccountNumber) return entry.securitiesAccountNumber;

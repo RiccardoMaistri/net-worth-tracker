@@ -55,9 +55,31 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
+/**
+ * The XDG root `sc` reads its config from. A long-lived host sets `XDG_CONFIG_HOME` to the
+ * persisted session volume; anywhere else (local runs, tests) it falls back to the OS default.
+ */
+export function scalableXdgRoot(): string {
+  return process.env.XDG_CONFIG_HOME
+    ? process.env.XDG_CONFIG_HOME
+    : path.join(os.homedir(), '.config', 'scalable-cli');
+}
+
+/**
+ * One XDG home per profile — the multi-user answer. `sc` resolves its config, session file,
+ * DPoP key and refresh token under this directory, so each email gets a session of its own
+ * instead of sharing the machine keyring. The profile id becomes a path segment, so only
+ * the `[A-Za-z0-9_-]` ids `parseScalableProfiles` produces ever reach here.
+ */
+export function scalableProfileXdgHome(profile: string): string {
+  return path.join(scalableXdgRoot(), 'profiles', profile);
+}
+
 /** Ensure config.toml exists with file-based session backend for headless environments */
-export function ensureScalableConfigFile(): void {
-  const configDir = process.env.XDG_CONFIG_HOME
+export function ensureScalableConfigFile(configDirOverride?: string): void {
+  const configDir = configDirOverride
+    ? path.join(configDirOverride, 'scalable-cli')
+    : process.env.XDG_CONFIG_HOME
     ? path.join(process.env.XDG_CONFIG_HOME, 'scalable-cli')
     : path.join(os.homedir(), '.config', 'scalable-cli');
   const configFile = path.join(configDir, 'config.toml');
@@ -118,19 +140,26 @@ function assertBrokerOk(stdout: string): void {
   }
 }
 
+export interface RunScalableReadOptions {
+  env?: Record<string, string | undefined>;
+}
+
 /**
  * Run one whitelisted READ command and return its stdout.
- *
- * @throws ScalableCliError 503 when the binary is missing, 401 when the CLI session is
- * gone (refresh with `sc login`), 504 on timeout, 502 on any other broker failure.
+ * Accepts options to pass a profile-specific environment without mutating global process.env.
  */
-export async function runScalableReadCommand(command: ScalableReadCommand): Promise<string> {
-  ensureScalableConfigFile();
+export async function runScalableReadCommand(
+  command: ScalableReadCommand,
+  options?: RunScalableReadOptions
+): Promise<string> {
+  ensureScalableConfigFile(options?.env?.XDG_CONFIG_HOME);
   const bin = scalableCliPath();
+  const env = options?.env ? { ...process.env, ...options.env } : undefined;
   try {
     const { stdout } = await execFileAsync(bin, READ_COMMAND_ARGS[command], {
       timeout: 60_000,
       maxBuffer: 10 * 1024 * 1024,
+      ...(env ? { env } : {}),
     });
     assertBrokerOk(stdout);
     return stdout;

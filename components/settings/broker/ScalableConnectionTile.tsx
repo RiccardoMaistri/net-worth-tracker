@@ -1,16 +1,16 @@
 /**
- * The Scalable Capital half of «Collegamenti» — read-only sync through the `sc` CLI.
+ * The Scalable Capital half of «Collegamenti» — read-only sync through the `sc` CLI on the server.
  *
  * One provider, one component: the sibling `TradeRepublicConnectionTile` is the same shape for a
  * broker reachable over HTTP, and the section that owns both is `BrokerConnectionsSection`. They
  * were one file until the second provider arrived, and a single 700-line component with a
  * provider switch inside it would have made every Scalable edit a merge hazard.
  *
- * Two ways in, one plan out. When the app runs on the same machine as the `sc` CLI,
- * «Sincronizza» calls POST /api/broker/scalable/read (the server runs ONLY the three
- * whitelisted read commands, no credentials involved). Otherwise — hosted run, missing
- * binary — the same plan is built from pasted `--json` output. Either way the preview
- * is explicit and saving writes through the standard asset services:
+ * Two ways in, one plan out. «Sincronizza» calls POST /api/broker/scalable/read (the server runs
+ * ONLY the three whitelisted read commands under the caller's own broker profile — one
+ * `XDG_CONFIG_HOME` per whitelisted email, so two people on one host never share a session).
+ * Otherwise — hosted run, missing binary — the same plan is built from pasted `--json` output.
+ * Either way the preview is explicit and saving writes through the standard asset services:
  *   - new positions → createAsset (broker-fed: autoUpdatePrice false)
  *   - price moves → updateAssetMetadata (currentPrice only)
  *   - quantity mismatches on ledger types → drift warning, never a write
@@ -85,7 +85,7 @@ const KIND_LABEL: Record<HoldingDiffKind, string> = {
 };
 
 const SCALABLE_LOGIN_MESSAGE =
-  'Esegui <code class="font-mono">sc login --local-read-only</code> nel terminale (consigliato) o collega il tuo account Scalable Capital dal web.';
+  'Collega il tuo account Scalable Capital per sincronizzare il portafoglio.';
 
 const NEW_CASH_VALUE = '__new__';
 
@@ -97,6 +97,15 @@ const NEW_CASH_VALUE = '__new__';
 function findScalableCash(assets: Asset[], ticker: string): Asset | undefined {
   return assets.find((a) => a.type === 'cash' && a.assetClass === 'cash' && a.ticker === ticker);
 }
+
+/** The /api/scalable/status enum, in the user's language: never show the raw English key. */
+const BACKEND_STATUS_LABEL: Record<string, string> = {
+  CONNECTED: 'collegato',
+  CONNECTING: 'collegamento in corso',
+  NOT_CONNECTED: 'non collegato',
+  AUTHENTICATION_REQUIRED: 'sessione scaduta: ricollega',
+  ERROR: 'stato non verificabile',
+};
 
 async function postReadCommand(
   ownerId: string,
@@ -180,25 +189,32 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [statusText, setStatusText] = useState<string | null>(null);
   const [holdingsText, setHoldingsText] = useState('');
   const [overviewText, setOverviewText] = useState('');
   const [overnightText, setOvernightText] = useState('');
   const [plan, setPlan] = useState<ReturnType<typeof buildScalableImportPlan> | null>(null);
   const [cashTarget, setCashTarget] = useState<string>(NEW_CASH_VALUE);
   const [depositTarget, setDepositTarget] = useState<string>(NEW_CASH_VALUE);
-  /**
-   * A failed OVERNIGHT read is declared, not swallowed: positions and the broker cash still
-   * sync, and the preview says the deposit was left out and why (a read that silently returned
-   * nothing would look like an emptied account).
-   */
   const [overnightWarning, setOvernightWarning] = useState<string | null>(null);
-  /**
-   * The device-flow login: the server runs `sc login` and hands back the verification URL and
-   * the user code; the user approves in their own browser (with their MFA), and this polls
-   * until the session lands. Null means «not linking».
-   */
   const [login, setLogin] = useState<LoginView | null>(null);
   const [linking, setLinking] = useState(false);
+
+  const checkBackendStatus = useCallback(async () => {
+    try {
+      const res = await authenticatedFetch('/api/scalable/status');
+      if (res.ok) {
+        const data = await res.json();
+        if (typeof data?.status === 'string') {
+          setStatusText(
+            `Sessione ${data.user || 'Scalable'}: ${BACKEND_STATUS_LABEL[data.status] ?? data.status}`
+          );
+        }
+      }
+    } catch {
+      // Non-critical status polling error
+    }
+  }, []);
 
   const loadAll = useCallback(async () => {
     try {
@@ -208,16 +224,16 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
       ]);
       setConnection(conn);
       setAssets(allAssets);
+      await checkBackendStatus();
     } catch (err) {
       console.error('[ScalableConnectionTile] load failed:', err);
       toast.error('Impossibile caricare i collegamenti broker');
     } finally {
       setLoading(false);
     }
-  }, [ownerId]);
+  }, [ownerId, checkBackendStatus]);
 
   useEffect(() => {
-    // Deferred so the effect body itself sets no state (react-hooks/set-state-in-effect).
     const timer = setTimeout(() => {
       loadAll();
     }, 0);
@@ -247,7 +263,7 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
     setSyncing(true);
     setError(null);
     try {
-      // The overnight read is deliberately NOT in this Promise.all: a user with no overnight
+      // The overnight read carries its own rejection handler: a user with no overnight
       // account (or a CLI that refuses it) still syncs their positions and broker cash.
       const [holdingsRes, overviewRes, overnightRes] = await Promise.all([
         postReadCommand(ownerId, 'holdings'),
@@ -283,7 +299,6 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
     try {
       const { holdings } = parseScalableHoldingsJson(holdingsText);
       const overview = overviewText.trim() !== '' ? parseScalableOverviewJson(overviewText) : null;
-      // The overnight paste is OPTIONAL: an empty box is a declared absence, not a failure.
       let overnight: ScalableOvernightInput | null = null;
       let overnightWarningText: string | null = null;
       if (overnightText.trim() !== '') {
@@ -318,12 +333,6 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
     }
   };
 
-  /**
-   * Polls while the user approves in their own browser. The interval is the effect's only
-   * state path (an async callback, never a synchronous set in the effect body), and it stops
-   * itself the moment the status is no longer `pending`. The deps are the two PRIMITIVES, not
-   * the object: a dep on `login` would rebuild the interval on every poll tick.
-   */
   const loginId = login?.id ?? null;
   const loginStatus = login?.status ?? null;
   useEffect(() => {
@@ -364,11 +373,15 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
         if (diff.kind === 'new') {
           await createAsset(ownerId, diff.formData);
           createdAssets += 1;
-        } else if (
-          (diff.kind === 'price-update' || diff.kind === 'price-and-drift') &&
-          diff.existingAssetId
-        ) {
-          await updateAssetMetadata(diff.existingAssetId, { currentPrice: diff.holding.price });
+        } else if (diff.existingAssetId && (diff.kind === 'price-update' || diff.kind === 'price-and-drift' || diff.tickerUpdate)) {
+          // The symbol repair rides on the same write as the price: it is metadata, and a second
+          // write per position would double the sync's Firestore traffic for no extra information.
+          // `ticker` is sent ONLY when the plan resolved a different one, so a partial caller can
+          // never blank it — the `in` guard on the service side then leaves it alone.
+          await updateAssetMetadata(diff.existingAssetId, {
+            currentPrice: diff.holding.price,
+            ...(diff.tickerUpdate ? { ticker: diff.tickerUpdate } : {}),
+          });
           updatedPrices += 1;
         }
       }
@@ -472,6 +485,10 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
         reading={reading}
       >
         <div className="mt-3 flex flex-col gap-3">
+          {statusText && (
+            <p className="text-[12px] font-medium text-muted-foreground">{statusText}</p>
+          )}
+
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={handleSync} disabled={disabled || syncing || loading} className="h-10">
               {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -497,10 +514,9 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
             <div className="flex flex-col gap-2 rounded-lg bg-muted p-3">
               <p className="text-[13px] leading-[1.45]">
                 Apri il link di Scalable, accedi con le tue credenziali e conferma il codice: la
-                sessione si salva su questo server e non ti viene chiesto nessun segreto qui.
+                sessione si salva su questo server per il tuo account Google e non ti viene chiesto nessun segreto qui.
               </p>
               <Button asChild variant="default" className="h-10 self-start">
-                {/* The CLI's own activation endpoint — the one place the user gives consent. */}
                 <a href={login.verificationUri} target="_blank" rel="noreferrer noopener">
                   Apri il collegamento sicuro
                   <ExternalLink className="h-4 w-4" aria-hidden="true" />
@@ -534,7 +550,10 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
                 Anteprima: {plan.stats.newCount} nuovi, {plan.stats.priceUpdateCount} prezzi da
                 aggiornare
                 {plan.stats.driftCount > 0 && `, ${plan.stats.driftCount} scostamenti di quantità`}
-                {plan.stats.unchangedCount > 0 && `, ${plan.stats.unchangedCount} invariati`}.
+                {plan.stats.unchangedCount > 0 && `, ${plan.stats.unchangedCount} invariati`}
+                {plan.stats.tickerUpdateCount > 0 &&
+                  `, ${plan.stats.tickerUpdateCount} ticker ISIN da sostituire col simbolo Yahoo`}
+                .
               </p>
               <ul className="flex max-h-64 flex-col gap-1 overflow-y-auto">
                 {plan.holdings.map((diff) => (
@@ -594,8 +613,6 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
                     Deposito non vincolato: {formatCurrency(plan.deposit.balance, plan.deposit.currency)} —
                     conto di destinazione
                   </Label>
-                  {/* The rate and the payout are DECLARED here, not written: no Asset field holds
-                      an interest rate, and a cash account cannot accrue it on its own. */}
                   <p className="text-[12px] leading-[1.45] text-muted-foreground">
                     {plan.deposit.displayName ?? 'Deposito'}
                     {plan.deposit.interestRate !== undefined &&
@@ -701,27 +718,6 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
               </Button>
             </div>
           </div>
-        </div>
-      </Tile>
-
-      <Tile
-        eyebrow="Refresh login"
-        reading={[{ text: 'La sessione vive nel tuo PC, mai in questa app: quando scade la rinnovi dal terminale.' }]}
-      >
-        <div className="mt-1 flex flex-col divide-y divide-border">
-          {[
-            'Abilita la CLI nel profilo Scalable (web): Profilo › Sicurezza › Agentic Investing.',
-            'Accedi dal terminale: sc login — consigliato sc login --local-read-only, che blocca gli ordini e lascia attive le letture.',
-            'Verifica con sc whoami e, se hai più portafogli, scegli con sc broker context select.',
-            'Torna qui e premi Sincronizza: vengono letti solo posizioni, totali e il deposito non vincolato.',
-          ].map((step, index) => (
-            <div key={index} className="flex items-start gap-3 py-3">
-              <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-muted font-mono text-[11px] font-semibold">
-                {index + 1}
-              </span>
-              <span className="text-[13px] leading-[1.45]">{step}</span>
-            </div>
-          ))}
         </div>
       </Tile>
     </div>

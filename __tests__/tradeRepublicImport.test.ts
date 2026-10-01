@@ -8,12 +8,14 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  applyTrTickerOverride,
   buildTrImportPlan,
   mapTrHoldingToAssetFormData,
   mapTrType,
   parseTrCash,
   parseTrHoldings,
   parseTrSavingsPlans,
+  resolveTrYahooTicker,
   TrParseError,
   TR_CASH_TICKER,
   type TrHoldingInput,
@@ -25,7 +27,7 @@ const PORTFOLIO = {
       categoryType: 'etf',
       positions: [
         {
-          isin: 'IE00B3VTMJ91',
+          isin: 'IE00B4L5Y983',
           averageBuyIn: '112,44',
           netSize: '12,5',
           virtualSize: '12,5',
@@ -65,7 +67,7 @@ const SAVINGS_PLANS = {
     {
       id: '3f1b0a52-8c4d-4a1e-9b77-0f2d5e6a7c81',
       createdAt: 1750000000000,
-      instrumentId: 'IE00B3VTMJ91.HAM',
+      instrumentId: 'IE00B4L5Y983.HAM',
       amount: 20000,
       interval: 'monthly',
       startDate: { type: 'x', value: 1, nextExecutionDate: '2026-10-01' },
@@ -91,7 +93,7 @@ describe('parseTrHoldings', () => {
     expect(holdings).toHaveLength(2);
     // The German comma is the payload's own convention: `parseFloat` alone would read 112,44 as 112.
     expect(holdings[0]).toMatchObject({
-      isin: 'IE00B3VTMJ91',
+      isin: 'IE00B4L5Y983',
       quantity: 12.5,
       averageCost: 112.44,
       rawType: 'etf',
@@ -197,7 +199,7 @@ describe('parseTrSavingsPlans', () => {
     const plans = parseTrSavingsPlans(SAVINGS_PLANS);
     expect(plans).toHaveLength(1);
     expect(plans[0]).toMatchObject({
-      isin: 'IE00B3VTMJ91',
+      isin: 'IE00B4L5Y983',
       amount: 200,
       rawAmount: 20000,
       interval: 'monthly',
@@ -237,7 +239,7 @@ describe('mapTrType', () => {
 
 describe('mapTrHoldingToAssetFormData', () => {
   const holding: TrHoldingInput = {
-    isin: 'IE00B3VTMJ91',
+    isin: 'IE00B4L5Y983',
     name: 'iShares Core MSCI World',
     rawType: 'etf',
     rawCategory: 'etf',
@@ -252,8 +254,10 @@ describe('mapTrHoldingToAssetFormData', () => {
     const formData = mapTrHoldingToAssetFormData(holding);
     expect(formData.autoUpdatePrice).toBe(true);
     expect(formData.currentPrice).toBe(130.2);
-    expect(formData.ticker).toBe('IE00B3VTMJ91');
-    expect(formData.isin).toBe('IE00B3VTMJ91');
+    // The fixture ISIN is table-mapped: the ticker is the Yahoo symbol (so the refresh keeps
+    // working), while the isin stays the broker identifier the next sync matches on.
+    expect(formData.ticker).toBe('SWDA.MI');
+    expect(formData.isin).toBe('IE00B4L5Y983');
   });
 
   it('falls back to 0 when the quote lookup failed, so the plan can warn about it', () => {
@@ -263,7 +267,7 @@ describe('mapTrHoldingToAssetFormData', () => {
 
 describe('buildTrImportPlan', () => {
   const holding: TrHoldingInput = {
-    isin: 'IE00B3VTMJ91',
+    isin: 'IE00B4L5Y983',
     name: 'iShares Core MSCI World',
     rawType: 'etf',
     rawCategory: 'etf',
@@ -286,7 +290,7 @@ describe('buildTrImportPlan', () => {
 
   it('reports a ledger quantity mismatch as drift and leaves the quantity alone', () => {
     const plan = buildTrImportPlan([holding], [], [], [
-      { id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 10 },
+      { id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B4L5Y983', type: 'etf', quantity: 10, ticker: 'IE00B4L5Y983' },
     ]);
     expect(plan.holdings[0]).toMatchObject({ kind: 'drift-only', quantityDrift: 2.5 });
     expect(plan.warnings.join(' ')).toContain('non viene toccata');
@@ -294,7 +298,7 @@ describe('buildTrImportPlan', () => {
 
   it('reads an exact quantity as unchanged', () => {
     const plan = buildTrImportPlan([holding], [], [], [
-      { id: 'asset-1', name: 'World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 12.5 },
+      { id: 'asset-1', name: 'World', isin: 'IE00B4L5Y983', type: 'etf', quantity: 12.5, ticker: 'IE00B4L5Y983' },
     ]);
     expect(plan.holdings[0].kind).toBe('unchanged');
     expect(plan.warnings).toHaveLength(0);
@@ -332,7 +336,7 @@ describe('buildTrImportPlan', () => {
       [holding],
       [],
       parseTrSavingsPlans(SAVINGS_PLANS),
-      [{ id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B3VTMJ91', type: 'etf', quantity: 12.5 }]
+      [{ id: 'asset-1', name: 'iShares Core MSCI World', isin: 'IE00B4L5Y983', type: 'etf', quantity: 12.5, ticker: 'IE00B4L5Y983' }]
     );
     expect(plan.savingsPlans[0]).toMatchObject({
       trackedAssetId: 'asset-1',
@@ -345,7 +349,7 @@ describe('buildTrImportPlan', () => {
   it('leaves a savings plan unmatched rather than guessing an asset', () => {
     const plan = buildTrImportPlan([], [], parseTrSavingsPlans(SAVINGS_PLANS), []);
     expect(plan.savingsPlans[0].trackedAssetId).toBeUndefined();
-    expect(plan.savingsPlans[0].plan.isin).toBe('IE00B3VTMJ91');
+    expect(plan.savingsPlans[0].plan.isin).toBe('IE00B4L5Y983');
   });
 });
 
@@ -353,5 +357,114 @@ describe('the cash account identity', () => {
   it('is the ticker the sync writes, not the editable name', () => {
     // A user may rename the account; matching by name would duplicate it on the next sync.
     expect(TR_CASH_TICKER).toBe('TR-EUR');
+  });
+});
+
+describe('crypto positions (pseudo-ISIN XF000…)', () => {
+  // The `isin` below is measured, not invented: it is what Trade Republic sent for the
+  // owner's Bitcoin on 2026-09-30 (`XF` = the user-assigned ISO block for exchange-issued
+  // identifiers, then the coin code, then digits). The envelope follows the documented
+  // position shape.
+  const BTC_POSITION = {
+    isin: 'XF000BTC0017',
+    averageBuyIn: '71208,6497',
+    netSize: '0,051768',
+    virtualSize: '0,051768',
+    status: 'active',
+    instrumentType: 'CRYPTO',
+    name: 'Bitcoin',
+  };
+  const BTC_PORTFOLIO = { categories: [{ categoryType: 'crypto', positions: [BTC_POSITION] }] };
+
+  it('keeps the XF000 row instead of skipping it as "no ISIN"', () => {
+    const { holdings, skipped } = parseTrHoldings(BTC_PORTFOLIO);
+    expect(skipped).toBe(0);
+    expect(holdings).toHaveLength(1);
+    expect(holdings[0]).toMatchObject({
+      isin: 'XF000BTC0017',
+      quantity: 0.051768,
+      averageCost: 71208.6497,
+    });
+  });
+
+  it('derives the Yahoo symbol BTC-EUR from the pseudo-ISIN', () => {
+    const { holdings } = parseTrHoldings(BTC_PORTFOLIO);
+    expect(resolveTrYahooTicker(holdings[0])).toBe('BTC-EUR');
+  });
+
+  it('writes the Yahoo symbol as ticker but keeps the broker id as isin', () => {
+    const { holdings } = parseTrHoldings(BTC_PORTFOLIO);
+    const formData = mapTrHoldingToAssetFormData({ ...holdings[0], price: 73340.13 });
+    expect(formData.ticker).toBe('BTC-EUR');
+    expect(formData.isin).toBe('XF000BTC0017');
+    expect(formData.currentPrice).toBe(73340.13);
+  });
+
+  it('prefers the route-resolved yahooTicker over every local guess', () => {
+    const { holdings } = parseTrHoldings(BTC_PORTFOLIO);
+    const formData = mapTrHoldingToAssetFormData({ ...holdings[0], yahooTicker: 'BTC-EUR' });
+    expect(formData.ticker).toBe('BTC-EUR');
+    // A route-resolved symbol wins even where the pure layer knows nothing.
+    const stock: TrHoldingInput = {
+      isin: 'US0231351067',
+      name: 'Amazon',
+      rawType: 'stock',
+      rawCategory: '',
+      quantity: 1,
+      status: 'active',
+      currency: 'EUR',
+      yahooTicker: 'AMZN',
+    };
+    expect(mapTrHoldingToAssetFormData(stock).ticker).toBe('AMZN');
+  });
+
+  it('returns null for a stock ISIN: no exchange suffix is ever guessed', () => {
+    const holding: TrHoldingInput = {
+      isin: 'US0378331005',
+      name: 'Apple',
+      rawType: 'stock',
+      rawCategory: '',
+      quantity: 3,
+      status: 'active',
+      currency: 'EUR',
+    };
+    expect(resolveTrYahooTicker(holding)).toBeNull();
+    expect(mapTrHoldingToAssetFormData(holding).ticker).toBe('US0378331005');
+  });
+
+  it('returns null for a malformed XF000 id rather than inventing a coin', () => {
+    const holding: TrHoldingInput = {
+      isin: 'XF000BTC',
+      name: 'Bitcoin',
+      rawType: 'CRYPTO',
+      rawCategory: '',
+      quantity: 0.05,
+      status: 'active',
+      currency: 'EUR',
+    };
+    expect(resolveTrYahooTicker(holding)).toBeNull();
+  });
+});
+
+describe('applyTrTickerOverride', () => {
+  const formData = mapTrHoldingToAssetFormData({
+    isin: 'IE00B4L5Y983',
+    name: 'World',
+    rawType: 'etf',
+    rawCategory: '',
+    quantity: 12.5,
+    status: 'active',
+    currency: 'EUR',
+  });
+  // The fixture ISIN is table-mapped, so the planned ticker is already the Yahoo symbol.
+
+  it('applies a trimmed override', () => {
+    expect(applyTrTickerOverride(formData, '  VWCE.MI ').ticker).toBe('VWCE.MI');
+  });
+
+  it('keeps the planned ticker on a blank, missing or identical override', () => {
+    expect(applyTrTickerOverride(formData, undefined)).toBe(formData);
+    expect(applyTrTickerOverride(formData, '   ')).toBe(formData);
+    expect(applyTrTickerOverride(formData, 'SWDA.MI')).toBe(formData);
   });
 });

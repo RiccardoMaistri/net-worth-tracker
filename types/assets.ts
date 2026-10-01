@@ -1,4 +1,6 @@
 import type { PensionFundDetails } from './pension';
+import type { GeographicArea } from '@/lib/constants/geographicAreas';
+export type { GeographicArea };
 
 // AssetType: Granular classification used in UI (stock, ETF, bond, crypto, etc.)
 // AssetClass: Broad financial categories for allocation analysis (equity, bonds, etc.)
@@ -15,7 +17,10 @@ import type { PensionFundDetails } from './pension';
 // WARNING: adding a type here requires updating TYPE_TO_CLASS in components/assets/AssetDialog.tsx
 // (exhaustive `Record<AssetType, AssetClass>` — tsc catches this one) and deciding whether the type
 // belongs in LEDGER_ASSET_TYPES (types/assetTransactions.ts — tsc does NOT catch that one).
-export type AssetType = 'stock' | 'etf' | 'bond' | 'crypto' | 'commodity' | 'cash' | 'realestate' | 'pensionFund';
+// `crowdfunding` is a REAL-ESTATE CROWDFUNDING participation: illiquid, valued by what the
+// platform publishes, and mapped to the `realestate` CLASS in TYPE_TO_CLASS — so allocation,
+// FIRE and every class-level read treat it as real estate without a second code path.
+export type AssetType = 'stock' | 'etf' | 'bond' | 'crypto' | 'commodity' | 'cash' | 'realestate' | 'pensionFund' | 'crowdfunding';
 // trendFollowing (managed futures) and carry are exposure-only classes reached via a leveraged/
 // composite `etf`'s `composition` legs — no
 // AssetType maps to them directly in TYPE_TO_CLASS.
@@ -190,6 +195,31 @@ export interface Asset {
   leverageRatio?: number;
   isin?: string; // ISIN code for dividend scraping (optional)
   exchange?: string; // Exchange/market label (e.g. «Borsa Italiana»), purely informational (optional)
+  // Free-text note (thesis, reminders, sync provenance) — shown under the name in Strumenti
+  // (desktop table and phone row), never read by any calculation. Optional.
+  notes?: string;
+  // Macro-region the asset belongs to (portfolio exposure analysis). Optional.
+  geographicArea?: GeographicArea;
+  /**
+   * REAL-ESTATE CROWDFUNDING (`type: 'crowdfunding'`) — the capital subscribed to one project,
+   * in EUR. A SEPARATE field from the value (`quantity` × `currentPrice`, which the platform
+   * re-publishes): the difference between the two IS the reader's return, and it cannot live in
+   * `averageCost` — that is a per-unit cost basis, and this type keeps its value in `quantity`
+   * (see `hasCostBasis` in lib/utils/patrimonioSummary.ts: a hand-valued holding has no G/P).
+   * Optional: absent on a document that predates the field.
+   */
+  investedCapital?: number;
+  /** The date the capital comes back (ISO calendar day, `YYYY-MM-DD` — not an instant). */
+  maturityDate?: string;
+  /**
+   * The project's EXPECTED return, as a PERCENT number (`8.5` = 8,5%) — the same convention as
+   * `taxRate`/`debtInterestRate`, not the `totalExpenseRatio` fraction. Crowdfunding only.
+   *
+   * A PROMISE, not a measurement: it is printed as neutral text and never carries a sign colour,
+   * because sign tokens mean a realized gain or loss (AGENTS.md → Layout and Color Tokens) and a
+   * projection is neither. Comparing it with the realized return is the reader's own arithmetic.
+   */
+  expectedRoi?: number;
   // The cash account this instrument's dividends and coupons credit (lib/utils/dividendAccount.ts).
   // Absent → the default in Impostazioni › Dividendi; neither → the income row moves no account.
   dividendCashAssetId?: string;
@@ -231,6 +261,14 @@ export interface AssetFormData {
   leverageRatio?: number; // For a leveraged/composite ETF: 2 = 2x, 3 = 3x, 1 or absent = no leverage.
   isin?: string; // ISIN code for dividend scraping (optional)
   exchange?: string; // Exchange/market label (optional, informational only)
+  notes?: string; // Free-text note, shown under the name in Strumenti (optional, informational only)
+  geographicArea?: GeographicArea; // Macro-region for portfolio exposure (optional)
+  /** Crowdfunding only: capital subscribed, in EUR — separate from the value (see `Asset`). */
+  investedCapital?: number;
+  /** Crowdfunding only: the day the capital comes back (`YYYY-MM-DD`). */
+  maturityDate?: string;
+  /** Crowdfunding only: the project's expected return, as a percent number (8.5 = 8,5%). */
+  expectedRoi?: number;
   // The cash account this instrument's dividends and coupons credit (lib/utils/dividendAccount.ts).
   // Absent → the default in Impostazioni › Dividendi; neither → the income row moves no account.
   dividendCashAssetId?: string;

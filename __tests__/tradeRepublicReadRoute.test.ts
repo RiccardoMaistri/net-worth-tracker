@@ -16,6 +16,7 @@ import { NextRequest } from 'next/server';
 
 const mocks = vi.hoisted(() => ({
   readTradeRepublic: vi.fn(),
+  readTrTickerQuotes: vi.fn(async () => new Map()),
   getMultipleQuotes: vi.fn(),
 }));
 
@@ -29,6 +30,7 @@ vi.mock('@/lib/server/apiAuth', () => ({
 }));
 vi.mock('@/lib/server/tradeRepublicClient', () => ({
   readTradeRepublic: mocks.readTradeRepublic,
+  readTrTickerQuotes: mocks.readTrTickerQuotes,
   TR_READ_COMMANDS: ['positions', 'cash', 'savingsPlans'],
   TradeRepublicAuthError: class TradeRepublicAuthError extends Error {
     // The SAME argument order as the real class (`message`, then `status`). Inverting it here made
@@ -52,7 +54,7 @@ const POSITIONS_PAYLOAD = {
       categoryType: 'etf',
       positions: [
         {
-          isin: 'IE00B3VTMJ91',
+          isin: 'IE00B4L5Y983',
           averageBuyIn: '112,44',
           netSize: '12,5',
           virtualSize: '12,5',
@@ -75,7 +77,7 @@ const PLANS_PAYLOAD = {
     {
       id: '3f1b0a52-8c4d-4a1e-9b77-0f2d5e6a7c81',
       createdAt: 1750000000000,
-      instrumentId: 'IE00B3VTMJ91.HAM',
+      instrumentId: 'IE00B4L5Y983.HAM',
       amount: 20000,
       interval: 'monthly',
       startDate: { type: 'x', value: 1, nextExecutionDate: '2026-10-01' },
@@ -110,6 +112,8 @@ async function post(command: string): Promise<{ status: number; body: Record<str
 describe('POST /api/broker/traderepublic/read', () => {
   beforeEach(() => {
     mocks.readTradeRepublic.mockReset();
+    mocks.readTrTickerQuotes.mockReset();
+    mocks.readTrTickerQuotes.mockResolvedValue(new Map());
     mocks.getMultipleQuotes.mockReset();
     mocks.getMultipleQuotes.mockResolvedValue(new Map());
   });
@@ -122,16 +126,77 @@ describe('POST /api/broker/traderepublic/read', () => {
     expect(body.positions).toHaveLength(1);
   });
 
-  it('fills each position price from the ordinary Yahoo service, keyed by ISIN', async () => {
+  it('fills each position price from the ordinary Yahoo service, via the resolved symbol', async () => {
     // The broker publishes no quote, and `currentPrice` is required: without this a synced
-    // portfolio is created at 0 and the net worth drops by everything the user owns.
+    // portfolio is created at 0 and the net worth drops by everything the user owns. Quoted
+    // is the table-resolved symbol (the fixture ISIN maps to SWDA.MI), never the raw ISIN —
+    // Yahoo answers no price for that.
     mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
     mocks.getMultipleQuotes.mockResolvedValue(
-      new Map([['IE00B3VTMJ91', { ticker: 'IE00B3VTMJ91', price: 130.2, currency: 'EUR' }]])
+      new Map([['SWDA.MI', { ticker: 'SWDA.MI', price: 130.2, currency: 'EUR' }]])
     );
     const { body } = await post('positions');
-    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith(['IE00B3VTMJ91']);
+    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith(['SWDA.MI']);
     expect((body.positions as { price?: number }[])[0].price).toBe(130.2);
+  });
+
+  it('quotes the resolved Yahoo symbol for crypto, not the pseudo-ISIN', async () => {
+    // Yahoo answers no price for `XF000BTC0017` but quotes `BTC-EUR`: quoting the raw id
+    // priced nothing and every synced coin entered at 0 with a G/P of −100%.
+    mocks.readTradeRepublic.mockResolvedValue({
+      categories: [
+        {
+          categoryType: 'crypto',
+          positions: [
+            {
+              isin: 'XF000BTC0017',
+              averageBuyIn: '71208,6497',
+              netSize: '0,051768',
+              virtualSize: '0,051768',
+              status: 'active',
+              instrumentType: 'CRYPTO',
+              name: 'Bitcoin',
+            },
+          ],
+        },
+      ],
+    });
+    mocks.getMultipleQuotes.mockResolvedValue(
+      new Map([['BTC-EUR', { ticker: 'BTC-EUR', price: 73340.13, currency: 'EUR' }]])
+    );
+    const { body } = await post('positions');
+    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith(['BTC-EUR']);
+    expect((body.positions as { price?: number; isin?: string }[])[0]).toMatchObject({
+      isin: 'XF000BTC0017',
+      price: 73340.13,
+    });
+  });
+
+  it('prefers the broker quote over Yahoo and needs no symbol for it', async () => {
+    // The broker prices its own venue in EUR: no symbol mapping required, and Yahoo is not
+    // even consulted for that ISIN.
+    mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
+    mocks.readTrTickerQuotes.mockResolvedValue(new Map([['IE00B4L5Y983', { price: 130.5 }]]));
+    const { body } = await post('positions');
+    expect((body.positions as { price?: number }[])[0].price).toBe(130.5);
+    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith([]);
+  });
+
+  it('takes the symbol but not a foreign-currency price', async () => {
+    // A USD quote under the EUR holding currency would read as euros until the first
+    // refresh: the symbol is kept (the refresh normalizes), the price is not attached.
+    // The fixture ISIN resolves through the curated table to SWDA.MI — the currency gate
+    // is what is under test, so the mocked quote answers in USD.
+    mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
+    mocks.getMultipleQuotes.mockResolvedValue(
+      new Map([['SWDA.MI', { ticker: 'SWDA.MI', price: 110.2, currency: 'USD' }]])
+    );
+    const { body } = await post('positions');
+    expect(mocks.getMultipleQuotes).toHaveBeenCalledWith(['SWDA.MI']);
+    expect((body.positions as { price?: number; yahooTicker?: string }[])[0]).toMatchObject({
+      yahooTicker: 'SWDA.MI',
+    });
+    expect((body.positions as { price?: number }[])[0].price).toBeUndefined();
   });
 
   it('leaves the price absent when the quote fails, instead of inventing a zero', async () => {
@@ -139,7 +204,7 @@ describe('POST /api/broker/traderepublic/read', () => {
     // reading the broker never gave.
     mocks.readTradeRepublic.mockResolvedValue(POSITIONS_PAYLOAD);
     mocks.getMultipleQuotes.mockResolvedValue(
-      new Map([['IE00B3VTMJ91', { ticker: 'IE00B3VTMJ91', price: null, currency: 'EUR', error: 'no' }]])
+      new Map([['IE00B4L5Y983', { ticker: 'IE00B4L5Y983', price: null, currency: 'EUR', error: 'no' }]])
     );
     const { body } = await post('positions');
     expect((body.positions as { price?: number }[])[0].price).toBeUndefined();
@@ -163,7 +228,7 @@ describe('POST /api/broker/traderepublic/read', () => {
     expect(status).toBe(200);
     expect(body).not.toHaveProperty('plan');
     expect(body.savingsPlans).toEqual([
-      expect.objectContaining({ isin: 'IE00B3VTMJ91', amount: 200, rawAmount: 20000 }),
+      expect.objectContaining({ isin: 'IE00B4L5Y983', amount: 200, rawAmount: 20000 }),
     ]);
   });
 

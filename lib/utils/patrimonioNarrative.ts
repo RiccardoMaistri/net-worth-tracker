@@ -417,6 +417,36 @@ export function describeManualValuation(lastUpdate: Date | null | undefined, now
 }
 
 /**
+ * «investito 10.000 € · scade il 30/06/2027» — the sub-line of a real-estate CROWDFUNDING row.
+ *
+ * This type is the one hand-valued holding that also knows what was PAID for it, so the return is
+ * readable without a G/P cell (which stays a dash, like every manual valuation: see
+ * `hasCostBasis`). Only the parts that exist are said: a project with no capital recorded says
+ * nothing rather than a zero, and one with no date says no date. `maturityDate` is a bare
+ * calendar day (`YYYY-MM-DD`), kept as the day written — reading it as an instant would print the
+ * previous day in Rome.
+ */
+export function describeCrowdfundingRow(
+  facts: { investedCapital?: number; maturityDate?: string; expectedRoi?: number },
+  now: Date
+): string | null {
+  const parts: string[] = [];
+  if (typeof facts.investedCapital === 'number' && facts.investedCapital > 0) {
+    parts.push(`investito ${cachedFormatCurrencyEUR(facts.investedCapital)}`);
+  }
+  // The promise sits between the two facts it is read against: what was paid, and when it comes
+  // back. Plain text, never a sign colour — a projection is not a realized gain.
+  if (typeof facts.expectedRoi === 'number' && facts.expectedRoi > 0) {
+    parts.push(`atteso ${formatPercentage(facts.expectedRoi, 1)}`);
+  }
+  if (facts.maturityDate) {
+    const parsed = new Date(`${facts.maturityDate}T00:00:00`);
+    if (!Number.isNaN(parsed.getTime())) parts.push(`scade il ${shortDate(parsed, now)}`);
+  }
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/**
  * "prezzi aggiornati oggi alle 09:12" — the compact header's description. Day words follow the
  * Italian wall clock of both instants; beyond yesterday the date is spelled as dd/MM.
  */

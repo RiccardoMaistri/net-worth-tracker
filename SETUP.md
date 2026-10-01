@@ -546,6 +546,21 @@ session_backend = "file"
 Lo stesso `XDG_CONFIG_HOME` per owner è anche la strada per il multi-utente: vedi
 `doc/guide/collegamenti.md`.
 
+### 4b. Chi può sincronizzare (`SCALABLE_PROFILES`)
+
+Le email autorizzate NON stanno nel codice: variabile server-side (mai `NEXT_PUBLIC_`), formato
+`profilo:email` separati da virgola. Ogni email ottiene una directory di sessione propria
+(`$XDG_CONFIG_HOME/profiles/<profilo>`), quindi due persone sullo stesso host non condividono
+mai la sessione broker. Senza la variabile, ogni chiamata al ponte risponde 403.
+
+```bash
+SCALABLE_PROFILES=riccardo:you@gmail.com,michele:other@gmail.com
+```
+
+Il `profilo` diventa un nome di directory: solo lettere, cifre, `-` e `_` (il resto viene
+scartato). In Docker la variabile passa da sola via `env_file: .env.local`; in locale va nel
+`.env.local` (vedi `.env.local.example`).
+
 ### 5. Collega l'account
 
 Dal terminale, o direttamente dal tile «Ricollega Scalable» in Impostazioni › Collegamenti, che

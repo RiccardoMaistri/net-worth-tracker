@@ -16,5 +16,10 @@
 import type { AssetType } from '@/types/assets';
 
 export function suggestIsLiquid(type: AssetType, subCategory?: string): boolean {
-  return !(type === 'realestate' || type === 'pensionFund' || subCategory === 'Private Equity');
+  return !(
+    type === 'realestate' ||
+    type === 'crowdfunding' ||
+    type === 'pensionFund' ||
+    subCategory === 'Private Equity'
+  );
 }

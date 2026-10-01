@@ -384,6 +384,52 @@ describe('resolveLastPriceUpdate', () => {
 // hasCostBasis on hand-valued holdings / resolveBondRowFacts (2026-09-14)
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe('crowdfunding — the gain is measured against the capital subscribed', () => {
+  // The value lives in `quantity` (like a property) but `investedCapital` is a genuinely separate
+  // figure, so the return IS measurable here where every other hand-valued holding is not.
+  const project = (overrides: Partial<Asset> = {}) =>
+    makeAsset({
+      type: 'crowdfunding',
+      assetClass: 'realestate',
+      quantity: 11200,
+      currentPrice: 1,
+      investedCapital: 10000,
+      ...overrides,
+    });
+
+  it('measures the return against the subscribed capital, not the price', () => {
+    const gain = computeUnrealizedGain(project());
+    expect(gain).not.toBeNull();
+    expect(gain!.gainLoss).toBeCloseTo(1200, 6);
+    expect(gain!.gainPercent).toBeCloseTo(12, 6);
+    expect(hasCostBasis(project())).toBe(true);
+  });
+
+  it('reports a LOSS when the platform revalues below what was paid', () => {
+    const gain = computeUnrealizedGain(project({ quantity: 9400 }));
+    expect(gain!.gainLoss).toBeCloseTo(-600, 6);
+    expect(gain!.gainPercent).toBeCloseTo(-6, 6);
+  });
+
+  it('is a real zero when the value equals the capital (not the structural zero above)', () => {
+    const gain = computeUnrealizedGain(project({ quantity: 10000 }));
+    expect(gain!.gainLoss).toBe(0);
+    expect(gain!.gainPercent).toBe(0);
+  });
+
+  it('has nothing to measure without a subscribed capital', () => {
+    const unknown = project({ investedCapital: undefined });
+    expect(hasCostBasis(unknown)).toBe(false);
+    expect(computeUnrealizedGain(unknown)).toBeNull();
+    // A zero capital is an absence, not a subscription: dividing by it is not a percentage.
+    expect(hasCostBasis(project({ investedCapital: 0 }))).toBe(false);
+  });
+
+  it('follows the sold-out rule like every other position', () => {
+    expect(hasCostBasis(project({ quantity: 0 }))).toBe(false);
+  });
+});
+
 describe('hasCostBasis — a PMC on a hand-valued holding is not a PMC', () => {
   it('refuses the structural «+0,00 €» of a private-equity stake and of a property kept at price 1', () => {
     // Academia Private Equity on the owner's account: value 4.000 in quantity, price 1, averageCost 1.

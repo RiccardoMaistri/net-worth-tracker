@@ -572,51 +572,94 @@ describe('describeClasses', () => {
 });
 
 describe('describeExposure', () => {
-  it('names the heaviest holding, the first sector and the biggest issuer', () => {
+  it('names the heaviest holding and the first sector, dropping the area when absent', () => {
     expect(
       plain(
         describeExposure({
           topHolding: { name: 'Apple', pct: 4.1, sourceCount: 3 },
           topSector: { label: 'Tecnologia', pct: 24.3 },
-          topIssuer: { family: 'iShares', etfShare: 61 },
+          topRegion: null,
         }),
       ),
-    ).toBe('Il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti); il primo settore è Tecnologia (24,3%) e iShares emette il 61% degli ETF.');
+    ).toBe('Il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti); il primo settore è Tecnologia (24,3%).');
   });
 
   it('drops what is missing and is null with nothing', () => {
-    expect(plain(describeExposure({ topHolding: { name: 'Enel', pct: 2, sourceCount: 1 }, topSector: null, topIssuer: null }))).toBe(
-      'Il titolo più pesante è Enel (2,0% del portafoglio, in 1 strumento).',
-    );
-    expect(describeExposure({ topHolding: null, topSector: null, topIssuer: null })).toBeNull();
+    expect(
+      plain(
+        describeExposure({
+          topHolding: { name: 'Enel', pct: 2, sourceCount: 1 },
+          topSector: null,
+          topRegion: null,
+        }),
+      ),
+    ).toBe('Il titolo più pesante è Enel (2,0% del portafoglio, in 1 strumento).');
+    expect(describeExposure({ topHolding: null, topSector: null, topRegion: null })).toBeNull();
   });
 
   it('opens on the clause of the view the reader is in, keeping the other two', () => {
     const highlights = {
       topHolding: { name: 'Apple', pct: 4.1, sourceCount: 3 },
       topSector: { label: 'Tecnologia', pct: 24.3 },
-      topIssuer: { family: 'iShares', etfShare: 61 },
+      topRegion: { label: 'Nord America', pct: 41.2 },
     };
+    // Each of the three views leads with its own fact; the other two keep one fixed order, so two
+    // readings never differ only by which context they happened to open with.
     expect(plain(describeExposure(highlights, 'sectors'))).toBe(
-      'Il primo settore è Tecnologia (24,3%); il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti) e iShares emette il 61% degli ETF.',
+      'Il primo settore è Tecnologia (24,3%); il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti) e la prima area geografica è Nord America (41,2%).',
     );
-    expect(plain(describeExposure(highlights, 'issuers'))).toBe(
-      'iShares emette il 61% degli ETF; il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti) e il primo settore è Tecnologia (24,3%).',
+    expect(plain(describeExposure(highlights, 'regions'))).toBe(
+      'La prima area geografica è Nord America (41,2%); il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti) e il primo settore è Tecnologia (24,3%).',
+    );
+    expect(plain(describeExposure(highlights, 'holdings'))).toBe(
+      'Il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti); il primo settore è Tecnologia (24,3%) e la prima area geografica è Nord America (41,2%).',
     );
   });
 
   it('names what an empty view means', () => {
     expect(describeExposureEmpty('holdings')).toContain('Nessun titolo riconosciuto');
     expect(describeExposureEmpty('sectors')).toBe('Nessun dato settoriale per gli ETF in portafoglio.');
-    expect(describeExposureEmpty('issuers')).toBe('Nessun ETF in portafoglio.');
+    // The area view is the one whose emptiness is the reader's to fix: it says so, and says how.
+    expect(describeExposureEmpty('regions')).toContain('Nessuna area riconosciuta');
+    expect(describeExposureEmpty('regions')).toContain("fissare l'area a mano");
+  });
+
+  it('counts the assets the AREA view read, not the ones the analysis read', () => {
+    // A bond carries a country of issue and a flat does not: the two views do not agree on the
+    // portfolio, so the aside must not print one number beside the other view's bars.
+    const exposure = { analyzedAssets: 4, totalAssets: 20, regionAssets: 7 };
+    expect(describeExposureAside(exposure, 'holdings')).toBe('4 asset su 20 analizzati · % del portafoglio');
+    expect(describeExposureAside(exposure, 'regions')).toBe("7 asset su 20 con un'area · % del portafoglio");
+    // A cached document written before the area view existed carries no count. It reads zero, the
+    // honest value for "none of this is known to carry an area", never the analysis' own count.
+    expect(describeExposureAside({ analyzedAssets: 4, totalAssets: 20 }, 'regions')).toBe(
+      "0 asset su 20 con un'area · % del portafoglio",
+    );
   });
 
   it('has an aside and a footer', () => {
-    expect(describeExposureAside({ analyzedAssets: 12, totalAssets: 16 })).toBe('12 asset su 16 analizzati · % del portafoglio');
+    expect(describeExposureAside({ analyzedAssets: 12, totalAssets: 16 }, 'holdings')).toBe('12 asset su 16 analizzati · % del portafoglio');
     expect(describeExposureFooter('2026-08-24T06:15:00.000Z')).toBe(
-      'Prime ~10 posizioni per ETF da Yahoo Finance: approssimato per i fondi molto diversificati. Nessuna copertura geografica. Aggiornato il 24/08/2026.',
+      'Prime ~10 posizioni per ETF da Yahoo Finance: la lista dei titoli è un campione dei fondi molto diversificati. Aggiornato il 24/08/2026.',
     );
-    expect(describeExposureFooter(null)).toBe('Prime ~10 posizioni per ETF da Yahoo Finance: approssimato per i fondi molto diversificati. Nessuna copertura geografica.');
+    expect(describeExposureFooter(null)).toBe(
+      'Prime ~10 posizioni per ETF da Yahoo Finance: la lista dei titoli è un campione dei fondi molto diversificati.',
+    );
+  });
+
+  it('declares each view\'s own method, and never promises a sample for the area view', () => {
+    // The three cuts are NOT read the same way. One shared sentence had already gone stale on the
+    // areas — it promised the top ~10 positions for every cut while the area of a fund is its index
+    // — and a reader who is told «the area is a sample of ten positions» stops believing the tile.
+    expect(describeExposureFooter(null, 'sectors')).toContain('Composizione settoriale completa');
+    expect(describeExposureFooter(null, 'sectors')).not.toContain('~10 posizioni');
+    expect(describeExposureFooter(null, 'regions')).toContain('indice');
+    expect(describeExposureFooter(null, 'regions')).toContain('campione');
+    // Each view keeps its own sentence: a reader who switches tabs must not read the last one's.
+    const methods = (['holdings', 'sectors', 'regions'] as const).map((view) =>
+      describeExposureFooter(null, view)
+    );
+    expect(new Set(methods).size).toBe(3);
   });
 });
 

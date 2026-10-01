@@ -165,33 +165,55 @@ export interface UnrealizedGainsSummary {
 export { costBasisPerUnitEur };
 
 /**
- * Whether an asset's G/P against its PMC is meaningful. Cash accounts do not represent invested
- * capital (their cost basis would dilute the percentage without adding any gain), and a pension
- * fund's leftover `averageCost` from a type conversion is not a PMC — its exit taxation is a
- * different regime altogether.
+ * The capital a position's gain is measured AGAINST, in EUR — the one place that decides it.
+ *
+ * A crowdfunding participation is the exception to the hand-valued rule below: its value lives in
+ * `quantity` like a property's, but it also records what was actually subscribed
+ * (`investedCapital`), so the return IS measurable — the two figures are independent, which is why
+ * this is a separate field and not a PMC. Without it the G/P would be a structural «+0,00 €».
+ *
+ * Everything else: `quantity × costBasisPerUnitEur` (both EUR, so a foreign-currency position is
+ * never measured against its own native-currency PMC). Null when there is nothing to measure.
  */
-export function hasCostBasis(asset: Asset): boolean {
-  if (isCashAccount(asset) || asset.type === 'pensionFund' || !isHeld(asset)) return false;
+function gainBasisEur(asset: Asset): number | null {
+  // A cash account is not invested capital, a pension fund's leftover averageCost is not a PMC, and
+  // a sold-out row is not a position: all three are checked BEFORE the crowdfunding exception, which
+  // is an exception about the BASIS, never about whether the holding is there at all.
+  if (isCashAccount(asset) || asset.type === 'pensionFund' || !isHeld(asset)) return null;
+  if (asset.type === 'crowdfunding') {
+    return asset.investedCapital !== undefined && asset.investedCapital > 0
+      ? asset.investedCapital
+      : null;
+  }
   // A hand-valued holding (a property, a private-equity commitment) keeps its VALUE in
   // `quantity` at price 1, so any PMC it carries equals the price and the G/P is a structural
   // «+0,00 €» — a zero nothing measured, which the table must not print as one
   // (DESIGN.md → The Absence-Has-Three-Names Rule). Found live on the owner's account, 2026-09-14.
-  if (!hasMarketPrice(asset.type, asset.subCategory)) return false;
-  const basis = costBasisPerUnitEur(asset);
-  return basis !== undefined && basis > 0;
+  if (!hasMarketPrice(asset.type, asset.subCategory)) return null;
+  const perUnit = costBasisPerUnitEur(asset);
+  if (perUnit === undefined || perUnit <= 0) return null;
+  return asset.quantity * perUnit;
 }
 
 /**
- * One position's G/P against its PMC — the figure the table cell, the mobile row and the sort
- * share. Both sides of the subtraction are EUR (see `costBasisPerUnitEur`), so a foreign-currency
- * position is never measured against its own native-currency PMC. Null when `hasCostBasis` says
- * there is no PMC to measure against.
+ * Whether an asset's G/P is meaningful. Cash accounts do not represent invested capital (their cost
+ * basis would dilute the percentage without adding any gain), and a pension fund's leftover
+ * `averageCost` from a type conversion is not a PMC — its exit taxation is a different regime
+ * altogether.
+ */
+export function hasCostBasis(asset: Asset): boolean {
+  return gainBasisEur(asset) !== null;
+}
+
+/**
+ * One position's G/P against the capital it was bought with — the figure the table cell, the mobile
+ * row, the sort and the Rendimento tile share. Null when there is nothing to measure against.
  */
 export function computeUnrealizedGain(asset: Asset): { gainLoss: number; gainPercent: number } | null {
-  if (!hasCostBasis(asset)) return null;
-  const basis = asset.quantity * (costBasisPerUnitEur(asset) as number);
+  const basis = gainBasisEur(asset);
+  if (basis === null) return null;
   const gainLoss = calculateAssetValue(asset) - basis;
-  return { gainLoss, gainPercent: basis > 0 ? (gainLoss / basis) * 100 : 0 };
+  return { gainLoss, gainPercent: (gainLoss / basis) * 100 };
 }
 
 export function summarizeUnrealizedGains(assets: Asset[]): UnrealizedGainsSummary {
