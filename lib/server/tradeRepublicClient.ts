@@ -416,7 +416,10 @@ export async function readTrTradeHistory(ownerId: string): Promise<TrTradeHistor
     const rows = tradeRowsNeedingDetail(timeline);
     for (const row of rows.slice(0, TR_DETAIL_READ_CAP)) {
       try {
-        details[row.sourceRef] = await entry.client.topic('timelineDetailV2').get({ id: row.detailId });
+        // The parser joins through `action.payload` (`detailId`), not the timeline row id. Those
+        // two values often differ: storing the result under `sourceRef` made every such otherwise
+        // valid order look as if its detail had failed to load.
+        details[row.detailId] = await entry.client.topic('timelineDetailV2').get({ id: row.detailId });
       } catch {
         // Absent by design — see the docstring.
       }

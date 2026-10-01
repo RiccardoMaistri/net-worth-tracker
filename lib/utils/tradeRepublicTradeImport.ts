@@ -184,8 +184,11 @@ const FAILED_EVENT_TYPES = new Set([
 
 function sideFromSubtitle(subtitle: unknown): 'buy' | 'sell' | null {
   if (typeof subtitle !== 'string') return null;
-  if (/sell/i.test(subtitle)) return 'sell';
-  if (/buy|sparplan|savings\s*plan/i.test(subtitle)) return 'buy';
+  // The broker localizes this field with the app/session language. The live Italian account has
+  // emitted English and German labels across its historical archive, so recognizing only
+  // "Buy Order" / "Sell Order" discarded genuine executions from the same account.
+  if (/sell|verkauf|vendita/i.test(subtitle)) return 'sell';
+  if (/buy|kauf|acquist|sparplan|savings\s*plan/i.test(subtitle)) return 'buy';
   return null;
 }
 
@@ -266,7 +269,7 @@ export function parseTradeRepublicTrades(timeline: unknown, detailsByPayload: Re
     const payload = readString(asObject(row['action']) ?? {}, 'payload') ?? sourceRef;
     const detail = asObject(detailsByPayload.get(payload));
     if (!detail) {
-      skipped.push({ sourceRef, label, ...(date ? { date } : {}), reason: 'Dettaglio dell’operazione non disponibile: sara riletto al prossimo sync.' });
+      skipped.push({ sourceRef, label, ...(date ? { date } : {}), reason: 'Dettaglio dell’operazione non disponibile: riprova l’importazione.' });
       continue;
     }
 
