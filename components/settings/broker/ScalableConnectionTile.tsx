@@ -24,7 +24,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { ExternalLink, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowLeftRight, ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -38,6 +38,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tile } from '@/components/ui/tile';
+import { BrokerTradeImportDialog } from '@/components/settings/broker/BrokerTradeImportDialog';
 import { describeBrokerConnections } from '@/lib/utils/settingsNarrative';
 import { authenticatedFetch } from '@/lib/utils/authFetch';
 import { formatCurrency, formatDate, formatNumberIt } from '@/lib/utils/formatters';
@@ -191,6 +192,8 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
   const [error, setError] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [holdingsText, setHoldingsText] = useState('');
+  /** The trade-ledger import is a separate modal, not a step of the portfolio sync above. */
+  const [tradeImportOpen, setTradeImportOpen] = useState(false);
   const [overviewText, setOverviewText] = useState('');
   const [overnightText, setOvernightText] = useState('');
   const [plan, setPlan] = useState<ReturnType<typeof buildScalableImportPlan> | null>(null);
@@ -510,6 +513,30 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
             )}
           </div>
 
+          {/* The ledger import is a SEPARATE act from the portfolio sync, and a second button rather
+              than another step inside «Sincronizza» for one reason: the two write different things.
+              The sync reconciles positions and cash and never touches the trade ledger; the import
+              is the only path that writes operations, and it previews before it does. One button
+              would make «I synced» and «I imported my history» indistinguishable in the toast, and
+              the second is the one that changes plusvalenze.
+              Gated on `connection` (a live `sc` session) and NOT offered in the pasted-JSON path:
+              a hand-pasted payload has no detail reads behind it, so there is nothing to import
+              without the CLI. */}
+          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+            <Button
+              variant="outline"
+              onClick={() => setTradeImportOpen(true)}
+              disabled={disabled || !connection}
+              className="h-10"
+            >
+              <ArrowLeftRight className="h-4 w-4" />
+              Importa operazioni
+            </Button>
+            <span className="text-[11px] text-muted-foreground">
+              Porta acquisti e vendite nel registro operazioni.
+            </span>
+          </div>
+
           {login?.verificationUri && (
             <div className="flex flex-col gap-2 rounded-lg bg-muted p-3">
               <p className="text-[13px] leading-[1.45]">
@@ -719,6 +746,13 @@ export function ScalableConnectionTile({ ownerId, disabled = false }: ScalableCo
             </div>
           </div>
         </div>
+        <BrokerTradeImportDialog
+          open={tradeImportOpen}
+          onClose={() => setTradeImportOpen(false)}
+          ownerId={ownerId}
+          source="scalable"
+          brokerName="Scalable Capital"
+        />
       </Tile>
     </div>
   );

@@ -82,6 +82,8 @@ export async function getAssetTransactionsAdmin(userId: string): Promise<AssetTr
         fees: data.fees,
         linkedCashAssetId: data.linkedCashAssetId,
         withheldTaxEur: data.withheldTaxEur,
+        source: data.source,
+        sourceRef: data.sourceRef,
         isBaseline: data.isBaseline,
         note: data.note,
         createdAt: toDate(data.createdAt),

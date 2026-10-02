@@ -49,6 +49,36 @@ export const TR_READ_COMMANDS = ['positions', 'cash', 'savingsPlans'] as const;
 export type TrReadCommand = (typeof TR_READ_COMMANDS)[number];
 
 /**
+ * How far back the trade history is asked for.
+ *
+ * Measured live: Trade Republic materialises the timeline from **2024-03-28** and asking for
+ * 2015 returns nothing earlier, so this is a floor, not a truncation - nothing is being cut. It is
+ * a named constant because that date is a broker product decision, not an app one: if TR ever
+ * extends the archive, only this number moves.
+ */
+export const TR_TRANSACTIONS_FROM = new Date('2015-01-01T00:00:00.000Z');
+
+/**
+ * How many timeline pages one history fetch will read.
+ *
+ * The measured account materialises 1,408 rows (and the whole 24-event-type timeline, mostly card
+ * and bank rows). At ~200 rows a page that is a handful of round trips; the bound exists so a
+ * pathological account cannot page forever. Exceeding it truncates the OLDEST end, which is the
+ * safe direction to fail: the newest trades are the ones a user is reconciling.
+ */
+const TR_TRANSACTION_MAX_PAGES = 100;
+
+/**
+ * How many per-trade detail reads one history fetch may make.
+ *
+ * Only the rows the parser recognises as trades need one, so this is far below the event count: 41
+ * trades were measured against 1,408 events. The detail is the ONLY read that carries a quantity
+ * and a unit price, so a trade whose detail is missing cannot be imported and is reported as such
+ * rather than guessed from the cash amount.
+ */
+const TR_DETAIL_READ_CAP = 200;
+
+/**
  * One instrument quote, in the venue's currency (EUR on Lang & Schwarz — the broker's own
  * execution venue, where every position it reports is tradable by definition).
  */
@@ -306,6 +336,114 @@ async function persistRefreshedSession(ownerId: string, client: TRClient): Promi
     // A fire-and-forget whose catch only logs is verified by READING the document it should have
     // written — so this one says what it lost instead of swallowing it.
     console.warn(`[traderepublic] could not persist the refreshed session for ${ownerId}:`, error);
+  }
+}
+
+// ─── The trade history ───────────────────────────────────────────────────────
+
+/** The timeline rows and the details that answer them, keyed by the id the detail topic uses. */
+export interface TrTradeHistory {
+  timeline: unknown;
+  details: Record<string, unknown>;
+}
+
+/**
+ * The trade event types, and only those, that need a detail read.
+ *
+ * Deliberately narrower than the parser's own list, which also matches the two FAILED plan types:
+ * a plan that never executed has no shares and will never have any, so spending a detail read to
+ * learn that is a round trip for a guaranteed no-op. The broker ids here are the event types of a
+ * timeline the user can see: card, bank, interest and deposit rows are never trades.
+ */
+const TR_TRADE_EVENT_TYPES = new Set(['TRADING_TRADE_EXECUTED', 'TRADING_SAVINGSPLAN_EXECUTED']);
+
+function readJsonPayload(value: unknown): JsonRecord | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : null;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+/**
+ * The trade rows of a timeline, each with the detail id it needs.
+ *
+ * Reads the RAW timeline rather than `account.transactions.read`, and that is not a preference:
+ * the typed reader validates the response with an arktype schema that does not model the
+ * `presentation` field the broker now sends, so it throws «Invalid response for Topic
+ * timelineTransactions» and returns NOTHING — measured, on an account whose session was valid.
+ * The raw reader is unaffected. The rows are also read for `subtitle` ('Sell Order' / 'Buy
+ * Order'), which the raw timeline carries and which is the only place the side appears.
+ */
+function tradeRowsNeedingDetail(timeline: unknown): { sourceRef: string; detailId: string }[] {
+  const root = readJsonPayload(timeline);
+  // SDK `getTimelineTransactions()` returns `TimelineTransaction[]`, while a raw topic response
+  // is `{ items: [...] }`. The importer parses both forms, but this reader initially accepted only
+  // the latter and therefore requested ZERO `timelineDetailV2` records: every valid order then
+  // showed as «Dettaglio dell’operazione non disponibile».
+  const items = Array.isArray(timeline) ? timeline : Array.isArray(root?.items) ? root.items : [];
+  const rows: { sourceRef: string; detailId: string }[] = [];
+  for (const item of items) {
+    const row = readJsonPayload(item);
+    if (!row) continue;
+    if (typeof row.eventType !== 'string' || !TR_TRADE_EVENT_TYPES.has(row.eventType)) continue;
+    const sourceRef = typeof row.id === 'string' ? row.id : null;
+    if (!sourceRef) continue;
+    const action = readJsonPayload(row.action);
+    const detailId = typeof action?.payload === 'string' ? action.payload : sourceRef;
+    rows.push({ sourceRef, detailId });
+  }
+  return rows;
+}
+
+/**
+ * Read the trade history: the raw timeline plus one `timelineDetailV2` read per trade row.
+ *
+ * The detail is what carries the ISIN, the quantity and the unit price; the timeline carries the
+ * side and the date. Neither alone is importable, which is why both are read and joined by the
+ * caller on `sourceRef`.
+ *
+ * The detail reads are SEQUENTIAL and CAPPED: each is a WebSocket request on a connection the
+ * broker rate-limits, and 41 trades against 1,408 events is a measured ratio. A detail that fails
+ * is simply absent from the map — the parser reports that row as skipped with a reason, and the
+ * next sync retries it. One unreadable trade must never cost the user the other forty.
+ */
+export async function readTrTradeHistory(ownerId: string): Promise<TrTradeHistory> {
+  const entry = await ownerClient(ownerId);
+  try {
+    const timeline = await entry.client.getTimelineTransactions({
+      from: TR_TRANSACTIONS_FROM,
+      maxPages: TR_TRANSACTION_MAX_PAGES,
+    });
+
+    const details: Record<string, unknown> = {};
+    const rows = tradeRowsNeedingDetail(timeline);
+    for (const row of rows.slice(0, TR_DETAIL_READ_CAP)) {
+      try {
+        // The parser joins through `action.payload` (`detailId`), not the timeline row id. Those
+        // two values often differ: storing the result under `sourceRef` made every such otherwise
+        // valid order look as if its detail had failed to load.
+        details[row.detailId] = await entry.client.topic('timelineDetailV2').get({ id: row.detailId });
+      } catch {
+        // Absent by design — see the docstring.
+      }
+    }
+
+    void persistRefreshedSession(ownerId, entry.client);
+    return { timeline, details };
+  } catch (error) {
+    if (error instanceof TradeRepublicAuthError) throw error;
+    const status = entry.client.session.getSnapshot().validity;
+    if (status === 'rejected' || status === 'absent') {
+      resetTradeRepublicClient(ownerId);
+      throw new TradeRepublicAuthError(
+        'La sessione Trade Republic non è più valida: ricollegati con il codice QR.',
+        401
+      );
+    }
+    throw new TradeRepublicReadError(
+      error instanceof Error ? error.message : 'Lettura non riuscita: riprova.'
+    );
   }
 }
 

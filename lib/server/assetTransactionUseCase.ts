@@ -69,6 +69,26 @@ export interface TradeMutationResult {
   realizedPnlEur?: number;
 }
 
+/**
+ * A broker trade that is ALREADY in the ledger under the same (source, sourceRef).
+ *
+ * Not a user-facing error: it is the outcome the idempotency key exists to produce, so it carries no
+ * Italian message and the import counts it as «già presente». It is thrown from inside the
+ * Firestore transaction to abort that transaction and nothing else, and it is deliberately NOT a
+ * `TradeUseCaseError` so the route's error mapper does not turn it into a 422 the user must read.
+ */
+export class DuplicateBrokerTradeError extends Error {
+  /** The ledger doc that already holds this broker trade. */
+  readonly existingTransactionId: string;
+
+  constructor(existingTransactionId: string) {
+    super('Operazione broker già presente nel registro.');
+    this.name = 'DuplicateBrokerTradeError';
+    this.existingTransactionId = existingTransactionId;
+    Object.setPrototypeOf(this, DuplicateBrokerTradeError.prototype);
+  }
+}
+
 export type MigrationResult =
   | { alreadyMigrated: true }
   | { alreadyMigrated?: false; migratedAssetCount: number; baselineDate: Date };
@@ -91,6 +111,8 @@ function docToAssetTransaction(id: string, data: DocumentData): AssetTransaction
     fees: data.fees,
     linkedCashAssetId: data.linkedCashAssetId,
     withheldTaxEur: data.withheldTaxEur,
+    source: data.source,
+    sourceRef: data.sourceRef,
     isBaseline: data.isBaseline,
     indexationCoefficient: data.indexationCoefficient,
     note: data.note,
@@ -112,6 +134,8 @@ function buildTradeSetDocData(t: AssetTransaction): Record<string, unknown> {
     fees: t.fees,
     linkedCashAssetId: t.linkedCashAssetId,
     withheldTaxEur: t.withheldTaxEur,
+    source: t.source,
+    sourceRef: t.sourceRef,
     isBaseline: t.isBaseline,
     indexationCoefficient: t.indexationCoefficient,
     note: t.note,
@@ -135,6 +159,13 @@ function buildTradeUpdateDocData(t: AssetTransaction): Record<string, unknown> {
     fees: t.fees ?? FieldValue.delete(),
     linkedCashAssetId: t.linkedCashAssetId ?? FieldValue.delete(),
     withheldTaxEur: t.withheldTaxEur ?? FieldValue.delete(),
+    // Written EXPLICITLY, and never as a `?? FieldValue.delete()` pair: provenance is not editable
+    // through the form, so an update must carry the stored value forward unchanged. Re-deriving it
+    // from `t.source` (which the edit path already merges from the stored trade) means a user
+    // correction can never strip an imported trade's identity — which is what would make the next
+    // sync import the same broker operation a second time, on top of the correction.
+    ...(t.source !== undefined ? { source: t.source } : {}),
+    ...(t.sourceRef !== undefined ? { sourceRef: t.sourceRef } : {}),
     indexationCoefficient: t.indexationCoefficient ?? FieldValue.delete(),
     note: t.note ?? FieldValue.delete(),
     updatedAt: t.updatedAt,
@@ -228,6 +259,16 @@ interface PreparedMutation {
   targetTransactionId?: string;
   /** Reversal of old + application of new, aggregated per cash-asset docId (self-edit nets). */
   cashDeltaByDocId: Map<string, number>;
+  /**
+   * The idempotency key this create would write, as `source:sourceRef`.
+   *
+   * Present ONLY on a broker import, and checked INSIDE the transaction (see
+   * `commitTradeMutation`) rather than in a pre-flight read: a read-then-write leaves a window in
+   * which two concurrent syncs both see «absent» and both insert, which is exactly the duplicate
+   * `sourceRef` exists to prevent. The transaction already reads every trade of the asset, so the
+   * membership test is free and atomic against any other import.
+   */
+  idempotencyKey?: string;
   /** Trade type whose result drives the response (new type for create/edit, old type for delete). */
   affectedType: AssetTransactionType;
   invalidationReason: string;
@@ -267,6 +308,11 @@ async function prepareCreate(
     fees: data.fees,
     linkedCashAssetId: data.linkedCashAssetId,
     withheldTaxEur: data.type === 'sell' ? data.withheldTaxEur : undefined,
+    // Provenance travels onto the object itself, not just into the doc payload: the object is what
+    // `buildTradeSetDocData` serializes AND what the in-transaction replay sees, so a field set only
+    // in the payload would be invisible to the idempotency check on the next run.
+    source: data.source,
+    sourceRef: data.sourceRef,
     indexationCoefficient: data.indexationCoefficient,
     note: data.note,
     createdAt: now,
@@ -286,6 +332,9 @@ async function prepareCreate(
     cashDeltaByDocId,
     affectedType: newTransaction.type,
     invalidationReason: 'asset_transaction_created',
+    ...(data.source && data.sourceRef
+      ? { idempotencyKey: data.source + ':' + data.sourceRef }
+      : {}),
   };
 }
 
@@ -428,8 +477,39 @@ async function commitTradeMutation(
       cashReads.push({ ref, snap: await tx.get(ref) });
     }
 
+    // r4: the provenance keys of every trade this owner holds, ONLY for a broker import. Scoped to
+    // the owner and not to this asset on purpose: a broker id is unique per ACCOUNT, and the asset
+    // it once joined may since have been deleted and recreated under a new doc id, so matching only
+    // this asset history would re-import that trade into the new asset and double the position.
+    // Equality-only on userId, so it needs no composite index.
+    const ownerTradesSnap = plan.idempotencyKey
+      ? await tx.get(
+          adminDb
+            .collection(ASSET_TRANSACTIONS_COLLECTION)
+            .where('userId', '==', plan.ownerId)
+        )
+      : undefined;
+
     // ── COMPUTE (pure) ─────────────────────────────────────────────────────────
     const existing = existingSnap.docs.map((d) => docToAssetTransaction(d.id, d.data()));
+
+    // Idempotency, checked HERE rather than in a pre-flight read: the check and the write are in
+    // one transaction, so two syncs racing on the same broker id cannot both insert. The loser
+    // retries, re-reads the winner's row, and bails out. A duplicate is not a failure - it is the
+    // proof the key works - so it aborts with a sentinel the import wrapper turns into
+    // «already imported» instead of an error the user has to see.
+    if (plan.idempotencyKey) {
+      const duplicate = ownerTradesSnap?.docs.find((d) => {
+        const data = d.data();
+        return (
+          typeof data?.source === 'string' &&
+          typeof data?.sourceRef === 'string' &&
+          data.source + ':' + data.sourceRef === plan.idempotencyKey
+        );
+      });
+      if (duplicate) throw new DuplicateBrokerTradeError(duplicate.id);
+    }
+
     const newSequence = buildNewSequence(existing, plan);
 
     // replayTransactions throws LedgerValidationError (→ 422) on any invalid history.

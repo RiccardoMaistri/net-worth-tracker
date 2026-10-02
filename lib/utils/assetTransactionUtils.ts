@@ -620,6 +620,8 @@ export function computeInvestedCapital(
 /** Realized P&L per fiscal year, plus how many assets could not be replayed. */
 export interface RealizedGainsAggregate {
   byYear: Record<number, number>;
+  /** Realized P&L per assetId per fiscal year: Record<year, Record<assetId, amount>>. */
+  byAssetAndYear: Record<number, Record<string, number>>;
   /**
    * Assets whose replay threw and were left out of the totals. This is a TAX figure: a total that
    * is quietly short by one position is worse than no total, so the count reaches the UI instead of
@@ -644,13 +646,19 @@ export function aggregateRealizedByYear(transactions: AssetTransaction[]): Reali
   });
 
   const byYear: Record<number, number> = {};
+  const byAssetAndYear: Record<number, Record<string, number>> = {};
   let skippedAssets = 0;
 
   byAsset.forEach((assetTransactions, assetId) => {
     try {
       const { realizedByYear } = replayTransactions(assetTransactions);
-      Object.entries(realizedByYear).forEach(([year, amount]) => {
-        byYear[Number(year)] = (byYear[Number(year)] ?? 0) + amount;
+      Object.entries(realizedByYear).forEach(([yearStr, amount]) => {
+        const year = Number(yearStr);
+        byYear[year] = (byYear[year] ?? 0) + amount;
+        if (!byAssetAndYear[year]) {
+          byAssetAndYear[year] = {};
+        }
+        byAssetAndYear[year][assetId] = (byAssetAndYear[year][assetId] ?? 0) + amount;
       });
     } catch (error) {
       // A per-asset sequence is server-validated at write time, so this should not happen; when it
@@ -666,5 +674,5 @@ export function aggregateRealizedByYear(transactions: AssetTransaction[]): Reali
     }
   });
 
-  return { byYear, skippedAssets };
+  return { byYear, byAssetAndYear, skippedAssets };
 }

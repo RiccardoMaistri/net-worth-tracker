@@ -82,6 +82,7 @@ import type { Asset } from '@/types/assets';
 import type {
   AssetTransaction,
   AssetTransactionFormData,
+  AssetTransactionSource,
   AssetTransactionType,
 } from '@/types/assetTransactions';
 
@@ -191,6 +192,15 @@ export function TransactionDialog({ open, onClose, asset, transaction }: Transac
     [existingTransactions]
   );
   const minDateIso = ownBaseline ? getItalyDateIso(ownBaseline.date) : undefined;
+
+  // An asset whose ledger contains at least one broker-imported transaction is considered
+  // broker-managed: manual sells are disabled because the broker import pipeline owns them.
+  const brokerSource = useMemo<AssetTransactionSource | null>(
+    () => existingTransactions.find((t) => t.source === 'scalable' || t.source === 'traderepublic')?.source ?? null,
+    [existingTransactions]
+  );
+  const isBrokerManaged = brokerSource !== null;
+  const brokerLabel = brokerSource === 'scalable' ? 'Scalable Capital' : brokerSource === 'traderepublic' ? 'Trade Republic' : '';
 
   const {
     register,
@@ -534,17 +544,23 @@ export function TransactionDialog({ open, onClose, asset, transaction }: Transac
         >
           {TYPE_OPTIONS.map((option) => {
             const isActive = type === option.key;
+            // Broker-managed assets: the sell pipeline is owned by the import, so manual
+            // sell is disabled (buy and adjustment are still allowed for corrections).
+            const isSellDisabledByBroker = option.key === 'sell' && isBrokerManaged && !isEdit;
+            const isDisabled = isEdit || isSellDisabledByBroker;
             return (
               <button
                 key={option.key}
                 type="button"
                 role="radio"
                 aria-checked={isActive}
-                disabled={isEdit}
+                disabled={isDisabled}
                 onClick={() => setValue('type', option.key)}
+                title={isSellDisabledByBroker ? `Le vendite di questo asset sono gestite dall'importazione ${brokerLabel}` : undefined}
                 className={cn(
                   'relative flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed',
-                  isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+                  isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                  isSellDisabledByBroker && 'opacity-40'
                 )}
               >
                 {isActive && (
@@ -565,6 +581,12 @@ export function TransactionDialog({ open, onClose, asset, transaction }: Transac
         {isBaseline && (
           <p className="text-xs text-muted-foreground">
             Posizione iniziale: puoi modificarne solo quantità, prezzo e nota.
+          </p>
+        )}
+
+        {isBrokerManaged && !isEdit && (
+          <p className="text-xs text-muted-foreground">
+            Le vendite di questo asset sono importate da {brokerLabel}: usa l&apos;importazione operazioni per registrarle.
           </p>
         )}
 
