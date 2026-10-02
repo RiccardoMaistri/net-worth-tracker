@@ -536,7 +536,10 @@ export default function PerformancePage() {
 
   // Plusvalenze realizzate: all-time, independent of the selected period — a sale belongs to its fiscal year.
   const realizedGains = useMemo(() => aggregateRealizedByYear(ledgerTrades), [ledgerTrades]);
-  const realizedSummary = useMemo(() => (isLedgerMigrated ? summarizeRealizedGains(realizedGains.byYear) : null), [isLedgerMigrated, realizedGains]);
+  const realizedSummary = useMemo(
+    () => (isLedgerMigrated ? summarizeRealizedGains(realizedGains.byYear, realizedGains.byAssetAndYear) : null),
+    [isLedgerMigrated, realizedGains],
+  );
 
   const verdict = useMemo(() => {
     if (!metrics || !quality) return null;
@@ -848,7 +851,13 @@ export default function PerformancePage() {
 
           {realizedSummary && (
             <div className={cn(TILE_CELL_CLASS, 'order-7 desktop:order-none')}>
-              <PlusvalenzeTile reading={describeRealizedGains(realizedSummary, currentYear)} summary={realizedSummary} skippedAssets={realizedGains.skippedAssets} />
+              <PlusvalenzeTile
+                reading={describeRealizedGains(realizedSummary, currentYear)}
+                summary={realizedSummary}
+                skippedAssets={realizedGains.skippedAssets}
+                assets={assets}
+                trades={ledgerTrades}
+              />
             </div>
           )}
 

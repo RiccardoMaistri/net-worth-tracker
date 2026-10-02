@@ -589,16 +589,25 @@ export interface RealizedGainsSummary {
   total: number;
   /** Newest fiscal year first. */
   years: Array<{ year: number; amount: number }>;
+  /** Realized P&L per assetId per fiscal year: Record<year, Record<assetId, amount>>. */
+  byAssetAndYear?: Record<number, Record<string, number>>;
 }
 
 /** The Plusvalenze tile's rows, newest year first, with their total. Null without a closed sale. */
-export function summarizeRealizedGains(byYear: Record<number, number>): RealizedGainsSummary | null {
+export function summarizeRealizedGains(
+  byYear: Record<number, number>,
+  byAssetAndYear?: Record<number, Record<string, number>>,
+): RealizedGainsSummary | null {
   const years = Object.keys(byYear)
     .map(Number)
     .sort((a, b) => b - a)
     .map((year) => ({ year, amount: byYear[year] }));
   if (years.length === 0) return null;
-  return { total: years.reduce((sum, y) => sum + y.amount, 0), years };
+  return {
+    total: years.reduce((sum, y) => sum + y.amount, 0),
+    years,
+    ...(byAssetAndYear ? { byAssetAndYear } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
