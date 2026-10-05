@@ -628,6 +628,8 @@ export interface RealizedGainsAggregate {
    * dying in a silent catch.
    */
   skippedAssets: number;
+  /** The skipped asset ids, so the UI can name what the total is missing. */
+  skippedAssetIds: string[];
 }
 
 /**
@@ -647,7 +649,7 @@ export function aggregateRealizedByYear(transactions: AssetTransaction[]): Reali
 
   const byYear: Record<number, number> = {};
   const byAssetAndYear: Record<number, Record<string, number>> = {};
-  let skippedAssets = 0;
+  const skippedAssetIds: string[] = [];
 
   byAsset.forEach((assetTransactions, assetId) => {
     try {
@@ -664,7 +666,7 @@ export function aggregateRealizedByYear(transactions: AssetTransaction[]): Reali
       // A per-asset sequence is server-validated at write time, so this should not happen; when it
       // does, one asset must not take down the whole card — but the total is now incomplete and
       // both the console and the card have to say so.
-      skippedAssets += 1;
+      skippedAssetIds.push(assetId);
       console.warn('Realized gains: skipping an asset whose ledger replay failed', {
         assetId,
         transactionCount: assetTransactions.length,
@@ -674,5 +676,5 @@ export function aggregateRealizedByYear(transactions: AssetTransaction[]): Reali
     }
   });
 
-  return { byYear, byAssetAndYear, skippedAssets };
+  return { byYear, byAssetAndYear, skippedAssets: skippedAssetIds.length, skippedAssetIds };
 }

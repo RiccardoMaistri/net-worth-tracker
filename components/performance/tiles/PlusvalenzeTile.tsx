@@ -19,6 +19,8 @@ interface PlusvalenzeTileProps {
   summary: RealizedGainsSummary;
   /** Assets left out because their ledger replay failed — the total is then incomplete, and says so. */
   skippedAssets: number;
+  /** Ids of the skipped assets, so the tile names what the total is missing. */
+  skippedAssetIds?: string[];
   assets?: Asset[];
   trades?: AssetTransaction[];
   className?: string;
@@ -40,7 +42,7 @@ function signedEuro(value: number): string {
  *
  * Users can open a modal to see the breakdown of realized profits/losses per asset.
  */
-export function PlusvalenzeTile({ reading, summary, skippedAssets, assets = [], trades = [], className }: PlusvalenzeTileProps) {
+export function PlusvalenzeTile({ reading, summary, skippedAssets, skippedAssetIds = [], assets = [], trades = [], className }: PlusvalenzeTileProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
 
@@ -63,6 +65,18 @@ export function PlusvalenzeTile({ reading, summary, skippedAssets, assets = [], 
     });
     return map;
   }, [trades]);
+
+  // Names of the assets left out of the total: the registry entry if tracked, else the
+  // trade note left behind, else the raw id. Capped so one broken import cannot flood the tile.
+  const skippedNames = useMemo(() => {
+    const ids = skippedAssetIds.length > 0 ? skippedAssetIds : [];
+    return ids.slice(0, 8).map((id) => {
+      const asset = assetsById.get(id);
+      if (asset) return asset.name || getAssetDisplayTicker(asset);
+      return tradeLabelsByAssetId.get(id) ?? 'Strumento rimosso';
+    });
+  }, [skippedAssetIds, assetsById, tradeLabelsByAssetId]);
+  const skippedOverflow = Math.max(0, skippedAssetIds.length - skippedNames.length);
 
   // Breakdown for the modal
   const breakdownRows = useMemo(() => {
@@ -147,6 +161,14 @@ export function PlusvalenzeTile({ reading, summary, skippedAssets, assets = [], 
             {skippedAssets === 1
               ? '1 asset è escluso dal totale: il suo registro non è ricostruibile.'
               : `${skippedAssets} asset sono esclusi dal totale: il loro registro non è ricostruibile.`}
+            {skippedNames.length > 0 && (
+              <span className="block">
+                {' Mancano: '}
+                {skippedNames.join(', ')}
+                {skippedOverflow > 0 && ` e altri ${skippedOverflow}`}
+                {' — controlla Movimenti e l’import broker per completarli.'}
+              </span>
+            )}
           </p>
         )}
         <TileMethodNote subject="Plusvalenze realizzate" summary="Non segue il periodo.">

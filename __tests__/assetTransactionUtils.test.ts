@@ -681,6 +681,7 @@ describe('aggregateRealizedByYear — realized P&L by fiscal year, across assets
     const result = aggregateRealizedByYear(transactions);
 
     expect(result.skippedAssets).toBe(1);
+    expect(result.skippedAssetIds).toEqual(['a2']);
     const year = getYearOf(day(5));
     expect(result.byYear[year]).toBeCloseTo(100, 6); // only a1's realized P&L
   });

@@ -855,6 +855,7 @@ export default function PerformancePage() {
                 reading={describeRealizedGains(realizedSummary, currentYear)}
                 summary={realizedSummary}
                 skippedAssets={realizedGains.skippedAssets}
+                skippedAssetIds={realizedGains.skippedAssetIds}
                 assets={assets}
                 trades={ledgerTrades}
               />
