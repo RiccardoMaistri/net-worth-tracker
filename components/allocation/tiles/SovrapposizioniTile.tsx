@@ -6,9 +6,10 @@
  * that also sit in some ETF, one view at a time (the toggle as the aside), and — when a row
  * is opened — the shared titles with both weights, as a flat block under the list.
  *
- * The sibling of Esposizione on the same payload: it reads `/api/portfolio/exposure` through
- * the same `usePortfolioExposure` hook (one query key, so no second fetch), and shapes it
- * with `summarizeOverlap` (`overlapUtils.ts`). The words come from `describeOverlap` and its
+ * The sibling of Esposizione on the same payload: it reads the instrument profiles through
+ * the same `usePortfolioExposure` hook (one query key, so no second fetch), shapes vectors
+ * with `buildOverlapInput` (`overlapInput.ts`) and then with `summarizeOverlap`
+ * (`overlapUtils.ts`). The words come from `describeOverlap` and its
  * aside/footer siblings (`allocazioneNarrative.ts`): this file only renders.
  *
  * Two views became one tile with a switch because the question is one — where do I hold the
@@ -19,7 +20,9 @@
 
 import { useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
+import type { Asset } from '@/types/assets';
 import { usePortfolioExposure } from '@/lib/hooks/usePortfolioExposure';
+import { buildOverlapInput } from '@/lib/utils/overlapInput';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   summarizeOverlap,
@@ -39,7 +42,8 @@ import { AsideToggle } from '@/components/ui/aside-toggle';
 import { RankedRows, type RankedRow } from '@/components/ui/ranked-rows';
 
 interface SovrapposizioniTileProps {
-  userId: string;
+  ownerId: string;
+  assets: Asset[];
   className?: string;
 }
 
@@ -129,30 +133,21 @@ function SourcesBlock({ row }: { row: OverlapRow }) {
   );
 }
 
-export function SovrapposizioniTile({ userId, className }: SovrapposizioniTileProps) {
+export function SovrapposizioniTile({ ownerId, assets, className }: SovrapposizioniTileProps) {
   const [view, setView] = useState<OverlapViewKey>('pairs');
   const [activeKey, setActiveKey] = useState<string | null>(null);
 
   // Same query key as Esposizione: React Query serves the cached payload, no second fetch.
-  const { data, isError, isFetching, refresh, refetch } = usePortfolioExposure(userId, true);
-  const exposure = data?.exposure;
-  const cached = data?.cached ?? false;
-  // React Query keeps the last payload through a failed refresh, so "no data" and "error" are
+  const { exposure, profiles, oldestFetchedAt, isError, isFetching, refresh, refetch } = usePortfolioExposure(ownerId, assets);
+  // React Query keeps the last profiles through a failed refresh, so "no data" and "error" are
   // two different states: a stale list beats an empty tile.
   const isLoading = !exposure && !isError;
-  const isEmpty = !!exposure && exposure.analyzedAssets === 0;
+  const isEmpty = !!exposure && exposure.quotedCount === 0;
 
-  // Old cached documents predate the per-ETF vectors: without them there is no overlap.
+  // Vectors from the answered profiles: a fund without published holdings contributes nothing.
   const input = useMemo<OverlapInput | null>(
-    () =>
-      exposure && exposure.etfHoldings != null
-        ? {
-            etfs: exposure.etfHoldings,
-            stocks: exposure.directStocks ?? [],
-            totalPortfolioValue: exposure.totalPortfolioValue,
-          }
-        : null,
-    [exposure],
+    () => (exposure && profiles ? buildOverlapInput(assets, profiles) : null),
+    [exposure, profiles, assets],
   );
 
   const reading = useMemo(() => (input ? describeOverlap(summarizeOverlapHighlights(input)) : null), [input]);
@@ -228,7 +223,7 @@ export function SovrapposizioniTile({ userId, className }: SovrapposizioniTilePr
             <RankedRows
               rows={rows}
               color="var(--chart-2)"
-              remainder={overlapView.remainder}
+              remainders={overlapView.remainder ? [overlapView.remainder] : []}
               onRowClick={handleRowClick}
               activeKey={openRow?.key ?? null}
               ariaLabel={LIST_LABELS[view]}
@@ -243,10 +238,7 @@ export function SovrapposizioniTile({ userId, className }: SovrapposizioniTilePr
       )}
 
       <div className="mt-auto flex items-center justify-between gap-3 border-t border-border pt-3.5 text-[11px] leading-[1.5] text-muted-foreground">
-        <p>
-          {describeOverlapFooter(exposure?.computedAt ?? null)}
-          {cached ? ' Dalla cache.' : ''}
-        </p>
+        <p>{describeOverlapFooter(oldestFetchedAt)}</p>
         <Button
           type="button"
           variant="ghost"

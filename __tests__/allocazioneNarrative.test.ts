@@ -27,9 +27,11 @@ import {
   describeClasses,
   describeExcluded,
   describeExposure,
-  describeExposureAside,
+  describeExposureBase,
+  describeExposureCoverage,
   describeExposureEmpty,
   describeExposureFooter,
+  describeExposureMethod,
   describeFrozen,
   describePension,
   describePensionAside,
@@ -45,6 +47,7 @@ import {
 import type { ClassGap, HoldingsGroup, PlanView } from '@/lib/utils/allocazioneSummary';
 import type { RebalanceMove } from '@/lib/utils/allocationUtils';
 import { narrativeToText, type Narrative } from '@/lib/utils/narrative';
+import type { ExposureBucket, ExposureCoverage, ExposureNotApplicable } from '@/types/exposure';
 
 /** The screen prints a no-break space before €; the tests read it as a normal one. */
 const flat = (text: string | undefined) => text?.replace(/[  ]/g, ' ');
@@ -572,94 +575,187 @@ describe('describeClasses', () => {
 });
 
 describe('describeExposure', () => {
-  it('names the heaviest holding and the first sector, dropping the area when absent', () => {
-    expect(
-      plain(
-        describeExposure({
-          topHolding: { name: 'Apple', pct: 4.1, sourceCount: 3 },
-          topSector: { label: 'Tecnologia', pct: 24.3 },
-          topRegion: null,
-        }),
-      ),
-    ).toBe('Il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti); il primo settore è Tecnologia (24,3%).');
+  const highlights = {
+    topHolding: { name: 'Apple', pct: 4.1, sourceCount: 3 },
+    topSector: { label: 'Tecnologia', pct: 24.3 },
+    topIssuer: { family: 'iShares', pct: 61 },
+    topRegion: null,
+  };
+
+  it('names the heaviest holding, the first sector and the biggest issuer, each on its own base', () => {
+    expect(plain(describeExposure(highlights))).toBe(
+      "Il titolo più pesante è Apple (4,1% dell'azionario nozionale, in 3 strumenti); il primo settore è Tecnologia (24,3%) e iShares emette il 61,0% degli strumenti quotati.",
+    );
   });
 
   it('drops what is missing and is null with nothing', () => {
-    expect(
-      plain(
-        describeExposure({
-          topHolding: { name: 'Enel', pct: 2, sourceCount: 1 },
-          topSector: null,
-          topRegion: null,
-        }),
-      ),
-    ).toBe('Il titolo più pesante è Enel (2,0% del portafoglio, in 1 strumento).');
-    expect(describeExposure({ topHolding: null, topSector: null, topRegion: null })).toBeNull();
+    expect(plain(describeExposure({ topHolding: { name: 'Enel', pct: 2, sourceCount: 1 }, topSector: null, topIssuer: null, topRegion: null }))).toBe(
+      "Il titolo più pesante è Enel (2,0% dell'azionario nozionale, in 1 strumento).",
+    );
+    expect(describeExposure({ topHolding: null, topSector: null, topIssuer: null, topRegion: null })).toBeNull();
   });
 
   it('opens on the clause of the view the reader is in, keeping the other two', () => {
-    const highlights = {
+    expect(plain(describeExposure(highlights, 'sectors'))).toBe(
+      "Il primo settore è Tecnologia (24,3%); il titolo più pesante è Apple (4,1% dell'azionario nozionale, in 3 strumenti) e iShares emette il 61,0% degli strumenti quotati.",
+    );
+    expect(plain(describeExposure(highlights, 'issuers'))).toBe(
+      "iShares emette il 61,0% degli strumenti quotati; il titolo più pesante è Apple (4,1% dell'azionario nozionale, in 3 strumenti) e il primo settore è Tecnologia (24,3%).",
+    );
+  });
+});
+
+describe('describeExposureCoverage', () => {
+  const bucket = (amount: number, ...instruments: string[]): ExposureBucket => ({ amount, instruments });
+  /** The not-applicable bucket: euros by class of the quoted legs, plus the non-quoted instruments as one figure. */
+  const notApplicable = (byClass: Record<string, number>, unquoted = 0, ...instruments: string[]): ExposureNotApplicable => ({
+    amount: Object.values(byClass).reduce((sum, value) => sum + value, 0) + unquoted,
+    instruments,
+    byClass,
+    unquoted,
+  });
+  const coverage = (overrides: Partial<ExposureCoverage>): ExposureCoverage => ({
+    measure: 'notional',
+    base: 0,
+    read: bucket(0),
+    unread: bucket(0),
+    notApplicable: notApplicable({}),
+    outOfView: bucket(0),
+    named: 0,
+    ...overrides,
+  });
+  const full = coverage({ base: 120000, read: bucket(113000, 'IWDA', 'CSPX'), unread: bucket(7000, 'Xtrackers Swap'), notApplicable: notApplicable({ commodity: 8000 }, 0, 'Oro fisico'), outOfView: bucket(40000, 'BTP'), named: 37200 });
+
+  // The owner's finding on the mirror (2026-09-28): four figures in one row, «92.042 €» right after
+  // «92.532 €», read as «almost nothing has holdings» when the first was OUTSIDE the base. Two
+  // sentences now: what is in this view, then what is out of it and why.
+  it('Titoli: what is in view and how much was read, then what is out of it and why', () => {
+    expect(plain(describeExposureCoverage(full, 'holdings'))).toBe(
+      'In questa vista: 120.000 € di azionario nozionale, letti al 94%: 7000 € (Xtrackers Swap) non hanno una composizione pubblicata; i primi dieci titoli di ogni fondo ne nominano il 31%, il resto è «Resto letto». Fuori da questa vista: 40.000 € di obbligazionario; 8000 € di materie prime, senza titoli per natura.',
+    );
+  });
+
+  it('Settori: no «coprono» clause when the weights cover the sleeve, the clause when they do not', () => {
+    expect(plain(describeExposureCoverage({ ...full, named: 113000 }, 'sectors'))).toBe(
+      'In questa vista: 120.000 € di azionario nozionale, letti al 94%: 7000 € (Xtrackers Swap) non hanno una composizione pubblicata. Fuori da questa vista: 40.000 € di obbligazionario; 8000 € di materie prime, senza settori per natura.',
+    );
+    expect(plain(describeExposureCoverage({ ...full, named: 90000 }, 'sectors'))).toContain('; i settori pubblicati ne coprono il 75%, il resto è «Resto letto». Fuori');
+    // Decided on the printed figures: 112.900 read and 112.500 named both print 94%, so no clause.
+    expect(plain(describeExposureCoverage({ ...full, read: bucket(112900, 'IWDA'), named: 112500 }, 'holdings'))).not.toContain('nominano');
+  });
+
+  it('Emittenti: the market base, the unread named, the non-quoted out of view', () => {
+    const issuers = coverage({ measure: 'market', base: 160000, read: bucket(147000, 'IWDA'), unread: bucket(13000, 'BTP Valore', 'Bitcoin'), notApplicable: notApplicable({}, 8000, 'Conto'), named: 147000 });
+    expect(plain(describeExposureCoverage(issuers, 'issuers'))).toBe(
+      'In questa vista: 160.000 € di strumenti quotati, letti al 92%: 13.000 € (BTP Valore e Bitcoin) non hanno un emittente letto. Fuori da questa vista: 8000 € di strumenti non quotati, senza emittente per natura.',
+    );
+  });
+
+  it('says the not-applicable euros by CLASS, largest first, never by instrument', () => {
+    const mixed = coverage({ base: 92532, read: bucket(92532, 'X'), named: 23000, notApplicable: notApplicable({ commodity: 30000, cash: 50000, crypto: 12042 }, 0, 'A', 'B', 'C', 'D', 'E') });
+    expect(plain(describeExposureCoverage(mixed, 'holdings'))).toBe(
+      'In questa vista: 92.532 € di azionario nozionale, letti tutti; i primi dieci titoli di ogni fondo ne nominano il 25%, il resto è «Resto letto». Fuori da questa vista: 92.042 € di liquidità, materie prime e criptovalute, senza titoli per natura.',
+    );
+    const withUnquoted = { ...mixed, notApplicable: notApplicable({ cash: 50000 }, 42042, 'A', 'Conto', 'Casa') };
+    expect(plain(describeExposureCoverage(withUnquoted, 'holdings'))).toContain('Fuori da questa vista: 92.042 € di liquidità e strumenti non quotati, senza titoli per natura.');
+    expect(plain(describeExposureCoverage(withUnquoted, 'holdings'))).not.toContain('Conto');
+  });
+
+  it('every clause falls at zero, and reading everything says so', () => {
+    const all = coverage({ base: 50000, read: bucket(50000, 'IWDA'), named: 50000 });
+    expect(plain(describeExposureCoverage(all, 'holdings'))).toBe('In questa vista: 50.000 € di azionario nozionale, letti tutti.');
+    expect(plain(describeExposureCoverage({ ...all, named: 15000 }, 'holdings'))).toBe(
+      'In questa vista: 50.000 € di azionario nozionale, letti tutti; i primi dieci titoli di ogni fondo ne nominano il 30%, il resto è «Resto letto».',
+    );
+    expect(plain(describeExposureCoverage({ ...all, notApplicable: notApplicable({ commodity: 8000 }, 0, 'Oro fisico') }, 'holdings'))).toBe(
+      'In questa vista: 50.000 € di azionario nozionale, letti tutti. Fuori da questa vista: 8000 € di materie prime, senza titoli per natura.',
+    );
+    expect(plain(describeExposureCoverage({ ...all, outOfView: bucket(40000, 'BTP') }, 'holdings'))).toBe(
+      'In questa vista: 50.000 € di azionario nozionale, letti tutti. Fuori da questa vista: 40.000 € di obbligazionario.',
+    );
+    expect(plain(describeExposureCoverage({ ...all, measure: 'market' }, 'issuers'))).toBe('In questa vista: 50.000 € di strumenti quotati, letti tutti.');
+  });
+
+  it('says when nothing is in view, and still names what is around it', () => {
+    expect(plain(describeExposureCoverage(coverage({ notApplicable: notApplicable({ commodity: 8000 }, 0, 'Oro fisico'), outOfView: bucket(40000, 'BTP') }), 'holdings'))).toBe(
+      'In questa vista: nessun azionario nozionale fra gli strumenti quotati. Fuori da questa vista: 40.000 € di obbligazionario; 8000 € di materie prime, senza titoli per natura.',
+    );
+    expect(plain(describeExposureCoverage(coverage({ measure: 'market', notApplicable: notApplicable({}, 8000, 'Conto') }), 'issuers'))).toBe(
+      'In questa vista: nessuno strumento quotato. Fuori da questa vista: 8000 € di strumenti non quotati, senza emittente per natura.',
+    );
+    expect(plain(describeExposureCoverage(coverage({}), 'sectors'))).toBe('In questa vista: nessun azionario nozionale fra gli strumenti quotati.');
+  });
+
+  it('names at most three unread instruments, «e un altro» or «e altri N» for the rest', () => {
+    const many = coverage({ base: 10000, unread: bucket(10000, 'A', 'B', 'C', 'D', 'E') });
+    expect(plain(describeExposureCoverage(many, 'holdings'))).toContain('(A, B, C e altri 2)');
+    expect(plain(describeExposureCoverage({ ...many, unread: bucket(10000, 'A', 'B', 'C', 'D') }, 'holdings'))).toContain('(A, B, C e un altro)');
+    // Nothing read at all: «letti allo 0%».
+    expect(plain(describeExposureCoverage({ ...many, unread: bucket(10000, 'A') }, 'holdings'))).toBe('In questa vista: 10.000 € di azionario nozionale, letti allo 0%: 10.000 € (A) non hanno una composizione pubblicata.');
+  });
+  it('reads the regions coverage on its own base, naming what has no recognised index', () => {
+    const read = coverage({
+      base: 120000,
+      read: bucket(113000, 'IWDA'),
+      unread: bucket(7000, 'Xtrackers Swap'),
+      named: 113000,
+    });
+    expect(plain(describeExposureCoverage(read, 'regions'))).toBe(
+      'In questa vista: 120.000 € di azionario nozionale e obbligazionario, letti al 94%: 7000 € (Xtrackers Swap) non hanno un indice riconosciuto.',
+    );
+    const mixed = coverage({
+      base: 120000,
+      read: bucket(120000, 'IWDA'),
+      named: 120000,
+      notApplicable: notApplicable({ cash: 50000 }, 8000, 'Conto'),
+    });
+    expect(plain(describeExposureCoverage(mixed, 'regions'))).toBe(
+      'In questa vista: 120.000 € di azionario nozionale e obbligazionario, letti tutti. Fuori da questa vista: 58.000 € di liquidità e strumenti non quotati, senza area per natura.',
+    );
+    expect(plain(describeExposureCoverage(coverage({}), 'regions'))).toBe(
+      'In questa vista: nessuna area leggibile fra gli strumenti quotati.',
+    );
+  });
+});
+
+describe('the base, the empty state, the footer and the method', () => {
+  it('names the base of the percentage column per view', () => {
+    expect(describeExposureBase('holdings')).toBe("% dell'azionario nozionale");
+    expect(describeExposureBase('sectors')).toBe("% dell'azionario nozionale");
+    expect(describeExposureBase('issuers')).toBe('% degli strumenti quotati');
+    expect(describeExposureBase('regions')).toBe("% dell'azionario nozionale e dell'obbligazionario");
+  });
+
+  it('names the first area on its own base, leading only on its view', () => {
+    const regions = {
       topHolding: { name: 'Apple', pct: 4.1, sourceCount: 3 },
       topSector: { label: 'Tecnologia', pct: 24.3 },
-      topRegion: { label: 'Nord America', pct: 41.2 },
+      topIssuer: { family: 'iShares', pct: 61 },
+      topRegion: { label: 'Nord America', pct: 40.8 },
     };
-    // Each of the three views leads with its own fact; the other two keep one fixed order, so two
-    // readings never differ only by which context they happened to open with.
-    expect(plain(describeExposure(highlights, 'sectors'))).toBe(
-      'Il primo settore è Tecnologia (24,3%); il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti) e la prima area geografica è Nord America (41,2%).',
+    expect(plain(describeExposure(regions))).toBe(
+      "Il titolo più pesante è Apple (4,1% dell'azionario nozionale, in 3 strumenti); il primo settore è Tecnologia (24,3%), iShares emette il 61,0% degli strumenti quotati e la prima area geografica è Nord America (40,8%).",
     );
-    expect(plain(describeExposure(highlights, 'regions'))).toBe(
-      'La prima area geografica è Nord America (41,2%); il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti) e il primo settore è Tecnologia (24,3%).',
+    expect(plain(describeExposure(regions, 'regions'))).toBe(
+      "La prima area geografica è Nord America (40,8%); il titolo più pesante è Apple (4,1% dell'azionario nozionale, in 3 strumenti), il primo settore è Tecnologia (24,3%) e iShares emette il 61,0% degli strumenti quotati.",
     );
-    expect(plain(describeExposure(highlights, 'holdings'))).toBe(
-      'Il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti); il primo settore è Tecnologia (24,3%) e la prima area geografica è Nord America (41,2%).',
-    );
+    expect(
+      plain(
+        describeExposure({ topHolding: null, topSector: null, topIssuer: null, topRegion: { label: 'Italia', pct: 12.2 } }),
+      ),
+    ).toBe('La prima area geografica è Italia (12,2%).');
   });
 
-  it('names what an empty view means', () => {
-    expect(describeExposureEmpty('holdings')).toContain('Nessun titolo riconosciuto');
-    expect(describeExposureEmpty('sectors')).toBe('Nessun dato settoriale per gli ETF in portafoglio.');
-    // The area view is the one whose emptiness is the reader's to fix: it says so, and says how.
-    expect(describeExposureEmpty('regions')).toContain('Nessuna area riconosciuta');
-    expect(describeExposureEmpty('regions')).toContain("fissare l'area a mano");
-  });
 
-  it('counts the assets the AREA view read, not the ones the analysis read', () => {
-    // A bond carries a country of issue and a flat does not: the two views do not agree on the
-    // portfolio, so the aside must not print one number beside the other view's bars.
-    const exposure = { analyzedAssets: 4, totalAssets: 20, regionAssets: 7 };
-    expect(describeExposureAside(exposure, 'holdings')).toBe('4 asset su 20 analizzati · % del portafoglio');
-    expect(describeExposureAside(exposure, 'regions')).toBe("7 asset su 20 con un'area · % del portafoglio");
-    // A cached document written before the area view existed carries no count. It reads zero, the
-    // honest value for "none of this is known to carry an area", never the analysis' own count.
-    expect(describeExposureAside({ analyzedAssets: 4, totalAssets: 20 }, 'regions')).toBe(
-      "0 asset su 20 con un'area · % del portafoglio",
-    );
-  });
-
-  it('has an aside and a footer', () => {
-    expect(describeExposureAside({ analyzedAssets: 12, totalAssets: 16 }, 'holdings')).toBe('12 asset su 16 analizzati · % del portafoglio');
-    expect(describeExposureFooter('2026-08-24T06:15:00.000Z')).toBe(
-      'Prime ~10 posizioni per ETF da Yahoo Finance: la lista dei titoli è un campione dei fondi molto diversificati. Aggiornato il 24/08/2026.',
-    );
-    expect(describeExposureFooter(null)).toBe(
-      'Prime ~10 posizioni per ETF da Yahoo Finance: la lista dei titoli è un campione dei fondi molto diversificati.',
-    );
-  });
-
-  it('declares each view\'s own method, and never promises a sample for the area view', () => {
-    // The three cuts are NOT read the same way. One shared sentence had already gone stale on the
-    // areas — it promised the top ~10 positions for every cut while the area of a fund is its index
-    // — and a reader who is told «the area is a sample of ten positions» stops believing the tile.
-    expect(describeExposureFooter(null, 'sectors')).toContain('Composizione settoriale completa');
-    expect(describeExposureFooter(null, 'sectors')).not.toContain('~10 posizioni');
-    expect(describeExposureFooter(null, 'regions')).toContain('indice');
-    expect(describeExposureFooter(null, 'regions')).toContain('campione');
-    // Each view keeps its own sentence: a reader who switches tabs must not read the last one's.
-    const methods = (['holdings', 'sectors', 'regions'] as const).map((view) =>
-      describeExposureFooter(null, view)
-    );
-    expect(new Set(methods).size).toBe(3);
+  it('has an empty state, a footer dated on the OLDEST answer used, and a method', () => {
+    expect(describeExposureEmpty()).toBe('Nessuno strumento quotato nel portafoglio di Allocazione.');
+    expect(describeExposureFooter('2026-09-03T06:15:00.000Z')).toBe('Composizioni lette da Yahoo Finance, la più vecchia del 3 settembre.');
+    expect(describeExposureFooter(null)).toBe('Composizioni lette da Yahoo Finance.');
+    expect(describeExposureFooter('not a date')).toBe('Composizioni lette da Yahoo Finance.');
+    expect(describeExposureMethod()).toHaveLength(4);
+    expect(describeExposureMethod()[0]).toContain('nozionale');
+    expect(describeExposureMethod()[3]).toContain('ISIN');
+    expect(describeExposureMethod(['NTSG.MI'])[4]).toContain('NTSG.MI');
   });
 });
 
