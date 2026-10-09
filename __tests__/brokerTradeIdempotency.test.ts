@@ -27,6 +27,7 @@ vi.mock('server-only', () => ({}));
 
 vi.mock('@/lib/server/tradeFxService', () => ({
   resolveTradePriceEur: vi.fn(async (_currency: string, pricePerUnit: number) => pricePerUnit),
+  resolveRateToEur: vi.fn(async (currency: string) => (currency.toUpperCase() === 'EUR' ? 1 : 0.87)),
   resolveBaselinePriceEur: vi.fn(
     async (asset: { averageCost?: number; currentPrice: number }) => asset.averageCost ?? asset.currentPrice
   ),

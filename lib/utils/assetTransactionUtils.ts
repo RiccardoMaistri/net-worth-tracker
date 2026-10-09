@@ -617,11 +617,51 @@ export function computeInvestedCapital(
 // Realized P&L by fiscal year, across assets (Rendimenti)
 // ---------------------------------------------------------------------------
 
+/**
+ * ONE realized sale, as the Plusvalenze detail table prints it.
+ *
+ * EVERY money figure is EUR and says so in its name, because the ledger stores the unit price in
+ * the instrument's OWN currency (`pricePerUnit`) beside its EUR twin (`priceEur`) — printing the
+ * native one in a column of euros is the mistake doc/guide/patrimonio.md warns about. The unit
+ * price shown is therefore `priceEur`, which for a EUR instrument is the same number.
+ *
+ * The four money figures are the broker's own arithmetic, restated in EUR:
+ *   gross − fees − withheldTax = what actually landed (the cash settlement, `computeCashDelta`)
+ *   realizedPnlEur = gross − fees − costBasisEur — GROSS of the withheld tax, which is the
+ *   ledger's standing rule (the tax lowers the proceeds, it does not reduce the capital gain).
+ */
+export interface RealizedSale {
+  transactionId: string;
+  assetId: string;
+  date: Date;
+  quantity: number;
+  /** EUR per unit at the trade date. */
+  priceEur: number;
+  grossEur: number;
+  feesEur: number;
+  /** The tax the broker withheld AT the sale. Absent/0 on a sale that reported none. */
+  withheldTaxEur: number;
+  /** What the sale actually paid out: `gross − fees − tax`. */
+  netCashEur: number;
+  /** Cost of the units sold, at the PMC of that instant, purchase fees included. */
+  costBasisEur: number;
+  /** Realized P&L, net of fees and gross of the withheld tax. */
+  realizedPnlEur: number;
+  /** The PMC (EUR/unit) the sale was priced against — the denominator of the percentage. */
+  averageCostEurAtTrade: number;
+}
+
 /** Realized P&L per fiscal year, plus how many assets could not be replayed. */
 export interface RealizedGainsAggregate {
   byYear: Record<number, number>;
   /** Realized P&L per assetId per fiscal year: Record<year, Record<assetId, amount>>. */
   byAssetAndYear: Record<number, Record<string, number>>;
+  /**
+   * The sales behind those years, per fiscal year, chronological then by asset so two sales on the
+   * same day keep a stable order. Absent for an asset whose replay threw — the same rule as
+   * `skippedAssets`, so a row can never exist for a position the totals do not count.
+   */
+  salesByYear: Record<number, RealizedSale[]>;
   /**
    * Assets whose replay threw and were left out of the totals. This is a TAX figure: a total that
    * is quietly short by one position is worse than no total, so the count reaches the UI instead of
@@ -632,12 +672,22 @@ export interface RealizedGainsAggregate {
   skippedAssetIds: string[];
 }
 
+/** Cents, the unit the table prints: a total of rounded rows is a total the reader can add up. */
+function roundCents(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
 /**
- * Sum of realized P&L (EUR) per fiscal year, across every asset's own replay.
+ * Sum of realized P&L (EUR) per fiscal year, across every asset's own replay, plus the sales
+ * behind them.
  *
- * `replayTransactions` replays ONE asset's position, so the input must be grouped by `assetId`
- * BEFORE folding — realized P&L is PMC-dependent per position, and folding transactions from
- * different assets together would silently cross-contaminate their cost bases.
+ * `replayTransactionsWithEffects` replays ONE asset's position, so the input must be grouped by
+ * `assetId` BEFORE folding — realized P&L is PMC-dependent per position, and folding transactions
+ * from different assets together would silently cross-contaminate their cost bases.
+ *
+ * ONE pass, and that is not an optimisation: the per-year totals come from the replay's own
+ * `realizedByYear` state and the per-sale rows from its `effects`, so the detail table and the
+ * totals can never be two readings of the same ledger that disagree.
  */
 export function aggregateRealizedByYear(transactions: AssetTransaction[]): RealizedGainsAggregate {
   const byAsset = new Map<string, AssetTransaction[]>();
@@ -649,12 +699,13 @@ export function aggregateRealizedByYear(transactions: AssetTransaction[]): Reali
 
   const byYear: Record<number, number> = {};
   const byAssetAndYear: Record<number, Record<string, number>> = {};
+  const salesByYear: Record<number, RealizedSale[]> = {};
   const skippedAssetIds: string[] = [];
 
   byAsset.forEach((assetTransactions, assetId) => {
     try {
-      const { realizedByYear } = replayTransactions(assetTransactions);
-      Object.entries(realizedByYear).forEach(([yearStr, amount]) => {
+      const { state, effects } = replayTransactionsWithEffects(assetTransactions);
+      Object.entries(state.realizedByYear).forEach(([yearStr, amount]) => {
         const year = Number(yearStr);
         byYear[year] = (byYear[year] ?? 0) + amount;
         if (!byAssetAndYear[year]) {
@@ -662,6 +713,33 @@ export function aggregateRealizedByYear(transactions: AssetTransaction[]): Reali
         }
         byAssetAndYear[year][assetId] = (byAssetAndYear[year][assetId] ?? 0) + amount;
       });
+
+      const byId = new Map(assetTransactions.map((t) => [t.id, t]));
+      for (const effect of effects) {
+        // A sell is the only type with a realized figure, so it identifies itself.
+        if (effect.realizedPnlEur === undefined) continue;
+        const t = byId.get(effect.transactionId);
+        if (!t) continue;
+        const year = getItalyYear(t.date);
+        const grossEur = t.quantity * t.priceEur;
+        const feesEur = t.fees ?? 0;
+        const withheldTaxEur = t.withheldTaxEur ?? 0;
+        const sale: RealizedSale = {
+          transactionId: t.id,
+          assetId,
+          date: t.date,
+          quantity: t.quantity,
+          priceEur: t.priceEur,
+          grossEur: roundCents(grossEur),
+          feesEur: roundCents(feesEur),
+          withheldTaxEur: roundCents(withheldTaxEur),
+          netCashEur: roundCents(grossEur - feesEur - withheldTaxEur),
+          costBasisEur: roundCents(effect.soldCostBasisEur ?? 0),
+          realizedPnlEur: roundCents(effect.realizedPnlEur),
+          averageCostEurAtTrade: effect.averageCostEurAtTrade ?? 0,
+        };
+        (salesByYear[year] ??= []).push(sale);
+      }
     } catch (error) {
       // A per-asset sequence is server-validated at write time, so this should not happen; when it
       // does, one asset must not take down the whole card — but the total is now incomplete and
@@ -676,5 +754,9 @@ export function aggregateRealizedByYear(transactions: AssetTransaction[]): Reali
     }
   });
 
-  return { byYear, byAssetAndYear, skippedAssets: skippedAssetIds.length, skippedAssetIds };
+  Object.values(salesByYear).forEach((sales) =>
+    sales.sort((a, b) => a.date.getTime() - b.date.getTime() || a.assetId.localeCompare(b.assetId))
+  );
+
+  return { byYear, byAssetAndYear, salesByYear, skippedAssets: skippedAssetIds.length, skippedAssetIds };
 }

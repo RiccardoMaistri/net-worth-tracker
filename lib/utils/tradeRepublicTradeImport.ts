@@ -23,9 +23,25 @@
  *   unknown key fails the whole response. The raw 'getTimelineTransactions' is unaffected, so
  *   the importer reads through that. Do not 'fix' this by reaching for the typed reader.
  *
- * NO WITHHELD TAX HERE, unlike Scalable: the detail has no such field at all (measured on 11
- * sells). Trade Republic withholds nothing on a retail sale, so the period ESTIMATE stays in
- * charge - which is the correct reading, and inventing a zero would instead suppress it.
+ * NO WITHHELD TAX HERE, unlike Scalable — MEASURED WRONG on 2026-10-05, and the correction is
+ * below. The eleven sells this header was written from had NO 'Tax' cell: the older archive the
+ * broker materialises from 2024-03-28 reports a flat fee and nothing else. Every sell of 2026 does
+ * report it (10 of 10, €0,66 to €254,37, 25,75% of the year's gains): a sale with a gain is taxed
+ * at source by the German KESt, and 'Total' is what actually landed — `lordo − fee − tax`, which
+ * is the identity the fixture in `__tests__/brokerTradeImport.test.ts` still gets wrong (it holds a
+ * detail with no Tax cell, where the three collapse into `lordo − fee`).
+ *
+ * The tax is therefore READ, on a sell only, and never derived: an absent cell means the broker
+ * withheld nothing on that sale, and the period ESTIMATE in Rendimenti then stands, which is the
+ * correct reading. What the ledger does with it is `saleTax.ts`'s business, and the realized P&L
+ * stays gross of it (doc/guide/registro-operazioni.md) — this module only carries the fact.
+ *
+ * 'Gain' IS read, as `brokerGain` (2026-10-05), and still never WRITTEN: the ledger's PMC is the
+ * domain's single source for what a sale cost (doc/guide/patrimonio.md), so the import carries no
+ * gain. It travels because a sale the LEDGER DOES NOT HOLD has no replay to measure it, and the
+ * completeness reading on Rendimenti would otherwise show a broker's cash with no gain at all.
+ * 'Profit' (the percentage) is read by nobody: it is `Gain` over that same fiscal base, so deriving
+ * it from the two figures the broker reported keeps one arithmetic instead of two sources.
  *
  * Pure: no I/O, no 'server-only'. It takes already-fetched payloads.
  */
@@ -205,6 +221,38 @@ function sideFromCashAmount(row: JsonObject): 'buy' | 'sell' | null {
   return amount > 0 ? 'sell' : 'buy';
 }
 
+/**
+ * The capital-gains tax the broker withheld on THIS sale, in EUR.
+ *
+ * 'Tax' is a money cell like 'Fee', absent on a sale with no gain (the pre-2024 archive: measured
+ * across eleven sells) and present on every 2026 one. It is read, never derived — a rate applied
+ * here would be an invented tax on the user's money.
+ *
+ * Read on a SELL only, like the ledger field it feeds (`withheldTaxEur`): a buy has no such cell
+ * and writing one would be a fabrication.
+ */
+function parseWithheldTax(detail: JsonObject): number | undefined {
+  const tax = toFiniteNumber(readOverviewCell(detail, 'Tax'));
+  return tax !== null && tax > 0 ? Math.round((tax + Number.EPSILON) * 100) / 100 : undefined;
+}
+
+/**
+ * The gain the BROKER reports on this sale, in EUR — and it is NOT written to the ledger.
+ *
+ * 'Gain' lives in the detail's 'Performance' section beside 'Profit' (the percentage), and both are
+ * measured on the BROKER'S OWN fiscal carrying value, which is not the ledger's: the app's realized
+ * P&L is net of every commission and stands on a cost basis that includes the purchase fees, while
+ * the broker taxes the price difference alone (doc/guide/registro-operazioni.md § Tasse trattenute).
+ *
+ * So it travels as `brokerGain`, a REPORTED figure for a sale the ledger does not hold, and the
+ * import never carries it: writing it would put a second source for a realized P&L the replay
+ * computes. Read on a SELL only, and absent means the broker did not report one — never a zero.
+ */
+function parseBrokerGain(detail: JsonObject): number | undefined {
+  const gain = toFiniteNumber(readOverviewCell(detail, 'Gain'));
+  return gain !== null ? Math.round((gain + Number.EPSILON) * 100) / 100 : undefined;
+}
+
 function mapTrade(row: JsonObject, detail: JsonObject, side: 'buy' | 'sell'): BrokerTrade | { reason: string } {
   const sourceRef = readString(row, 'id') as string;
   const label = readString(row, 'title') ?? sourceRef;
@@ -219,6 +267,8 @@ function mapTrade(row: JsonObject, detail: JsonObject, side: 'buy' | 'sell'): Br
   const amount = asObject(row['amount']);
   const currency = (amount && readString(amount, 'currency')) || 'EUR';
   const fees = parseFees(detail);
+  const withheldTax = side === 'sell' ? parseWithheldTax(detail) : undefined;
+  const brokerGain = side === 'sell' ? parseBrokerGain(detail) : undefined;
   const isin = isinFromDetail(detail) ?? isinFromLogo(row['icon']);
 
   return {
@@ -232,6 +282,8 @@ function mapTrade(row: JsonObject, detail: JsonObject, side: 'buy' | 'sell'): Br
     pricePerUnit: figures.pricePerUnit,
     currency,
     ...(fees !== undefined ? { fees } : {}),
+    ...(withheldTax !== undefined ? { withheldTax } : {}),
+    ...(brokerGain !== undefined ? { brokerGain } : {}),
   };
 }
 

@@ -181,6 +181,11 @@ describe('importBrokerTrades', () => {
       quantity: 3.24,
       source: 'scalable',
       sourceRef: 'abc123',
+      // The VENUE currency, not the asset's: without it the write path reads this price as the
+      // asset's native one and converts a euro figure again (measured 2026-10-05).
+      priceCurrency: 'EUR',
+      // The broker's own name, so a sale whose asset is later deleted can still be named.
+      note: 'UBS Core MSCI World (Acc)',
     });
   });
 

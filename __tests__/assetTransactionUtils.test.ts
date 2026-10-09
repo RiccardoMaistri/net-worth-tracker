@@ -701,6 +701,82 @@ describe('aggregateRealizedByYear — realized P&L by fiscal year, across assets
     expect(result.byYear[2025]).toBeCloseTo(20, 6); // 10·(12 − 10)
     expect(result.byYear[2026]).toBeCloseTo(50, 6); // 10·(15 − 10)
   });
+
+  // The Plusvalenze detail table reads these rows; the totals and the rows come from ONE replay.
+  it('breaks the year down into the sales behind it, with the broker’s own arithmetic in EUR', () => {
+    const transactions = [
+      tx({ id: 'b1', type: 'buy', date: day(0), quantity: 10, pricePerUnit: 100, fees: 5 }),
+      // A TR-shaped sale: 4 units at 150, €1 fee, €86.67 withheld at source.
+      tx({
+        id: 's1',
+        type: 'sell',
+        date: day(5),
+        quantity: 4,
+        pricePerUnit: 150,
+        fees: 1,
+        withheldTaxEur: 86.67,
+      }),
+    ];
+
+    const result = aggregateRealizedByYear(transactions);
+    const sales = result.salesByYear[getYearOf(day(5))];
+
+    expect(sales).toHaveLength(1);
+    expect(sales[0]).toMatchObject({
+      transactionId: 's1',
+      assetId: 'a1',
+      quantity: 4,
+      priceEur: 150,
+      grossEur: 600,
+      feesEur: 1,
+      withheldTaxEur: 86.67,
+      netCashEur: 512.33, // what the broker actually paid out
+      costBasisEur: 402, // 4 units of a 100.50 EUR basis (the €5 purchase fee is IN it)
+      realizedPnlEur: 197, // gross − fee − cost, GROSS of the withheld tax
+      averageCostEurAtTrade: 100.5,
+    });
+    // The row is the year: a detail table that disagrees with the tile's total is a wrong table.
+    expect(sales.reduce((sum, s) => sum + s.realizedPnlEur, 0)).toBeCloseTo(result.byYear[getYearOf(day(5))], 6);
+  });
+
+  it('leaves the tax at zero on a sale that reported none, rather than inventing one', () => {
+    const result = aggregateRealizedByYear([
+      tx({ type: 'buy', date: day(0), quantity: 10, pricePerUnit: 100 }),
+      tx({ id: 's1', type: 'sell', date: day(5), quantity: 10, pricePerUnit: 110 }),
+    ]);
+    const sales = result.salesByYear[getYearOf(day(5))];
+    expect(sales[0].withheldTaxEur).toBe(0);
+    expect(sales[0].netCashEur).toBe(1100); // nothing withheld, so the gross is what landed
+  });
+
+  it('withholds the rows of an asset whose replay threw, so no row exists for an uncounted position', () => {
+    const result = aggregateRealizedByYear([
+      tx({ assetId: 'a1', type: 'buy', date: day(0), quantity: 10, pricePerUnit: 100 }),
+      tx({ assetId: 'a1', id: 's-ok', type: 'sell', date: day(5), quantity: 10, pricePerUnit: 110 }),
+      tx({ assetId: 'a2', type: 'buy', date: day(0), quantity: 5, pricePerUnit: 50 }),
+      tx({ assetId: 'a2', id: 's-bad', type: 'sell', date: day(5), quantity: 999, pricePerUnit: 60 }),
+    ]);
+
+    const sales = result.salesByYear[getYearOf(day(5))];
+    expect(result.skippedAssets).toBe(1);
+    expect(sales.map((s) => s.transactionId)).toEqual(['s-ok']);
+  });
+
+  it('orders a year’s sales chronologically, and by asset on the same day', () => {
+    const result = aggregateRealizedByYear([
+      tx({ assetId: 'a2', type: 'buy', date: day(0), quantity: 10, pricePerUnit: 100 }),
+      tx({ assetId: 'a1', type: 'buy', date: day(0), quantity: 10, pricePerUnit: 100 }),
+      tx({ assetId: 'a1', id: 'same-day-1', type: 'sell', date: day(5), quantity: 1, pricePerUnit: 110 }),
+      tx({ assetId: 'a2', id: 'later', type: 'sell', date: day(9), quantity: 1, pricePerUnit: 110 }),
+      tx({ assetId: 'a2', id: 'same-day-2', type: 'sell', date: day(5), quantity: 1, pricePerUnit: 110 }),
+    ]);
+
+    expect(result.salesByYear[getYearOf(day(5))].map((s) => s.transactionId)).toEqual([
+      'same-day-1',
+      'same-day-2',
+      'later',
+    ]);
+  });
 });
 
 /** Italy fiscal year of a date, matching the engine's own bucketing (UTC+1 in winter, no DST). */

@@ -172,12 +172,22 @@ export async function importBrokerTrades(
         fees: trade.fees,
         // The tax the broker withheld travels only on a sell, and only when the broker REPORTED
         // one: absent, the period tax ESTIMATE in Rendimenti stands, which is the correct reading
-        // for a retail sale where nothing was withheld (measured: both brokers report no tax).
+        // for a sale on which nothing was withheld (per broker, measured: Scalable's `tax_amount`
+        // is null, Trade Republic withholds the German KESt from 2024 onwards).
         ...(trade.type === 'sell' && trade.withheldTax !== undefined
           ? { withheldTaxEur: trade.withheldTax }
           : {}),
         source: trade.source,
         sourceRef: trade.sourceRef,
+        // The broker settles on ITS venue and says so: without this the write path read a euro
+        // price as the asset's native one and converted it again (measured 2026-10-05: a €996,10
+        // Micron sale stored at €869,12). `currency` was already on the shape and read by nobody.
+        priceCurrency: trade.currency,
+        // The broker's name travels as the trade's NOTE, so a sale whose asset has since been
+        // deleted can still be named — a ledger row has no name of its own, and the Plusvalenze
+        // detail already falls back to the note exactly there. Written on creation only, so it can
+        // never overwrite a note the owner typed.
+        note: trade.label,
       });
       result.imported += 1;
       if (written.realizedPnlEur !== undefined) {

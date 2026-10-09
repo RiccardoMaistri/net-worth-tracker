@@ -46,6 +46,7 @@ import type {
   ReturnConsistency,
 } from '@/lib/utils/performanceSummary';
 import { deannualizeReturn, printedGap } from '@/lib/utils/performanceSummary';
+import type { RealizedSale } from '@/lib/utils/assetTransactionUtils';
 import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
 import { formatNumber, formatPercentage } from '@/lib/services/chartService';
 import { articleForPercent, monthWithPrepositionA, ofThePercent, startsWithVowel } from '@/lib/utils/patrimonioNarrative';
@@ -547,7 +548,29 @@ export function describeBenchmarkRanking(ranking: BenchmarkRanking): Narrative |
   ];
 }
 
-/** «Dal registro operazioni hai realizzato +3745 € in totale; il 2026 chiude per ora in perdita (−412 €).» */
+/**
+ * The second line of a sale's row in the Plusvalenze detail table: what was sold, and what the
+ * broker did with the money.
+ *
+ * A CAPTION, not a sentence about the gain — the gain has its own column — so it names only the
+ * facts the columns above it do not: the units and their price, the commission, the tax withheld
+ * AT the sale and what actually landed. Every clause is DROPPED when the broker reported nothing
+ * (the Narrative Honesty Rule): a sale with no fee and no tax is `3,08 × 288,90 €`, not a row
+ * padded with two zeroes, because «fee 0,00 €» is a claim the broker never made.
+ *
+ * The money is the row's own figures at full cents (`cachedFormatCurrencyEUR`, not the compact
+ * form the readings use): this is the one place the reader can add the rows up, and a rounded
+ * figure there would not add up to the total beside it.
+ */
+export function describeRealizedSale(sale: RealizedSale): string {
+  const parts = [`${formatNumber(sale.quantity, 2)} × ${cachedFormatCurrencyEUR(sale.priceEur)}`];
+  if (sale.feesEur > 0) parts.push(`commissione ${cachedFormatCurrencyEUR(sale.feesEur)}`);
+  if (sale.withheldTaxEur > 0) parts.push(`tassa trattenuta ${cachedFormatCurrencyEUR(sale.withheldTaxEur)}`);
+  parts.push(`netto ${cachedFormatCurrencyEUR(sale.netCashEur)}`);
+  return parts.join(' · ');
+}
+
+/** «3,08 × 288,90 € · commissione 1,00 € · tassa trattenuta 36,22 € · netto 852,93 €» */
 export function describeRealizedGains(summary: RealizedGainsSummary, currentYear: number): Narrative {
   const out: Narrative = [prose('Dal registro operazioni hai realizzato '), signed(signedEuro(summary.total), summary.total), prose(' in totale')];
   const latest = summary.years[0];

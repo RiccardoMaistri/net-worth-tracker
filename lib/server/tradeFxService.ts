@@ -71,6 +71,33 @@ function normalizeFxCurrency(currency: string): string {
 }
 
 /**
+ * The {currency}→EUR rate at `date`: the trade-date fixing, else the 24h cache's latest.
+ *
+ * Its own function because a caller sometimes needs the RATE and not a price — converting a price
+ * the BROKER charged back into the asset's native currency divides by this rate instead of
+ * multiplying by it (the broker venue settles in EUR whatever the instrument's currency is, and
+ * re-reading that euro figure as a native one was a double conversion on every import).
+ *
+ * @throws TradeFxUnavailableError when neither the historical fixing nor the cached rate is there.
+ */
+export async function resolveRateToEur(currency: string, date: Date): Promise<number> {
+  if (!currency || currency.toUpperCase() === 'EUR') return 1;
+
+  const fxCurrency = normalizeFxCurrency(currency);
+
+  const historicalRate = await fetchFrankfurterRateToEur(fxCurrency, date);
+  if (historicalRate !== null) return historicalRate;
+
+  // Fallback: the existing 24h in-memory FX cache (latest rate). A stale rate beats corrupting the
+  // EUR metrics; getExchangeRateToEur throws only when nothing (network nor cache) is available.
+  try {
+    return await getExchangeRateToEur(fxCurrency);
+  } catch {
+    throw new TradeFxUnavailableError(currency);
+  }
+}
+
+/**
  * Resolve the per-unit EUR price of a trade at its execution date.
  *
  * @param currency     Asset.currency (native).
@@ -84,24 +111,8 @@ export async function resolveTradePriceEur(
   pricePerUnit: number,
   date: Date
 ): Promise<number> {
-  if (!currency || currency.toUpperCase() === 'EUR') {
-    // EUR-denominated (and bonds, which store EUR) need no conversion.
-    return pricePerUnit;
-  }
-
-  const fxCurrency = normalizeFxCurrency(currency);
-
-  const historicalRate = await fetchFrankfurterRateToEur(fxCurrency, date);
-  if (historicalRate !== null) return pricePerUnit * historicalRate;
-
-  // Fallback: the existing 24h in-memory FX cache (latest rate). A stale rate beats corrupting the
-  // EUR metrics; getExchangeRateToEur throws only when nothing (network nor cache) is available.
-  try {
-    const fallbackRate = await getExchangeRateToEur(fxCurrency);
-    return pricePerUnit * fallbackRate;
-  } catch {
-    throw new TradeFxUnavailableError(currency);
-  }
+  // EUR-denominated (and bonds, which store EUR) need no conversion — the rate is 1, so no fetch.
+  return pricePerUnit * (await resolveRateToEur(currency, date));
 }
 
 /**

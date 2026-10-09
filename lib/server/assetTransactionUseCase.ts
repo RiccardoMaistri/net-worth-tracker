@@ -9,6 +9,7 @@ import {
 } from '@/lib/utils/assetTransactionUtils';
 import {
   resolveTradePriceEur,
+  resolveRateToEur,
   resolveBaselinePriceEur,
 } from '@/lib/server/tradeFxService';
 import { getUserAssetsAdmin } from '@/lib/server/assetAdminRepository';
@@ -282,6 +283,36 @@ function addCashDelta(map: Map<string, number>, t: AssetTransaction, sign: 1 | -
   map.set(t.linkedCashAssetId, (map.get(t.linkedCashAssetId) ?? 0) + delta);
 }
 
+/**
+ * The two prices ONE trade is stored with, from a single form payload.
+ *
+ * A hand-entered trade is in the asset's native currency, so `pricePerUnit` is kept verbatim and
+ * `priceEur` is that price converted — today's behaviour, unchanged.
+ *
+ * A BROKER trade is not: the venue settles in its own currency (both brokers: EUR, whatever the
+ * instrument's native one) and reports the price it charged there. Reading that euro figure as a
+ * native price and converting it again was measured on 2026-10-05 — a €996,10 Micron sale stored
+ * with a €869,12 EUR price, the trade-date USD fixing applied to money that was never dollars. So
+ * when the broker reported its currency, `priceEur` is the broker's figure (no conversion at all)
+ * and `pricePerUnit` is that same money expressed in the asset's native currency, which is what
+ * keeps the native PMC in its own currency.
+ */
+async function resolveTradePrices(
+  data: AssetTransactionFormData,
+  assetCurrency: string
+): Promise<{ pricePerUnit: number; priceEur: number }> {
+  const charged = data.priceCurrency;
+  if (!charged || charged.toUpperCase() === assetCurrency.toUpperCase()) {
+    return { pricePerUnit: data.pricePerUnit, priceEur: await resolveTradePriceEur(assetCurrency, data.pricePerUnit, data.date) };
+  }
+  const priceEur = await resolveTradePriceEur(charged, data.pricePerUnit, data.date);
+  // The asset's own currency is EUR in the common case (an Italian broker on an Italian venue):
+  // no second fixing is needed, and one network call is the budget for a whole import row.
+  if (assetCurrency.toUpperCase() === 'EUR') return { pricePerUnit: priceEur, priceEur };
+  const pricePerUnit = priceEur / (await resolveRateToEur(assetCurrency, data.date));
+  return { pricePerUnit, priceEur };
+}
+
 async function prepareCreate(
   ownerId: string,
   data: AssetTransactionFormData
@@ -292,7 +323,7 @@ async function prepareCreate(
   if (data.linkedCashAssetId) await assertCashSettlementAsset(ownerId, data.linkedCashAssetId);
 
   // priceEur resolved here (network) — never inside the Firestore transaction.
-  const priceEur = await resolveTradePriceEur(currency, data.pricePerUnit, data.date);
+  const { pricePerUnit, priceEur } = await resolveTradePrices(data, currency);
 
   const tradeRef = adminDb.collection(ASSET_TRANSACTIONS_COLLECTION).doc();
   const now = new Date();
@@ -303,7 +334,7 @@ async function prepareCreate(
     type: data.type,
     date: data.date,
     quantity: data.quantity,
-    pricePerUnit: data.pricePerUnit,
+    pricePerUnit,
     priceEur,
     fees: data.fees,
     linkedCashAssetId: data.linkedCashAssetId,

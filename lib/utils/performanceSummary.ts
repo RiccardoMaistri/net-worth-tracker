@@ -27,6 +27,7 @@ import type { MonthlySnapshot } from '@/types/assets';
 import { buildTwrIndex, findMaxDrawdown, type TwrIndexPoint } from '@/lib/utils/drawdownSeries';
 import { annualizeTWR, buildIndexedSeries, type MonthlyReturnPoint } from '@/lib/utils/benchmarkPeriodReturn';
 import { externalFlowOf } from '@/lib/utils/cashFlowMap';
+import type { RealizedSale } from '@/lib/utils/assetTransactionUtils';
 
 // ---------------------------------------------------------------------------
 // B1 — performance verdict
@@ -591,12 +592,19 @@ export interface RealizedGainsSummary {
   years: Array<{ year: number; amount: number }>;
   /** Realized P&L per assetId per fiscal year: Record<year, Record<assetId, amount>>. */
   byAssetAndYear?: Record<number, Record<string, number>>;
+  /**
+   * The sales behind each year, for the detail table. Carried through UNALTERED and never
+   * recomputed here: the rows come from the same replay as `byYear`, and a summary that rebuilt
+   * them would be a second reading of the ledger that could disagree with the tile's own total.
+   */
+  salesByYear?: Record<number, RealizedSale[]>;
 }
 
 /** The Plusvalenze tile's rows, newest year first, with their total. Null without a closed sale. */
 export function summarizeRealizedGains(
   byYear: Record<number, number>,
   byAssetAndYear?: Record<number, Record<string, number>>,
+  salesByYear?: Record<number, RealizedSale[]>,
 ): RealizedGainsSummary | null {
   const years = Object.keys(byYear)
     .map(Number)
@@ -607,6 +615,7 @@ export function summarizeRealizedGains(
     total: years.reduce((sum, y) => sum + y.amount, 0),
     years,
     ...(byAssetAndYear ? { byAssetAndYear } : {}),
+    ...(salesByYear ? { salesByYear } : {}),
   };
 }
 

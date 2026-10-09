@@ -48,6 +48,59 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
   FRACTION, and `null` renders as "–", never 0. **`replayTransactions` replays ONE asset**, so `aggregateRealizedByYear`
   (same engine, consumed by `summarizeRealizedGains` → `PlusvalenzeTile.tsx`) must group by `assetId` FIRST: realized P&L is PMC-dependent
   per position.
+- **Il prezzo del broker è un prezzo di VENUTA, e la sua valuta viaggia con lui** (2026-10-05,
+  `AssetTransactionFormData.priceCurrency`): un broker regola sul proprio venue e riporta ciò che ha addebitato lì —
+  **entrambi in EUR, qualunque sia la valuta nativa del titolo** — quindi `pricePerUnit` da broker è una cifra in euro
+  anche per un'azione USA. Senza `priceCurrency` la strada d'iscrittura la leggeva come prezzo NATIVO e la convertiva
+  una seconda volta, misurato sull'account reale: vendita Micron da €996,10 finita a `priceEur` 869,12 (il fixing USD
+  del 18-06, 0,8724) su un asset con `currency: USD`. Oggi `resolveTradePrices` (in `assetTransactionUseCase.ts`)
+  distingue i due casi: senza `priceCurrency` il prezzo è nativo e `priceEur` è la conversione (comportamento di sempre,
+  il dialogo e ogni riga esistente); con `priceCurrency` **`priceEur` è la cifra del broker, senza conversione**, e
+  `pricePerUnit` è la stessa somma nella valuta nativa dell'asset (una sola richiesta di rete: la valuta del broker è
+  EUR nel caso comune, quindi serve il fixing dell'asset). Il PMC nativo non diventa mai euro. `resolveRateToEur` è il
+  tasso sganciato da `resolveTradePriceEur` perché la divisione ne ha bisogno. **Un trade broker già importato NON si
+  corregge**: idem, la riga si sistema a mano.
+- **Il nome del broker viaggia come NOTA, e serve a nominare la vendita di un asset cancellato** (2026-10-05):
+  `importBrokerTrades` scrive `note: trade.label` in creazione (mai sopra una nota dell'utente). Una riga del registro
+  non ha un nome proprio, e su 90 operazioni dell'account reale ogni vendita importata di una posizione chiusa leggeva
+  «Strumento rimosso»: il nome è nell'asset, e l'asset era stato cancellato. Il fallback esisteva già
+  (`PlusvalenzeTile` legge la nota quando l'asset non c'è più), gli mancava solo il dato.
+- **Il broker TR ORA riporta la tassa trattenuta, e il campo la eredita senza fan-out** (2026-10-05): la cella `Tax`
+  del `timelineDetailV2` esiste su TUTTE le vendite 2026 (10 su 10, 0,66–254,37 €, 25,75% delle plusvalenze dell'anno:
+  la KESt tedesca esce alla fonte) e non sulle 11 vendite dell'archivio pre-2024 che il docstring del parser negava —
+  l'identità che il broker really salda è `lordo − fee − tax = Total`. `parseTradeRepublicTrades` la LEGGE e la
+  scrive su `BrokerTrade.withheldTax`; `importBrokerTrades`→`createAssetTransaction`→`withheldTaxEur`→`computeCashDelta`
+  erano già pronti dal 2026-09-20, quindi il fan-out del campo era fatto e il dato non arrivava. Il `Gain`/`Profit`
+  del broker NON si importano: è il SUO costo, e il PMC del registro è la fonte unica (doc/guide/patrimonio.md).
+  **Una vendita già importata prima di questa correzione tiene la tassa che le manca**: l'import è idempotente sulla
+  coppia broker+id, quindi reimportare non la riempie — va corretta a mano dalla finestra Movimenti.
+- **Le vendite del BROKER che il registro NON ha sono un elenco SEPARATO, mai una fusione**
+  (`unbookedBrokerSells.ts` + `unbookedSellsNarrative.ts`, hook `useUnbookedBrokerSells`, sezione del modale
+  Plusvalenze, 2026-10-05): una riga che il registro tiene è una plusvalenza **misurata** dal replay, una riga che il
+  broker segnala e il registro no è **una vendita che l'utente non ha registrato**. Nello stesso elenco la parola
+  «plusvalenza» cadrebbe accanto a una cifra che nessuno ha misurato e il totale sommerebbe due cose diverse — quindi
+  due elenchi, e il secondo dice cosa manca a ogni riga. Tre regole lo tengono su:
+  - **Nessuna plusvalenza, nessun costo, nessuna %**: senza il replay non esiste il costo delle quote vendute. Il
+    totale è il **denaro del broker** (`lordo − fee − tassa`), mai un utile, e la riga lo dice.
+  - **Un ACQUISTO non è mai elencato**: non realizza nulla.
+  - **`toImport` + `skipped` sono tutte le vendite mancanti**, e si distinguono solo perché una è scrivibile e l'altra
+    no — che è esattamente ciò che la ragione deve dire. Le quattro ragioni hanno quattro frasi diverse (importala tu /
+    manca lo strumento / manca l'ISIN / manca la base di costo): una frase sola sarebbe una correzione sbagliata.
+  - **L'anno è un PARAMETRO** (quello scelto nel modale, non oggi) e si legge con `getItalyYear`.
+  - **Tre stati di lettura, tre frasi**: non collegato · sessione scaduta · lettura fallita. Una lettura fallita NON è
+    una lista vuota, e nessuno dei tre può stampare la frase «sono tutte nel registro».
+- **La lettura del broker avviene SOLO a modale aperto** (`enabled` sull'hook): pagina l'intera timeline e fa un
+  detail per operazione, quindi non può girare a ogni mount della pagina. Nessuna `staleTime` — la domanda è «il mio
+  registro è completo?» e una risposta in cache è sbagliata proprio quando conta. Un 401/409 torna come `state`, non
+  come `isError`: sono due cose su cui l'utente può agire. L'import invalida `['broker','unbooked-sells', ownerId]` (il
+  prefisso copre ogni anno in cache).
+- **Le righe per vendita escono dalla STESSA passata dei totali** (`aggregateRealizedByYear` → `salesByYear`,
+  `RealizedSale`, 2026-10-05): `replayTransactionsWithEffects` per asset, `realizedByYear` dallo `state` e le righe dagli
+  `effects`, così la tabella del dettaglio non può contraddire la cifra sotto cui sta. Ogni cifra in EURO e lo dice nel
+  nome (`priceEur`, mai `pricePerUnit` nativo); `netCashEur` = `lordo − fee − tax` cioè `computeCashDelta`, e
+  `realizedPnlEur` resta LORDO della tassa trattenuta. Le righe sono arrotondate al cento PRIMA del totale, perché una
+  lista che deve tornare a video torna solo se il totale è la somma delle righe stampate. Un asset il cui replay fallisce
+  non produce righe (`skippedAssets` lo dichiara): nessuna riga per una posizione che i totali non contano.
 - **Per-transaction derived data (a sell's own P&L %, PMC-at-trade) comes from `replayTransactionsWithEffects`**, never
   from re-running `replayTransactions` on every prefix (O(n²)). One pass emits one `LedgerTransactionEffect` per
   transaction, with the optional fields populated ONLY for `sell`, so a caller indexes by id with no holes.

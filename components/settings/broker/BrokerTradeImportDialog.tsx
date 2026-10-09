@@ -205,6 +205,10 @@ export function BrokerTradeImportDialog({
         queryClient.invalidateQueries({ queryKey: queryKeys.assetTransactions.all(ownerId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.assets.all(ownerId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.overview(ownerId) }),
+        // The completeness reading on Rendimenti asks «which broker sells is the ledger missing?»,
+        // and this import is the thing that changes the answer. Its key carries the year, so the
+        // prefix invalidation covers every year it may have cached.
+        queryClient.invalidateQueries({ queryKey: ['broker', 'unbooked-sells', ownerId] }),
       ]);
       if (written.failed.length === 0) {
         setLoaded({ ...subject, phase: 'ready', outcome: written });

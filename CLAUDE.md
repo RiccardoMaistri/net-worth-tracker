@@ -13,7 +13,44 @@ Next.js app for Italian investors: net worth, assets, cashflow, dividends, perfo
 
 ## Current Status
 - Stack: Next.js 16, React 19, TypeScript 5, Tailwind v4, Firebase, Vitest, Framer Motion, Recharts, Yahoo Finance, Borsa Italiana scraping, Anthropic.
-- `tsc` clean; **190 files / 4481 tests** green in `Europe/Rome` + **39 Playwright spec files** (144 tests, incl. 6 auth setups; last full run 2026-09-27 on the Windows laptop: 143 green, the one red the known `modal.origin`, green alone right after — doc/guide/e2e-emulatori.md). Run Vitest under `TZ=Europe/Rome` too — every date fixture sits at noon, which structurally hides timezone bugs.
+- `tsc` clean; **209 files / 4793 tests** green in `Europe/Rome` (2026-10-05) + **39 Playwright spec files** (144 tests, incl. 6 auth setups; last full run 2026-09-27 on the Windows laptop: 143 green, the one red the known `modal.origin`, green alone right after — doc/guide/e2e-emulatori.md). Run Vitest under `TZ=Europe/Rome` too — every date fixture sits at noon, which structurally hides timezone bugs.
+- Latest (2026-10-05): **the Trade Republic broker turned out to withhold the capital-gains tax at the sale, and the
+  Plusvalenze tile grew the per-sale detail.** Read live against the real account (a read-only throwaway over the
+  session in `brokerSessions`, no writes): 10 sells in 2026, and the `timelineDetailV2` carries a `Tax` cell on 10 of 10
+  (0,66–254,37 €, 25,75% of the year's gains) — the German KESt leaves the proceeds the day of the sale — where the
+  parser's docstring, written from 11 sells of the pre-2024 archive, said the field did not exist. The identity the broker
+  really settles is `lordo − fee − tax = Total`, so **an imported sale credited the gross and overstated the account by
+  659,97 € over those ten sales**; `withheldTaxEur` was already plumbed end-to-end since 2026-09-20, the datum was simply
+  never fed (`parseTradeRepublicTrades` reads it now, on a sell only). `Gain`/`Profit` are deliberately NOT imported:
+  the broker's cost basis and the ledger's PMC are one figure with two sources. The per-sale rows come from the SAME
+  replay as the year totals (`aggregateRealizedByYear` → `salesByYear`, one `replayTransactionsWithEffects` per asset),
+  so the detail cannot contradict the figure it sits under; the total at the foot of the table is the sum of the printed
+  rows, and the table is a CONTAINER query (720px in the modal, full-width in the phone drawer) whose secondary facts
+  live in the row's caption, written by `describeRealizedSale`. Rows update on every trade IMPORT — the portfolio sync
+  stays read-only. Already-imported sales keep the missing tax (idempotency is broker+id): fixed by hand from Movimenti.
+  A SECOND defect fell out of the same reading, and it is older: **`BrokerTrade.currency` was read by nobody**, so the
+  write path took a broker price — always the VENUE's, EUR for both brokers whatever the instrument — for the ASSET's
+  native price and converted it again: a €996,10 Micron sale was stored with `priceEur` 869,12, the trade-date USD
+  fixing (0,8724) applied to money that was never dollars, and the whole realized P&L measured against it. `priceCurrency`
+  now travels with the form, and `resolveTradePrices` reads the two cases apart (no currency = the typed price is native,
+  unchanged; a reported one = `priceEur` is the broker's figure unconverted and `pricePerUnit` is that money in the
+  asset's own currency, so the native PMC never turns into euros). And a ledger row has no name of its own, so an
+  imported sale whose asset was deleted read «Strumento rimosso» — the broker's label is now written as the trade's
+  note, on creation only, which is the fallback the tile already had. Both are worth **nothing on already-imported
+  rows**: idempotency is broker+id, so those are fixed by hand from Movimenti.
+The completeness reading is the SECOND list in that same modal — «Vendite non ancora nel registro»: the Trade
+  Republic sells of the selected year the ledger does not hold, read from the broker through the trades route's
+  PREVIEW branch (which never writes and already decides the idempotency keys and the asset join, so a new endpoint
+  would be a second answer to the same question). It is a separate list because a ledger row IS a measured gain and
+  a broker sell the ledger lacks is a sale the user has not booked — merged, the word «plusvalenza» would sit beside
+  money nothing measured and the total would sum two different things. So no gain/cost/% column there, its total is
+  the broker's CASH (`lordo − fee − tassa`), a buy is never listed, and each of the four skip reasons gets its own
+  words. `useUnbookedBrokerSells` runs ONLY while the modal is open (that read pages the whole timeline) with no
+  `staleTime`, and a 401/409/failure are three different sentences, none of which is «nothing is missing».
+  **Verified**: `tsc`, lint 0, Vitest 209/4793 in `Europe/Rome` and the three known UTC reds untouched, SIX
+  falsifications seen red (the parser's `Tax` line, the row's `withheldTaxEur`, `resolveTradePrices`' currency branch,
+  the two importer fields, the buy filter and the not-linked branch). doc/guide/registro-operazioni.md,
+  rendimenti.md, collegamenti.md.
 - Latest (2026-09-27): **Three external PRs integrated with changes (#400, #401, #403, by Ciocc128), the open
   proposal #402 turned into a spec, and Divisione's pool netted of the common income.** Analisi › Flusso reads by 50/30/20 role (opt-in, the role lives on the category)
   and below 640px draws a share bar and rows instead of the Sankey; Strumenti splits the class chip of a composite

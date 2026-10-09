@@ -144,6 +144,22 @@
     dire. Non è un errore di credenziali e non si risolve ritentando.
 - **Il salvataggio scrive solo asset nuovi e la cassa.** Nessun prezzo (non letto), nessuna
   quantità (è del Registro), nessun piano di accumulo (una regola del broker).
+- **Le OPERAZIONI sono un'importazione a parte, e la tassa che il broker trattiene viaggia con
+  loro** (2026-10-05): `POST /api/broker/traderepublic/trades` è `{ownerId}` → anteprima (nessuna
+  scrittura) e `{ownerId, apply:[…]}` → scrive le righe approvate, una per una, ogni riga attraverso
+  `createAssetTransaction` (la sync del portafoglio resta sola lettura e non tocca il registro).
+  Il `timelineDetailV2` **ha** una cella `Tax` sulle vendite 2026 — 10 su 10, la KESt tedesca esce
+  alla fonte — e non sulle 11 dell'archivio pre-2024 su cui era stato scritto il contrario: la
+  contraddizione era nel docstring, non nel payload. `lordo − fee − tax = Total` è l'identità che il
+  broker really salda, e senza la `Tax` il registro accrediterebbe 659,97 € in più di quanto sia
+  uscito dal conto nel 2026. Il `Gain`/`Profit` del broker NON si importano (il costo è del PMC,
+  doc/guide/registro-operazioni.md). **La valuta del broker viaggia con il prezzo** (`priceCurrency`,
+  doc/guide/registro-operazioni.md): il venue regola in EUR qualunque sia il titolo, e senza quella
+  riga l'iscrittura leggeva il prezzo come nativo e lo riconverteva — misurato sull'account reale,
+  €996,10 finiti a €869,12. **E il nome del broker diventa la nota della vendita**, perché una riga
+  del registro non ha un nome proprio e quella di un asset cancellato leggeva «Strumento rimosso».
+  **Una riga già importata non si corregge**: l'idempotenza è sulla coppia broker+id, quindi tassa,
+  prezzo e nome si sistemano a mano dalla finestra Movimenti.
 
 ##Collegamenti broker — sync in sola lettura da Scalable (`scalableImport.ts`, `scalableCli.ts`)
 

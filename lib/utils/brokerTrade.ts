@@ -12,10 +12,12 @@
  * WHAT THIS SHAPE DELIBERATELY DOES NOT CARRY, and why each omission cost a decision:
  *
  * - **`priceEur`.** The ledger resolves FX server-side (`createAssetTransaction`), and the form
- *   payload does not accept one. A broker that reports a EUR total (both of them do) still
- *   reports it in the INSTRUMENT's currency, not EUR: a Sell of 4.027288 shares at €941.40 is
- *   EUR-denominated, but a US trade on a EUR account is settled in USD. Writing a converted value
- *   here would be exactly the inconsistency the server-side resolution exists to prevent.
+ *   payload does not accept one — a client can therefore never write an inconsistent FX value.
+ *   What the form DOES carry is `priceCurrency`, the venue currency the broker charged in (both
+ *   brokers: EUR, whatever the instrument is), which is what tells the server that
+ *   `pricePerUnit` is a euro figure and not the asset's native price: measured 2026-10-05, a
+ *   €996,10 Micron sale on a USD-quoted asset was stored at €869,12 because nothing said where
+ *   that number came from.
  * - **`quantity` sign.** Always positive; the side lives in `side`, because `AssetTransactionType`
  *   maps `buy`→BUY and `sell`→SELL directly and a negative quantity is a validation error there.
  * - **Cash settlement.** `linkedCashAssetId` is deliberately absent: the broker's cash account is
@@ -37,13 +39,25 @@ export interface BrokerTrade {
   type: AssetTransactionType;
   /** ISIN, uppercased. The join key against Portafoglio. Absent on a few cash-like rows. */
   isin?: string;
-  /** Human label as the broker prints it — for the preview row only, never written to the ledger. */
+  /**
+   * Human label as the broker prints it.
+   *
+   * WRITTEN as the ledger trade's `note` on import (2026-10-05), which is what a sale whose asset
+   * has since been deleted falls back to for a name: a ledger row carries no name of its own, and
+   * «Strumento rimosso» was every imported sale of a closed position. It is also what the preview
+   * row prints.
+   */
   label: string;
   /** Execution date (broker timestamp), in the BROKER's local date semantics. */
   date: Date;
   /** Units, always > 0. */
   quantity: number;
-  /** Price per unit in the instrument's own currency (both brokers report this, not EUR). */
+  /**
+   * Price per unit in the VENUE's currency — what the broker charged, not the instrument's native
+   * one. Both brokers settle in EUR whatever the instrument is, so this is a euro figure even for a
+   * US stock, and it travels to the ledger as `AssetTransactionFormData.priceCurrency` precisely so
+   * the write does not convert it a second time (measured 2026-10-05).
+   */
   pricePerUnit: number;
   /** Currency of `pricePerUnit`, as the broker reported it. `EUR` needs no FX. */
   currency: string;
@@ -52,13 +66,28 @@ export interface BrokerTrade {
   /**
    * SELL only: capital-gains tax withheld at sale, in `currency`.
    *
-   * Absent on both brokers for retail operations — measured live, Scalable's `tax_amount` is
-   * `null` and Trade Republic has no such field in the detail. Present in the shape because the
-   * ledger has a field for it and a future statement-level export would fill it; `undefined`
-   * keeps the period tax ESTIMATE that Rendimenti shows today, which is the correct reading when
-   * no broker withheld anything.
+   * Measured per broker, and they DISAGREE — which is why this is a field and not a constant.
+   * Scalable's `tax_amount` is `null` on a retail sale, so it stays absent. Trade Republic
+   * withholds the German KESt at source on a sale with a gain: absent on the pre-2024 archive
+   * (measured across eleven sells) and present on every 2026 one (measured 2026-10-05, 10 of 10,
+   * 25,75% of that year's gains).
+   *
+   * `undefined` means THE BROKER REPORTED NOTHING, which is not a zero-tax claim: the period tax
+   * ESTIMATE in Rendimenti then stands, and that is the correct reading for a sale on which
+   * nothing was withheld.
    */
   withheldTax?: number;
+  /**
+   * SELL only: the gain the BROKER reports on the sale, in `currency` — measured on ITS fiscal
+   * carrying value, which is not the ledger's cost basis.
+   *
+   * NEVER WRITTEN to a ledger row: the replay computes the realized P&L from the ledger's own PMC,
+   * so a broker gain beside it would be a second source for one figure. It travels because a sale
+   * the ledger does NOT hold has no replay to measure it, and the completeness reading on Rendimenti
+   * would otherwise show a broker's cash with no gain at all. Absent when the broker reported none
+   * (the pre-2024 archive) — never a zero.
+   */
+  brokerGain?: number;
 }
 
 /** A trade that cannot become a ledger entry, with the reason a user can act on. */

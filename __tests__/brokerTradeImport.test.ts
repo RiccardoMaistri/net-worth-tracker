@@ -236,7 +236,60 @@ const TR_SELL_DETAIL = {
           style: 'plain',
         },
         { title: 'Fee', detail: { text: '€1.00' }, style: 'plain' },
+        // The identity the broker really settles: `lordo − fee − tax`. With no Tax cell (the
+        // pre-2024 archive, measured on eleven sells) the three collapse into `lordo − fee`.
         { title: 'Total', detail: { text: '€3,790.29' }, style: 'plain' },
+      ],
+      type: 'table',
+    },
+  ],
+};
+
+/**
+ * The measured 2026 sell (2026-10-01, Micron): the SAME row with the broker's `Tax` and
+ * `Performance` sections, and a Total that is `lordo − fee − tax`. Measured live 2026-10-05.
+ */
+const TR_SELL_2026_ROW = {
+  ...TR_SELL_ROW,
+  amount: { currency: 'EUR', value: 3703.62, fractionDigits: 2 },
+};
+
+const TR_SELL_2026_DETAIL = {
+  id: '7da576c8-1583-41c5-90c9-63f91048767f',
+  sections: [
+    {
+      title: 'You received €3,703.62',
+      data: { icon: { asset: 'logos/US5951121038/v2', badge: null }, subtitleText: '1 Oct · 8:20 AM', status: 'executed' },
+      action: { payload: 'US5951121038', type: 'instrumentDetail' },
+      type: 'header',
+    },
+    {
+      title: 'Overview',
+      data: [
+        { title: 'Sell', detail: { text: 'Executed', functionalStyle: 'EXECUTED', type: 'status' }, style: 'plain' },
+        { title: 'Asset', detail: { text: 'Micron Technology', type: 'text' }, style: 'plain' },
+        {
+          title: 'Transaction',
+          detail: {
+            text: '4.027288 ×  €941.40',
+            displayValue: { text: '€941.40', prefix: '4.027288 × ', textDataSensitivity: 'PUBLIC' },
+            type: 'text',
+          },
+          style: 'plain',
+        },
+        { title: 'Tax', detail: { text: '€86.67' }, style: 'plain' },
+        { title: 'Fee', detail: { text: '€1.00' }, style: 'plain' },
+        { title: 'Total', detail: { text: '€3,703.62' }, style: 'plain' },
+      ],
+      type: 'table',
+    },
+    {
+      // Read by nobody on purpose: the broker's own cost basis, and the ledger's PMC is the
+      // domain's single source for what a sale cost.
+      title: 'Performance',
+      data: [
+        { title: 'Profit', detail: { text: '9.67 %', trend: 'positive' }, style: 'plain' },
+        { title: 'Gain', detail: { text: '€334.35', trend: 'positive' }, style: 'plain' },
       ],
       type: 'table',
     },
@@ -257,6 +310,48 @@ describe('parseTradeRepublicTrades', () => {
       currency: 'EUR',
       fees: 1,
     });
+  });
+
+  it('reads the tax the broker withheld, and only from a sell that reports one', () => {
+    // Measured live 2026-10-05: every 2026 sell carries a `Tax` cell, and without it the ledger
+    // would credit the sale's gross proceeds — money the broker never paid out.
+    const { trades } = parseTradeRepublicTrades(
+      { items: [TR_SELL_2026_ROW] },
+      new Map([[TR_SELL_2026_ROW.id, TR_SELL_2026_DETAIL]])
+    );
+    expect(trades).toHaveLength(1);
+    expect(trades[0].withheldTax).toBe(86.67);
+
+    // The buy side has no such cell, and a tax written on one would be a fabrication.
+    const { trades: buys } = parseTradeRepublicTrades(
+      {
+        items: [
+          {
+            ...TR_SELL_2026_ROW,
+            id: 'b-2026',
+            subtitle: 'Buy Order',
+            // The parser joins the detail through `action.payload`, NOT through the row id, so the
+            // buy needs its own or the detail is «not arrived».
+            action: { type: 'timelineDetail', payload: 'b-2026' },
+            amount: { currency: 'EUR', value: -3791.29, fractionDigits: 2 },
+          },
+        ],
+      },
+      new Map([['b-2026', TR_SELL_2026_DETAIL]])
+    );
+    expect(buys).toHaveLength(1);
+    expect(buys[0].type).toBe('buy');
+    expect(buys[0].withheldTax).toBeUndefined();
+  });
+
+  it('leaves the tax absent on a sale that reports none, instead of claiming a zero', () => {
+    // The pre-2024 archive: no `Tax` cell at all. `undefined` keeps the period tax ESTIMATE in
+    // charge, which is the right reading; a 0 would suppress it.
+    const { trades } = parseTradeRepublicTrades(
+      { items: [TR_SELL_ROW] },
+      new Map([[TR_SELL_ROW.id, TR_SELL_DETAIL]])
+    );
+    expect(trades[0].withheldTax).toBeUndefined();
   });
 
   it('never reads a card transaction, an interest payout or a deposit as a trade', () => {

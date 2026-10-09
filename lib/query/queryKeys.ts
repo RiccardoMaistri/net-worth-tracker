@@ -31,6 +31,13 @@ export const queryKeys = {
     months: (userId: string, monthKeys: string[]) => ['budget-history', userId, ...monthKeys] as const,
   },
 
+  // Broker — the trade history the ledger has not booked, read from the broker's own session.
+  // `year` is in the key because the rows are that fiscal year's; a plan rebuilt for 2025 says
+  // nothing about 2026, and the modal reads a different year without a refetch.
+  broker: {
+    unbookedSells: (userId: string, year: number) => ['broker', 'unbooked-sells', userId, year] as const,
+  },
+
   // Assistant
   assistant: {
     threads: (userId: string) => ['assistant', 'threads', userId] as const,

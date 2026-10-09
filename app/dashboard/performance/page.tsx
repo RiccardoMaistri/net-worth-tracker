@@ -537,7 +537,14 @@ export default function PerformancePage() {
   // Plusvalenze realizzate: all-time, independent of the selected period — a sale belongs to its fiscal year.
   const realizedGains = useMemo(() => aggregateRealizedByYear(ledgerTrades), [ledgerTrades]);
   const realizedSummary = useMemo(
-    () => (isLedgerMigrated ? summarizeRealizedGains(realizedGains.byYear, realizedGains.byAssetAndYear) : null),
+    () =>
+      isLedgerMigrated
+        ? summarizeRealizedGains(
+            realizedGains.byYear,
+            realizedGains.byAssetAndYear,
+            realizedGains.salesByYear
+          )
+        : null,
     [isLedgerMigrated, realizedGains],
   );
 
@@ -858,6 +865,7 @@ export default function PerformancePage() {
                 skippedAssetIds={realizedGains.skippedAssetIds}
                 assets={assets}
                 trades={ledgerTrades}
+                ownerId={ownerId}
               />
             </div>
           )}

@@ -23,6 +23,7 @@ vi.mock('firebase/firestore', () => ({
 
 import { narrativeToText, type Narrative } from '@/lib/utils/narrative';
 import type { PerformanceBaseOptions } from '@/lib/utils/performanceBase';
+import type { RealizedSale } from '@/lib/utils/assetTransactionUtils';
 import type {
   BenchmarkRanking,
   CapitalEnteredSummary,
@@ -45,6 +46,7 @@ import {
   describePerformancePeriod,
   describePeriodAside,
   describeRealizedGains,
+  describeRealizedSale,
   describeRisk,
   describeReturnMetrics,
   describeYields,
@@ -439,6 +441,47 @@ describe('describeRealizedGains', () => {
 
   it('calls a losing best year the least heavy, not the best', () => {
     expect(plain(describeRealizedGains({ total: -900, years: [{ year: 2025, amount: -300 }, { year: 2024, amount: -600 }] }, 2026))).toBe('Dal registro operazioni hai realizzato −900 € in totale; tutti gli anni in perdita, il meno pesante il 2025 (−300 €).');
+  });
+});
+
+describe('describeRealizedSale', () => {
+  const sale = (over: Partial<RealizedSale> = {}): RealizedSale => ({
+    transactionId: 's1',
+    assetId: 'a1',
+    date: new Date(2026, 9, 1, 12),
+    quantity: 4.027288,
+    priceEur: 941.4,
+    grossEur: 3791.29,
+    feesEur: 1,
+    withheldTaxEur: 86.67,
+    netCashEur: 3703.62,
+    costBasisEur: 3456.94,
+    realizedPnlEur: 334.35,
+    averageCostEurAtTrade: 858.35,
+    ...over,
+  });
+
+  // Measured live 2026-10-05 on the Micron sale of 2026-10-01.
+  it('names the units, the commission, the tax withheld and what landed', () => {
+    // Through `flat`: the € carries a no-break space (Intl it-IT), so a hand-typed space in the
+    // expectation is a different string — the trap AGENTS.md spells out for every euro here.
+    expect(flat(describeRealizedSale(sale()))).toBe(
+      '4,03 × 941,40 € · commissione 1,00 € · tassa trattenuta 86,67 € · netto 3703,62 €'
+    );
+  });
+
+  it('drops the clauses the broker did not report, rather than padding the row with zeroes', () => {
+    // A sale on which nothing was withheld and no fee was reported: «fee 0,00 €» would be a claim
+    // the broker never made (the pre-2024 archive), so the caption keeps only what it knows.
+    expect(flat(describeRealizedSale(sale({ feesEur: 0, withheldTaxEur: 0, netCashEur: 3791.29 })))).toBe(
+      '4,03 × 941,40 € · netto 3791,29 €'
+    );
+  });
+
+  it('says nothing about the gain: that is the row’s own signed column, not the caption', () => {
+    const caption = flat(describeRealizedSale(sale({ realizedPnlEur: -412.5, netCashEur: 3000 })));
+    expect(caption).toBe('4,03 × 941,40 € · commissione 1,00 € · tassa trattenuta 86,67 € · netto 3000,00 €');
+    expect(caption).not.toContain('412');
   });
 });
 

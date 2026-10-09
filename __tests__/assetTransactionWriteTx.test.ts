@@ -28,6 +28,7 @@ vi.mock('server-only', () => ({}));
 // FX is network-bound: mock it away. EUR trades → priceEur === pricePerUnit (identity).
 vi.mock('@/lib/server/tradeFxService', () => ({
   resolveTradePriceEur: vi.fn(async (_currency: string, pricePerUnit: number) => pricePerUnit),
+  resolveRateToEur: vi.fn(async (currency: string) => (currency.toUpperCase() === 'EUR' ? 1 : 0.87)),
   resolveBaselinePriceEur: vi.fn(
     async (asset: { averageCost?: number; currentPrice: number }) => asset.averageCost ?? asset.currentPrice
   ),
@@ -148,7 +149,7 @@ import {
   updateAssetTransaction,
   deleteAssetTransaction,
 } from '@/lib/server/assetTransactionUseCase';
-import { resolveTradePriceEur } from '@/lib/server/tradeFxService';
+import { resolveTradePriceEur, resolveRateToEur } from '@/lib/server/tradeFxService';
 
 const OWNER = 'owner-1';
 const BASELINE_DATE = new Date(2024, 0, 1);
@@ -175,6 +176,12 @@ describe('assetTransactionUseCase — atomic write transaction', () => {
     store.clear();
     invalidateMock.mockClear();
     mocks.counter.next = 0;
+    // A fresh FX mock per test: these are module-level `vi.fn()`s, and one case's `mockResolvedValue`
+    // (not `…Once`) would otherwise leak its rate into the next test's cash settlement.
+    vi.mocked(resolveTradePriceEur).mockReset().mockImplementation(async (_currency, price) => price);
+    vi.mocked(resolveRateToEur)
+      .mockReset()
+      .mockImplementation(async (currency: string) => (currency.toUpperCase() === 'EUR' ? 1 : 0.87));
     seedMeta();
   });
 
@@ -222,6 +229,73 @@ describe('assetTransactionUseCase — atomic write transaction', () => {
     const asset = store.get(docKey('assets', 'asset-1'))!;
     expect(asset.averageCost).toBe(100); // native PMC, USD
     expect(asset.averageCostEur).toBe(90); // EUR PMC at the trade-date rate
+  });
+
+  it('stores a broker price in the VENUE currency without converting it a second time', async () => {
+    // The measured 2026-10-05 case: a €996,10 Micron sale on an asset whose currency is USD. The
+    // trade-date USD fixing is 0,8724, so reading the euro figure as a native USD price stored
+    // €869,12 — a price that never existed, on a sale whose proceeds and gain the whole ledger
+    // then measured against.
+    vi.mocked(resolveTradePriceEur).mockResolvedValue(996.1);
+    vi.mocked(resolveRateToEur).mockResolvedValue(0.8724);
+    // The fixture asset doc's quantity is only the projection: the replay reads the LEDGER, so the
+    // holding has to be an actual buy (dated before the sale, else the replay has nothing to sell).
+    seedAsset({ quantity: 1, averageCost: 100, averageCostEur: 100, currency: 'USD' });
+    store.set(docKey('assetTransactions', 'hold'), {
+      id: 'hold',
+      userId: OWNER,
+      assetId: 'asset-1',
+      type: 'buy',
+      date: new Date(2026, 0, 15, 12),
+      quantity: 1,
+      pricePerUnit: 800,
+      priceEur: 698,
+      createdAt: new Date(2026, 0, 15),
+      updatedAt: new Date(2026, 0, 15),
+    });
+
+    const result = await createAssetTransaction(OWNER, {
+      assetId: 'asset-1',
+      type: 'sell',
+      date: new Date(2026, 5, 18, 12),
+      quantity: 1,
+      pricePerUnit: 996.1,
+      priceCurrency: 'EUR',
+      source: 'traderepublic',
+      sourceRef: 'tr-1',
+    });
+
+    // The stored trade, read back: priceEur is exactly what the broker charged (no fixing applied
+    // to money that was never USD), and pricePerUnit is that same money in the asset's own currency,
+    // so the native PMC stays native.
+    const stored = [...store.entries()]
+      .filter(([key]) => key.startsWith('assetTransactions/'))
+      .map(([, doc]) => doc as { sourceRef?: string; pricePerUnit: number; priceEur: number })
+      .find((d) => d.sourceRef === 'tr-1');
+    expect(stored).toBeDefined();
+    expect(stored?.priceEur).toBe(996.1);
+    expect(stored?.pricePerUnit).toBeCloseTo(996.1 / 0.8724, 6);
+
+    // The position CLOSES on that sale, so the derived PMC is deliberately absent (quantity 0) —
+    // what the replay did measure is the realized P&L, against the euro figure.
+    expect(result.derived.averageCostEur).toBeUndefined();
+    expect(result.realizedPnlEur).toBeCloseTo(996.1 - 698, 6);
+  });
+
+  it('leaves a hand-entered price alone: no venue currency, no second reading', async () => {
+    // The dialog's price IS the asset's native one — the convention every existing row follows.
+    vi.mocked(resolveTradePriceEur).mockResolvedValue(90);
+    seedAsset({ quantity: 0, currency: 'USD' });
+
+    const result = await createAssetTransaction(OWNER, {
+      assetId: 'asset-1',
+      type: 'buy',
+      date: new Date(),
+      quantity: 10,
+      pricePerUnit: 100,
+    });
+
+    expect(result.derived).toEqual({ quantity: 10, averageCost: 100, averageCostEur: 90 });
   });
 
   it('moves the settlement to a different cash account with two aggregated deltas', async () => {

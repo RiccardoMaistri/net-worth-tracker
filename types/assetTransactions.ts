@@ -108,6 +108,22 @@ export interface AssetTransactionFormData {
   // Absent on a hand-entered trade, which is what makes it «imported» rather than «synced».
   source?: AssetTransactionSource;
   sourceRef?: string;
+  /**
+   * The currency the price was CHARGED in, when a broker reported it — NOT the asset's currency.
+   *
+   * It exists because a broker settles on ITS OWN venue and reports what it charged there: both
+   * Trade Republic and Scalable trade every instrument in EUR, whatever the instrument's native
+   * currency, so `pricePerUnit` from them is a euro figure even for a US stock. Absent it, the
+   * write path reads that euro figure as the asset's native price and converts it AGAIN — measured
+   * 2026-10-05 on the owner's account, a €996,10 Micron sale stored at a €869,12 EUR price because
+   * the asset's currency was USD.
+   *
+   * With it, the server keeps both numbers coherent: `priceEur` is the euro the broker charged (no
+   * conversion) and `pricePerUnit` is that same money in the asset's native currency, so the native
+   * PMC never turns into euros. Absent on a hand-entered trade — there the typed price IS the
+   * native one, which is the convention the trade dialog and every existing ledger row follow.
+   */
+  priceCurrency?: string;
   // priceEur is NOT part of the form: the server resolves it, so the client
   // can never write an inconsistent FX value.
 }
