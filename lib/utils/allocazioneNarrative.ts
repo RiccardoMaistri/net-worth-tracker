@@ -22,6 +22,8 @@ import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
 import { formatPercentage } from '@/lib/services/chartService';
 import { articleForPercent, atThePercent } from '@/lib/utils/patrimonioNarrative';
 import type { Narrative, NarrativeSegment, PageVerdictModel, VerdictTone } from '@/lib/utils/narrative';
+import type { ExposureBucket, ExposureCoverage, ExposureNotApplicable } from '@/types/exposure';
+import { ASSET_CLASS_LABELS } from '@/lib/utils/allocationUtils';
 import type { OrphanedTarget, RebalanceBand, RebalanceMove } from '@/lib/utils/allocationUtils';
 import type { InstrumentTrade } from '@/lib/utils/leverageAwareAllocationUtils';
 import type {
@@ -555,115 +557,243 @@ export function describeClasses(gaps: ClassGap[], band: RebalanceBand): Narrativ
 // ─── Esposizione ──────────────────────────────────────────────────────────────
 
 /**
- * «Il titolo più pesante è Apple (4,1% del portafoglio, in 3 strumenti); il primo settore è
- * Tecnologia (24,3%) e la prima area geografica è Nord America (41,2%).» Null when nothing was
- * analysed.
+ * The base of each view's percentage column: three measures, said in the aside and in the
+ * reading alike. Titoli, Settori and Aree weigh the NOTIONAL (a 2× fund moves twice); Emittenti
+ * weighs the market value of every quoted instrument, once. Aree reads equity through the index
+ * and bonds through the ISIN country, so its base adds the bond sleeves to the equity notional.
+ */
+const EXPOSURE_BASE_OF: Record<ExposureViewKey, string> = {
+  holdings: "dell'azionario nozionale",
+  sectors: "dell'azionario nozionale",
+  issuers: 'degli strumenti quotati',
+  regions: "dell'azionario nozionale e dell'obbligazionario",
+};
+
+const EXPOSURE_BASE_NAME: Record<ExposureViewKey, string> = {
+  holdings: 'azionario nozionale',
+  sectors: 'azionario nozionale',
+  issuers: 'strumenti quotati',
+  regions: 'azionario nozionale e obbligazionario',
+};
+
+/** «% dell'azionario nozionale» — the tile's aside, beside the view toggle. */
+export function describeExposureBase(view: ExposureViewKey): string {
+  return `% ${EXPOSURE_BASE_OF[view]}`;
+}
+
+/**
+ * «Il titolo più pesante è Apple (4,1% dell'azionario nozionale, in 3 strumenti); il primo settore
+ * è Tecnologia (24,3%), iShares emette il 61% degli strumenti quotati e la prima area geografica
+ * è Nord America (40,8%).» Null when nothing was read.
  *
  * The clause of the view the reader is IN comes first. The tile shows one list at a time, and a
- * reading that opened on the heaviest holding while the list ranked sectors answered a question
+ * reading that opened on the heaviest holding while the list ranked issuers answered a question
  * nobody had asked — it was the only reading on the page that did not answer the state it was in.
- * All three facts stay: the tile is one question («cosa possiedo davvero?») and the other two are
- * the context that makes the first one worth reading.
+ * All four facts stay: the tile is one question («cosa possiedo davvero?») and the other three are
+ * the context that makes the first one worth reading. Each figure is a share of ITS view's base.
  */
 export function describeExposure(highlights: ExposureHighlights, view: ExposureViewKey = 'holdings'): Narrative | null {
-  type Clause = { narrative: Narrative };
+  /**
+   * A clause that OPENS on a proper name is never capitalised: the issuer's own spelling is the
+   * fact, and «iShares» turned into «IShares» is the app correcting a brand.
+   */
+  type Clause = { narrative: Narrative; opensOnProperName: boolean };
 
   const holdingClause = (): Clause | null => {
     if (!highlights.topHolding) return null;
     const { name, pct, sourceCount } = highlights.topHolding;
     return {
-      narrative: [prose(`il titolo più pesante è ${name} (`), percent(pct, 1), prose(` del portafoglio, in ${sourceCount} strument${sourceCount === 1 ? 'o' : 'i'})`)],
+      narrative: [prose(`il titolo più pesante è ${name} (`), percent(pct, 1), prose(` ${EXPOSURE_BASE_OF.holdings}, in ${sourceCount} strument${sourceCount === 1 ? 'o' : 'i'})`)],
+      opensOnProperName: false,
     };
   };
   const sectorClause = (): Clause | null =>
     highlights.topSector
       ? {
           narrative: [prose(`il primo settore è ${highlights.topSector.label} (`), percent(highlights.topSector.pct, 1), prose(')')],
+          opensOnProperName: false,
         }
       : null;
   const regionClause = (): Clause | null =>
     highlights.topRegion
       ? {
           narrative: [prose(`la prima area geografica è ${highlights.topRegion.label} (`), percent(highlights.topRegion.pct, 1), prose(')')],
+          opensOnProperName: false,
         }
       : null;
+  const issuerClause = (): Clause | null => {
+    if (!highlights.topIssuer) return null;
+    const { family, pct } = highlights.topIssuer;
+    return {
+      narrative: [prose(`${family} emette ${articleForPercent(pct, 1)}`), percent(pct, 1), prose(` ${EXPOSURE_BASE_OF.issuers}`)],
+      opensOnProperName: true,
+    };
+  };
 
-  // Each view opens on its own clause; the other two follow in a fixed relative order, so two
-  // readings never differ only by which context they happened to lead with.
   const order: Array<Clause | null> =
     view === 'sectors'
-      ? [sectorClause(), holdingClause(), regionClause()]
-      : view === 'regions'
-        ? [regionClause(), holdingClause(), sectorClause()]
-        : [holdingClause(), sectorClause(), regionClause()];
+      ? [sectorClause(), holdingClause(), issuerClause(), regionClause()]
+      : view === 'issuers'
+        ? [issuerClause(), holdingClause(), sectorClause(), regionClause()]
+        : view === 'regions'
+          ? [regionClause(), holdingClause(), sectorClause(), issuerClause()]
+          : [holdingClause(), sectorClause(), issuerClause(), regionClause()];
 
   const clauses = order.filter((clause): clause is Clause => clause !== null);
   if (clauses.length === 0) return null;
   const [first, ...rest] = clauses;
-  // Every clause opens on a lowercase word the app itself wrote («il titolo più pesante», «il
-  // primo settore», «la prima area»), so the first segment is always capitalised. The branch that
-  // skipped it existed for the removed «Emittenti» clause, which opened on a brand's own spelling.
-  const sentence: Narrative = [prose(capitalize(first.narrative[0].text)), ...first.narrative.slice(1)];
+  const sentence: Narrative = first.opensOnProperName
+    ? [...first.narrative]
+    : [prose(capitalize(first.narrative[0].text)), ...first.narrative.slice(1)];
   if (rest.length > 0) sentence.push(prose('; '), ...joinList(rest.map((clause) => clause.narrative)));
   sentence.push(prose('.'));
   return sentence;
 }
 
-/** What an empty exposure view means — the rule each list encoded, one line, no figure. */
-export function describeExposureEmpty(view: ExposureViewKey): string {
-  switch (view) {
-    case 'holdings':
-      return 'Nessun titolo riconosciuto: verifica che i ticker degli ETF siano noti a Yahoo Finance.';
-    case 'sectors':
-      return 'Nessun dato settoriale per gli ETF in portafoglio.';
-    default:
-      return 'Nessuna area riconosciuta: l\u0027area di un ETF viene dal suo indice, altrimenti dalle sue prime ~10 posizioni. Serve un ticker noto a Yahoo Finance. Puoi anche fissare l\u0027area a mano sull\u0027asset.';
-  }
+/** «A, B e C» — words joined the Italian way. */
+function joinWords(words: string[]): string {
+  if (words.length <= 1) return words[0] ?? '';
+  return `${words.slice(0, -1).join(', ')} e ${words[words.length - 1]}`;
+}
+
+/** «A, B e C» or «A, B, C e altri 4» — the instruments behind a coverage bucket, at most three named. */
+function nameInstruments(names: string[], max = 3): string {
+  if (names.length <= max) return joinWords(names);
+  const rest = names.length - max;
+  return `${names.slice(0, max).join(', ')} e ${rest === 1 ? 'un altro' : `altri ${rest}`}`;
+}
+
+/** «7000 € (A e B) non hanno una composizione pubblicata» — the unread euros, with the instruments' names: the one clause the reader can act on. Null at zero. */
+function unreadClause(bucket: ExposureBucket, tail: string): Narrative | null {
+  if (bucket.amount <= 0.5) return null;
+  const names = bucket.instruments.length > 0 ? ` (${nameInstruments(bucket.instruments)})` : '';
+  return [amount(bucket.amount), prose(`${names} ${tail}`)];
 }
 
 /**
- * `X asset su Y con un'area · % del portafoglio` — the tile's aside.
- *
- * The second half names the base of the percentage column, which is the WHOLE portfolio: the
- * reading beside it and the row under it must be on the same base, or the tile prints two true
- * figures on two different denominators with only one of them declared.
- *
- * The count follows the VIEW, because the views do not read the same assets. The area view counts
- * `regionAssets` — bonds carry a country of issue and join it, while cash, a flat and a pension
- * fund stay out of it — so printing `analyzedAssets` beside an area bar would describe a
- * different cut from the one on screen.
+ * «92.042 € di liquidità, materie prime, criptovalute e strumenti non quotati, senza titoli per
+ * natura» — the not-applicable euros by CLASS (largest first), never by instrument: thirteen names
+ * said nothing a reader could use (owner, on the mirror, 2026-09-28). Null at zero.
  */
-export function describeExposureAside(
-  input: { analyzedAssets: number; totalAssets: number; regionAssets?: number },
-  view: ExposureViewKey
-): string {
-  if (view === 'regions') {
-    const classified = input.regionAssets ?? 0;
-    return `${classified} asset su ${input.totalAssets} con un'area · % del portafoglio`;
-  }
-  return `${input.analyzedAssets} asset su ${input.totalAssets} analizzati · % del portafoglio`;
+function notApplicableClause(bucket: ExposureNotApplicable, tail: string): Narrative | null {
+  if (bucket.amount <= 0.5) return null;
+  const classes = Object.entries(bucket.byClass)
+    .filter(([, value]) => value > 0.5)
+    .sort((a, b) => b[1] - a[1])
+    .map(([assetClass]) => (ASSET_CLASS_LABELS[assetClass] ?? assetClass).toLowerCase());
+  const words = [...classes, ...(bucket.unquoted > 0.5 ? ['strumenti non quotati'] : [])];
+  return words.length > 0 ? [amount(bucket.amount), prose(` di ${joinWords(words)}, ${tail}`)] : [amount(bucket.amount), prose(` ${tail}`)];
 }
 
 /**
- * The method, ONE SENTENCE PER VIEW — the three cuts are not read the same way, and a single shared
- * line had already gone stale on the areas (it promised the sample for every cut, while the area is
- * now the fund's index).
+ * The coverage line over the list — where every euro went, in two sentences that say first what
+ * is IN this view and how much of it was read, then what stays OUT of it and why. Nothing is
+ * silently dropped, and every clause falls at zero (The Narrative Honesty Rule).
+ *
+ * Titoli: «In questa vista: 120.000 € di azionario nozionale, letti al 94%: 7000 € (Xtrackers
+ * Swap) non hanno una composizione pubblicata; i primi dieci titoli di ogni fondo ne nominano il
+ * 31%, il resto è «Resto letto». Fuori da questa vista: 40.000 € di obbligazionario; 8000 € di
+ * materie prime, senza titoli per natura.»
+ * Emittenti: «In questa vista: 160.000 € di strumenti quotati, letti al 92%: 13.000 € (BTP Valore
+ * e Bitcoin) non hanno un emittente letto. Fuori da questa vista: 8000 € di strumenti non quotati,
+ * senza emittente per natura.»
+ *
+ * The first wording put four figures in one row (owner, 2026-09-28: «92.042 €» beside «92.532 €»
+ * read as «almost nothing has holdings», when the first was OUTSIDE the base): the two sentences
+ * exist so the base and what is not in it can never be read as one. The «nominano» clause says how
+ * much of the READ euros the rows actually name — in Titoli Yahoo lists ~10 holdings per fund, so
+ * it is well under; in Settori the weights cover the sleeve and the clause falls. It is decided on
+ * the printed figures, so «94%» is never followed by «nominano il 94%».
  */
-const EXPOSURE_METHOD: Record<ExposureViewKey, string> = {
-  holdings: 'Prime ~10 posizioni per ETF da Yahoo Finance: la lista dei titoli è un campione dei fondi molto diversificati.',
-  sectors: 'Composizione settoriale completa di ciascun ETF da Yahoo Finance, più il settore di ogni titolo posseduto direttamente.',
-  regions:
-    "L'area di un ETF è quella del suo indice, riconosciuto dal nome del fondo; solo dove l'indice non è riconosciuto si usano le prime ~10 posizioni, e la lettura è un campione. Contanti, fondo pensione e immobili non hanno un'area e restano fuori.",
-};
+export function describeExposureCoverage(coverage: ExposureCoverage, view: ExposureViewKey): Narrative {
+  const baseName = EXPOSURE_BASE_NAME[view];
+  const inView: Narrative = [prose('In questa vista: ')];
 
-/** The tile's footer: the method of the view on screen, then the day of the last computation. */
-export function describeExposureFooter(computedAt: string | null, view: ExposureViewKey = 'holdings'): string {
-  const method = EXPOSURE_METHOD[view];
-  if (!computedAt) return method;
-  const date = new Date(computedAt);
-  if (Number.isNaN(date.getTime())) return method;
-  const day = new Intl.DateTimeFormat('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Rome' }).format(date);
-  return `${method} Aggiornato il ${day}.`;
+  if (coverage.base <= 0.5) {
+    inView.push(
+      prose(
+        view === 'issuers'
+          ? 'nessuno strumento quotato.'
+          : view === 'regions'
+            ? 'nessuna area leggibile fra gli strumenti quotati.'
+            : `nessun ${baseName} fra gli strumenti quotati.`,
+      ),
+    );
+  } else {
+    inView.push(amount(coverage.base), prose(` di ${baseName}, `));
+    const unread = unreadClause(
+      coverage.unread,
+      view === 'issuers' ? 'non hanno un emittente letto' : view === 'regions' ? "non hanno un indice riconosciuto" : 'non hanno una composizione pubblicata',
+    );
+    if (unread) {
+      const readPct = (coverage.read.amount / coverage.base) * 100;
+      inView.push(prose(`letti ${atThePercent(readPct, 0)}`), percent(readPct, 0), prose(': '), ...unread);
+    } else {
+      inView.push(prose('letti tutti'));
+    }
+    if (view !== 'issuers') {
+      const readPct = (coverage.read.amount / coverage.base) * 100;
+      const namedPct = (coverage.named / coverage.base) * 100;
+      if (formatPercentage(namedPct, 0) !== formatPercentage(readPct, 0) && namedPct < readPct) {
+        const who =
+          view === 'sectors' ? 'i settori pubblicati ne coprono' : view === 'regions' ? 'le aree riconosciute ne coprono' : 'i primi dieci titoli di ogni fondo ne nominano';
+        inView.push(prose(`; ${who} ${articleForPercent(namedPct, 0)}`), percent(namedPct, 0), prose(', il resto è «Resto letto»'));
+      }
+    }
+    inView.push(prose('.'));
+  }
+
+  const outOfView: Narrative[] = [];
+  if (coverage.outOfView.amount > 0.5) outOfView.push([amount(coverage.outOfView.amount), prose(' di obbligazionario')]);
+  const notApplicable = notApplicableClause(
+    coverage.notApplicable,
+    view === 'issuers'
+      ? 'senza emittente per natura'
+      : view === 'sectors'
+        ? 'senza settori per natura'
+        : view === 'regions'
+          ? "senza area per natura"
+          : 'senza titoli per natura',
+  );
+  if (notApplicable) outOfView.push(notApplicable);
+  if (outOfView.length === 0) return inView;
+
+  return [...inView, prose(' Fuori da questa vista: '), ...outOfView.flatMap((clause, index) => (index === 0 ? clause : [prose('; '), ...clause])), prose('.')];
+}
+
+/** The tile's empty state: nothing Yahoo could be asked about, in the whole Allocazione portfolio. */
+export function describeExposureEmpty(): string {
+  return 'Nessuno strumento quotato nel portafoglio di Allocazione.';
+}
+
+/** «Composizioni lette da Yahoo Finance, la più vecchia del 3 settembre.» — the ONE footer line; the method is behind «Come si calcola». */
+export function describeExposureFooter(oldestFetchedAt: string | null): string {
+  const head = 'Composizioni lette da Yahoo Finance';
+  if (!oldestFetchedAt) return `${head}.`;
+  const date = new Date(oldestFetchedAt);
+  if (Number.isNaN(date.getTime())) return `${head}.`;
+  const day = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'long', timeZone: 'Europe/Rome' }).format(date);
+  return `${head}, la più vecchia del ${day}.`;
+}
+
+/**
+ * The method behind «Come si calcola», as paragraphs: the two measures, the division by the fund's
+ * equity share, Yahoo's ten holdings, the issuers as Yahoo writes them. `fundBasisTickers` are the
+ * funds whose weights Yahoo could not normalise to the sleeve (`holdingsBasis: 'fund'`).
+ */
+export function describeExposureMethod(fundBasisTickers: string[] = []): string[] {
+  const paragraphs = [
+    'Titoli e Settori pesano il nozionale: un fondo a leva 2× muove il doppio del suo valore di mercato, e solo la gamba azionaria entra in vista. Emittenti pesa il valore di mercato, ogni strumento quotato una volta.',
+    'I titoli di un fondo sono i primi ~10 che Yahoo Finance pubblica, riportati alla gamba azionaria (divisi per la quota azionaria del fondo); il resto della gamba è «Resto letto». I settori sono già quote della gamba.',
+    "Gli emittenti sono scritti come li scrive Yahoo: lo stesso può comparire su due righe. Un'azione diretta è emittente di sé stessa.",
+    'Le Aree pesano il nozionale come Titoli e Settori e includono anche i bond, dal paese dell’ISIN. L’area di un fondo è quella del suo indice, riconosciuto dal nome; dove non è riconosciuto resta «Non letto». Puoi fissare l’area a mano sull’asset: vince su tutto.',
+  ];
+  if (fundBasisTickers.length > 0) {
+    paragraphs.push(
+      `Per ${fundBasisTickers.join(', ')} Yahoo non dà la quota azionaria: i pesi dei titoli restano quote del fondo intero, non della gamba.`,
+    );
+  }
+  return paragraphs;
 }
 
 // ─── Sovrapposizioni ──────────────────────────────────────────────────────────
