@@ -527,7 +527,7 @@ export default function AllocationPage() {
         </div>
 
         <div className={cn(TILE_CELL_CLASS, 'order-5 desktop:order-none desktop:col-span-12')}>
-          {user && ownerId && <SovrapposizioniTile userId={ownerId} />}
+          {user && ownerId && <SovrapposizioniTile ownerId={ownerId} assets={allAssets} />}
         </div>
 
         {pension && (

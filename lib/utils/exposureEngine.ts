@@ -312,5 +312,6 @@ export function computeExposure(assets: Asset[], profiles: Record<string, Instru
     sectors: accumulateEquityView(baseAssets, readSectors, false),
     issuers: accumulateIssuers(baseAssets),
     quotedCount: baseAssets.filter((base) => base.quoted).length,
+    regions: accumulateEquityView(baseAssets, readSectors, false),
   };
 }
