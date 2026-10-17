@@ -111,7 +111,8 @@ export function GoalFormDialog({
   };
 
   const handleAllocationChange = (cls: AssetClass, value: string) => {
-    const numValue = parseFloat(value) || 0;
+    const normalized = value.replace(',', '.');
+    const numValue = parseFloat(normalized) || 0;
     setAllocation((prev) => {
       const updated = { ...prev };
       if (numValue > 0) {
@@ -133,7 +134,8 @@ export function GoalFormDialog({
 
   const handleSubmit = async () => {
     if (!name.trim()) return;
-    if (targetAmount && parseFloat(targetAmount) < 0) return;
+    const parseFloatNormalized = (val: string) => parseFloat(val.replace(',', '.'));
+    if (targetAmount && parseFloatNormalized(targetAmount) < 0) return;
     if (!isAllocationValid) return;
 
     setSaving(true);
@@ -141,8 +143,8 @@ export function GoalFormDialog({
     // A failed save still rejects to the caller, as it did.
     const save = async () => {
       const now = new Date();
-      const parsedTarget = targetAmount ? parseFloat(targetAmount) : undefined;
-      const parsedContribution = monthlyContribution ? parseFloat(monthlyContribution) : undefined;
+      const parsedTarget = targetAmount ? parseFloatNormalized(targetAmount) : undefined;
+      const parsedContribution = monthlyContribution ? parseFloatNormalized(monthlyContribution) : undefined;
       const goalData: InvestmentGoal = {
         id: goal?.id || crypto.randomUUID(),
         name: name.trim(),
@@ -186,7 +188,7 @@ export function GoalFormDialog({
             disabled={
               saving ||
               !name.trim() ||
-              (targetAmount !== '' && parseFloat(targetAmount) < 0) ||
+              (targetAmount !== '' && parseFloat(targetAmount.replace(',', '.')) < 0) ||
               !isAllocationValid
             }
           >

@@ -105,7 +105,7 @@ const EMPTY_FORM: WhatIfEventForm = {
 };
 
 function parseAmount(value: string): number {
-  const parsed = Number.parseFloat(value);
+  const parsed = Number.parseFloat(value.replace(',', '.'));
   return Number.isFinite(parsed) ? parsed : 0;
 }
 

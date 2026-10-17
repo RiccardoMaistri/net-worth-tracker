@@ -5,6 +5,7 @@ import {
   formatDate,
   formatDateTime,
   formatNumber,
+  parseDecimalInput,
   formatTimePeriodLabel,
 } from '@/lib/utils/formatters'
 
@@ -125,6 +126,27 @@ describe('formatNumber', () => {
     const result = formatNumber(-1234)
     expect(result).toMatch(/1[.,]?234/)
     expect(result).toMatch(/-/)
+  })
+})
+
+describe('parseDecimalInput', () => {
+  it('should parse string inputs with dots', () => {
+    expect(parseDecimalInput('12.34')).toBe(12.34)
+  })
+
+  it('should parse string inputs with commas', () => {
+    expect(parseDecimalInput('12,34')).toBe(12.34)
+  })
+
+  it('should pass through finite numbers', () => {
+    expect(parseDecimalInput(42.5)).toBe(42.5)
+  })
+
+  it('should handle empty or nullish values with fallback', () => {
+    expect(parseDecimalInput('')).toBe(0)
+    expect(parseDecimalInput(undefined)).toBe(0)
+    expect(parseDecimalInput(null, 10)).toBe(10)
+    expect(parseDecimalInput('invalid', -1)).toBe(-1)
   })
 })
 
