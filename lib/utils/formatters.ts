@@ -138,6 +138,21 @@ export function formatNumber(value: number): string {
 }
 
 /**
+ * Parses a numeric input string that may use either a comma or a dot as a decimal separator.
+ *
+ * Replaces commas (`,`) with dots (`.`) and returns the parsed finite number,
+ * or `fallback` (default 0) if the value is missing or invalid.
+ */
+export function parseDecimalInput(value: string | number | undefined | null, fallback = 0): number {
+  if (value == null) return fallback;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : fallback;
+  const normalized = String(value).trim().replace(',', '.');
+  if (normalized === '') return fallback;
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+/**
  * Format time period label in Italian for display
  *
  * Shows exact date range for all periods using Italian date formatting.

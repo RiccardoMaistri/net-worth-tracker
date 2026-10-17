@@ -30,6 +30,7 @@ describe('emptyClassAmounts', () => {
 describe('parseAmount', () => {
   it('should read a field the way the form means it', () => {
     expect(parseAmount('1250.75')).toBe(1250.75);
+    expect(parseAmount('1250,75')).toBe(1250.75);
     expect(parseAmount(' 42 ')).toBe(42);
     expect(parseAmount('0')).toBe(0);
   });
