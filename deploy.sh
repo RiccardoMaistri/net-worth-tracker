@@ -123,6 +123,7 @@ case "$command" in
   logs)
     require_compose
     require_env_file
+    shift
     compose logs --follow "$@"
     ;;
   restart)
