@@ -15,6 +15,7 @@
  */
 
 import { ASSET_CLASS_SEQUENCE } from '@/lib/utils/allocationUtils';
+import { parseDecimalInput } from '@/lib/utils/formatters';
 
 /** One entry per asset class, every field starting at '0'. */
 export function emptyClassAmounts(): Record<string, string> {
@@ -26,8 +27,7 @@ export function emptyClassAmounts(): Record<string, string> {
  * a class left alone did not happen, it is not an error. NaN never escapes.
  */
 export function parseAmount(raw: string | undefined): number {
-  const value = parseFloat((raw ?? '').trim());
-  return Number.isFinite(value) ? value : 0;
+  return parseDecimalInput(raw, 0);
 }
 
 /**
