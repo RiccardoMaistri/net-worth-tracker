@@ -184,6 +184,20 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Collezione monthlyIncomeOverrides - correzioni dell'entrata mensile fatte dall'utente:
+    // il valore corretto vince sullo stipendio fisso delle impostazioni. Percorso annidato
+    // sotto lo uid (come budgetHistory): la rule non tocca resource.data, quindi la lettura
+    // della collezione di un account senza override risponde una lista vuota, non un errore.
+    // Scritta dal client SDK; il campo userId è timbrato con lo uid del percorso e resta immutabile.
+    match /monthlyIncomeOverrides/{ownerUid}/months/{month} {
+      allow read: if canAccess(ownerUid);
+      allow create: if canAccess(ownerUid) && request.resource.data.userId == ownerUid;
+      allow update: if canAccess(ownerUid) &&
+                       (!('userId' in request.resource.data) ||
+                        request.resource.data.userId == resource.data.userId);
+      allow delete: if canAccess(ownerUid) && resource.data.userId == ownerUid;
+    }
+
     // Collezione budgets - configurazione budget (doc id = ownerUid)
     match /budgets/{userId} {
       // Read: usa userId (doc id) per consentire la lettura di doc inesistenti (null)

@@ -439,13 +439,13 @@ describe('describeSavingsHistory', () => {
       'In media −8%; il mese migliore è stato aprile (2%), il peggiore dicembre (−20%).',
     );
     expect(plain(describeSavingsHistory(history({ average: 30, best: flow(2026, 7, 30), worst: flow(2026, 6, 30), measuredCount: 8 })))).toBe(
-      'In media il 30%, uguale in tutti gli 8 mesi con entrate.',
+      'In media il 30%, uguale in tutti gli 8 mesi con reddito impostato.',
     );
   });
 
   it('should not rank a single measured month, and say so', () => {
     expect(plain(describeSavingsHistory(history({ average: 40, best: flow(2026, 8, 40), worst: flow(2026, 8, 40), measuredCount: 1 })))).toBe(
-      'Un solo mese con entrate: agosto (40%).',
+      'Un solo mese con reddito impostato: agosto (40%).',
     );
     expect(describeSavingsHistory(history({ average: null, best: null, worst: null, measuredCount: 0 }))).toBeNull();
   });
@@ -468,10 +468,10 @@ describe('describeSavingsHistory', () => {
     expect(
       plain(describeDeficitMonths(history({ deficitMonths: [flow(2025, 10, -1), flow(2025, 11, -1), flow(2025, 12, -8), flow(2026, 3, -2)] }), NOW)),
     ).toBe('4 mesi in deficit: ottobre, novembre, dicembre e un altro.');
-    expect(plain(describeDeficitMonths(history({ measuredCount: 9 }), NOW))).toBe('Nessun mese in deficit nei 9 con entrate.');
-    expect(plain(describeDeficitMonths(history({ measuredCount: 8 }), NOW))).toBe('Nessun mese in deficit negli 8 con entrate.');
-    expect(plain(describeDeficitMonths(history({ measuredCount: 11 }), NOW))).toBe('Nessun mese in deficit negli 11 con entrate.');
-    expect(plain(describeDeficitMonths(history({ measuredCount: 1 }), NOW))).toBe("Nessun deficit nell'unico mese con entrate.");
+    expect(plain(describeDeficitMonths(history({ measuredCount: 9 }), NOW))).toBe('Nessun mese in deficit nei 9 con reddito impostato.');
+    expect(plain(describeDeficitMonths(history({ measuredCount: 8 }), NOW))).toBe('Nessun mese in deficit negli 8 con reddito impostato.');
+    expect(plain(describeDeficitMonths(history({ measuredCount: 11 }), NOW))).toBe('Nessun mese in deficit negli 11 con reddito impostato.');
+    expect(plain(describeDeficitMonths(history({ measuredCount: 1 }), NOW))).toBe("Nessun deficit nell'unico mese con reddito impostato.");
     expect(describeDeficitMonths(history({ average: null, best: null, worst: null, measuredCount: 0 }), NOW)).toBeNull();
   });
 

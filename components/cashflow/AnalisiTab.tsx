@@ -155,6 +155,12 @@ interface AnalisiTabProps {
   /** The queries behind `allExpenses`/`categories` failed: say so, never render zeros. */
   loadFailed: boolean;
   historyStartYear?: number;
+  /** Whose data the page shows: the displayed account's owner, never the viewer of a shared one. */
+  ownerId: string | undefined;
+  /** settings.fixedMonthlyIncomeEur — the declared denominator of the savings-rate trend. */
+  fixedIncomeEur?: number;
+  /** settings.fixedMonthlyIncomeStartMonth — the first month the declared income applies. */
+  activationMonth?: string | null;
   /** settings.spendingRolesEnabled — adds the 50/30/20 view to Flusso, and makes it the default. */
   spendingRolesEnabled?: boolean;
   /** The page's freshness reading for the header the tab owns (`useFreshness`). */
@@ -258,7 +264,7 @@ function resolvePeriodLabel(period: AnalisiPeriod): string {
   return String(period.year);
 }
 
-export function AnalisiTab({ allExpenses, categories, loading, loadFailed, historyStartYear = 2024, spendingRolesEnabled = false, freshness }: AnalisiTabProps) {
+export function AnalisiTab({ allExpenses, categories, loading, loadFailed, historyStartYear = 2024, ownerId, fixedIncomeEur, activationMonth, spendingRolesEnabled = false, freshness }: AnalisiTabProps) {
   const COLORS = useChartColors();
   // The Scheda's trend plot is lazy: fetched when the page is idle AFTER its data, so a
   // Scheda draws it at once and the preload never competes with the first figures.
@@ -838,7 +844,16 @@ export function AnalisiTab({ allExpenses, categories, loading, loadFailed, histo
             availableDataYears={availableYears}
             onCategoryFocus={handleEntitySelect}
           />
-          <DettaglioDisclosure allExpenses={allExpenses} historyStartYear={historyStartYear} scopeYear={selectedYear} showHistory={periodMode === 'history'} />
+          <DettaglioDisclosure
+            allExpenses={allExpenses}
+            historyStartYear={historyStartYear}
+            scopeYear={selectedYear}
+            showHistory={periodMode === 'history'}
+            ownerId={ownerId}
+            fixedIncomeEur={fixedIncomeEur}
+            activationMonth={activationMonth}
+            now={nowDate}
+          />
         </div>
       </div>
     </>

@@ -61,7 +61,8 @@ function serializeFamilyMembers(
  * Includes: targets, userAge, riskFreeRate, withdrawalRate, plannedAnnualExpenses,
  * coastFireRetirementAge, coastFirePensions, coastFireTaxBrackets,
  * includePrimaryResidenceInFIRE, dividendIncomeCategoryId, dividendIncomeSubCategoryId,
- * transferFeeCategoryId, transferFeeSubCategoryId
+ * transferFeeCategoryId, transferFeeSubCategoryId, fixedMonthlyIncomeEur,
+ * fixedMonthlyIncomeStartMonth
  *
  * WARNING (checklist comment): the mapping below is an EXPLICIT FIELD WHITELIST, not a spread of
  * `data`. A new field on `AssetAllocationSettings` that is not added here is written to Firestore
@@ -113,6 +114,8 @@ export async function getSettings(
       checkingAccountSubCategory: data.checkingAccountSubCategory,
       cashflowHistoryStartYear: data.cashflowHistoryStartYear,
       laborIncomeCategoryIds: data.laborIncomeCategoryIds ?? [],
+      fixedMonthlyIncomeEur: data.fixedMonthlyIncomeEur,
+      fixedMonthlyIncomeStartMonth: data.fixedMonthlyIncomeStartMonth,
       assistantResponseStyle: data.assistantResponseStyle,
       assistantMacroContextEnabled: data.assistantMacroContextEnabled,
       assistantMemoryEnabled: data.assistantMemoryEnabled,
@@ -377,6 +380,23 @@ export async function setSettings(
         }
       }
 
+      // User-clearable together: blanking the amount clears its activation month too. This branch
+      // writes WITHOUT merge, so a present-but-undefined value must delete the key from docData.
+      if ('fixedMonthlyIncomeEur' in settings) {
+        if (settings.fixedMonthlyIncomeEur !== undefined) {
+          docData.fixedMonthlyIncomeEur = settings.fixedMonthlyIncomeEur;
+        } else {
+          delete docData.fixedMonthlyIncomeEur;
+        }
+      }
+      if ('fixedMonthlyIncomeStartMonth' in settings) {
+        if (settings.fixedMonthlyIncomeStartMonth !== undefined) {
+          docData.fixedMonthlyIncomeStartMonth = settings.fixedMonthlyIncomeStartMonth;
+        } else {
+          delete docData.fixedMonthlyIncomeStartMonth;
+        }
+      }
+
       // Use setDoc WITHOUT merge to completely replace targets
       await setDoc(targetRef, docData);
     } else {
@@ -557,6 +577,16 @@ export async function setSettings(
           settings.pensionReturnStartMonth !== undefined
             ? settings.pensionReturnStartMonth
             : deleteField();
+      }
+      // Blanking the income clears BOTH fields. This branch merges, so omitting a key would leave
+      // the old value behind — the amount and its activation month need an explicit deleteField().
+      if ('fixedMonthlyIncomeEur' in settings) {
+        docData.fixedMonthlyIncomeEur =
+          settings.fixedMonthlyIncomeEur !== undefined ? settings.fixedMonthlyIncomeEur : deleteField();
+      }
+      if ('fixedMonthlyIncomeStartMonth' in settings) {
+        docData.fixedMonthlyIncomeStartMonth =
+          settings.fixedMonthlyIncomeStartMonth !== undefined ? settings.fixedMonthlyIncomeStartMonth : deleteField();
       }
 
       // Use merge: true to preserve existing fields

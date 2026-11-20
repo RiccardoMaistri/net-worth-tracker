@@ -167,6 +167,14 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
   in `SpeseSlice` because Spese edits them. Get this wrong and the dot lands on the wrong tab, or on none, over an
   edited field.
 - `cashflowHistoryStartYear` is shared (Cashflow / Storico / Assistant / overview) — never rename it page-specifically.
+- **«Reddito fisso mensile netto»** (2026-11-20, Preferenze → Cashflow): `fixedMonthlyIncomeEur` and
+  `fixedMonthlyIncomeStartMonth` live in the `generale` slice, are both user-clearable through the same presence
+  guards as every other setting, and feed only the two savings-rate charts (no server mapper). The month is stamped
+  once by `resolveFixedMonthlyIncomeStartMonth(amount, savedStartMonth, now)` on the first save that sets an amount,
+  in Italian calendar time; later edits keep it, clearing the amount clears both. The charts read a month correction
+  first, otherwise this default, and show no rate at all before activation — never a reconstructed history. Tests:
+  `settingsRoundTrip` (both write branches + clear), `settingsDraft` (identity and the present-but-undefined clear
+  case) and `fixedIncomeSavingsRate` (the activation boundary).
 - **«Commissioni sui trasferimenti»** (Spese, 2026-09-25): `transferFeeCategoryId` / `transferFeeSubCategoryId`, both
   user-clearable (`'x' in settings` in both `setSettings` branches), in the `spese` snapshot, read ONLY by the expense
   form (no server mapper). The Select lists the spending categories grouped by type — the fee row takes the category's

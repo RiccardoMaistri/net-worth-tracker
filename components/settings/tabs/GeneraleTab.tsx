@@ -27,6 +27,7 @@ import { DeleteDummyDataDialog } from '@/components/DeleteDummyDataDialog';
 import { cn } from '@/lib/utils';
 import { authenticatedFetch } from '@/lib/utils/authFetch';
 import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
+import { MONTH_NAMES } from '@/lib/constants/months';
 import { resolveRitaUnlockAge, DEFAULT_INPS_RETIREMENT_AGE } from '@/lib/utils/pensionUnlock';
 import type { SurfaceState } from '@/lib/utils/statesNarrative';
 import {
@@ -67,6 +68,13 @@ function createFamilyMemberId(): string {
   return `family-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** 'YYYY-MM' → «novembre 2026» for the read-only activation row (display only, no date rule). */
+function activationMonthLabel(month: string): string {
+  const [year, monthNumber] = month.split('-').map((part) => Number.parseInt(part, 10));
+  const name = MONTH_NAMES[monthNumber - 1]?.toLowerCase();
+  return name && Number.isFinite(year) ? `${name} ${year}` : month;
+}
+
 export interface GeneraleTabProps {
   slice: GeneraleSlice;
   onChange: (patch: Partial<GeneraleSlice>) => void;
@@ -97,6 +105,7 @@ export function GeneraleTab({
   const {
     includePrimaryResidenceInFIRE, goalBasedInvestingEnabled, goalDrivenAllocationEnabled, stampDutyEnabled,
     stampDutyRate, checkingAccountSubCategory, cashflowHistoryStartYear, laborIncomeCategoryIds, costCentersEnabled,
+    fixedMonthlyIncomeEur, fixedMonthlyIncomeStartMonth,
     expenseSplitEnabled, performanceIncludesPensionFunds, performanceIncludesExcludedAssets, performanceExcludesCash,
     pensionReturnStartMonth, monthlyEmailEnabled, quarterlyEmailEnabled, semiAnnualEmailEnabled, yearlyEmailEnabled,
     weeklyBudgetEmailEnabled, monthlyEmailRecipients, familyMembers,
@@ -406,6 +415,8 @@ export function GeneraleTab({
             historyStartYear: cashflowHistoryStartYear,
             costCentersEnabled,
             expenseSplitEnabled,
+            fixedMonthlyIncomeEur,
+            fixedMonthlyIncomeStartMonth: fixedMonthlyIncomeStartMonth || undefined,
             familyMemberCount: familyMembersForReading.length,
             categoriesUnread: categoriesState === 'failed',
           })}
@@ -476,6 +487,49 @@ export function GeneraleTab({
                 className={cn('w-24 shrink-0 text-right font-mono', INTERACTIVE_CONTROL_CLASS)}
               />
             </div>
+            <div className="flex items-center justify-between gap-4 py-3">
+              <div className="min-w-0">
+                <Label htmlFor="fixedMonthlyIncomeEur" className="text-[13px] font-medium">
+                  Reddito fisso mensile netto
+                </Label>
+                <p className="mt-0.5 text-[11px] leading-[1.4] text-muted-foreground">
+                  {"Lascia vuoto se non hai uno stipendio fisso; l'importo entra nell'andamento del tasso di risparmio."}
+                </p>
+              </div>
+              <Input
+                id="fixedMonthlyIncomeEur"
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={fixedMonthlyIncomeEur ?? ''}
+                onChange={(event) => {
+                  const raw = event.target.value;
+                  if (raw === '') {
+                    // Clearing the income clears its activation month as well.
+                    onChange({ fixedMonthlyIncomeEur: undefined, fixedMonthlyIncomeStartMonth: '' });
+                    return;
+                  }
+                  const amount = Number(raw);
+                  if (!Number.isFinite(amount) || amount < 0) return;
+                  if (amount === 0) {
+                    // Zero declares no salary: treat it as a blank, month included.
+                    onChange({ fixedMonthlyIncomeEur: undefined, fixedMonthlyIncomeStartMonth: '' });
+                    return;
+                  }
+                  onChange({ fixedMonthlyIncomeEur: amount });
+                }}
+                className={cn('w-24 shrink-0 text-right font-mono', INTERACTIVE_CONTROL_CLASS)}
+              />
+            </div>
+            {fixedMonthlyIncomeStartMonth && (
+              <div className="py-3">
+                <DeclarationRow label="Attivo da" value={activationMonthLabel(fixedMonthlyIncomeStartMonth)} mono={false} />
+                <p className="mt-0.5 text-[11px] leading-[1.4] text-muted-foreground">
+                  {"Da quel mese l'importo si usa per l'andamento del tasso di risparmio."}
+                </p>
+              </div>
+            )}
             <div className="flex items-center justify-between gap-4 py-3">
               <div className="min-w-0">
                 <Label htmlFor="costCentersEnabled" className="text-[13px] font-medium">Centri di Costo</Label>

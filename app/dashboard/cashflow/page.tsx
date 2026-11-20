@@ -429,6 +429,8 @@ export default function CashflowPage() {
               onRefresh={handleRefresh}
               assetNameMap={assetNameMap}
               splitEnabled={expenseSplitEnabled === true}
+              fixedIncomeEur={settings?.fixedMonthlyIncomeEur}
+              activationMonth={settings?.fixedMonthlyIncomeStartMonth}
               familyMembers={familyMembers}
             />
           </motion.div>

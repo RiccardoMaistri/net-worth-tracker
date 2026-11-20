@@ -1,26 +1,27 @@
 /**
  * Savings rate trend section — monthly line chart over the last N months.
  *
- * Shows how the savings rate evolves over time with a 20% target reference line.
- * ReferenceArea fills below 20% with a red tint to highlight deficit zones.
- *
- * Always rendered — shows "Dati insufficienti" placeholder when fewer than
- * 3 months have income data (< 3 non-null data points).
- *
- * Savings rate formula: ((totalIncome - totalExpenses) / totalIncome) * 100
- * Months without income → null → rendered as a gap in the line (connectNulls=false).
+ * The denominator is DECLARED: the fixed monthly income from Impostazioni, or a correction of
+ * one month from the chart itself. The pure `buildFixedIncomeSavingsSeries` owns the axis, the
+ * activation boundary and the spending side; this component only chooses the visible window and
+ * renders. Months without a configured income are gaps, never zeros (connectNulls={false}).
+ * Before activation there is no rate at all — not even when the ledger held a salary then.
  */
+
 'use client';
 
 import { useMemo, useState } from 'react';
 import { useChartColors } from '@/lib/hooks/useChartColors';
-import { Expense } from '@/types/expenses';
+import type { Expense } from '@/types/expenses';
 import { AsideToggle } from '@/components/cashflow/analisi/AsideToggle';
+import { MonthlyIncomeOverrideControls } from '@/components/cashflow/MonthlyIncomeOverrideControls';
+import { MonthlyIncomeOverrideDialog } from '@/components/cashflow/MonthlyIncomeOverrideDialog';
+import { useMonthlyIncomeOverrideEditor } from '@/lib/hooks/useMonthlyIncomeOverrideEditor';
 import { Tile } from '@/components/ui/tile';
 import { Skeleton } from '@/components/ui/skeleton';
 import { lazyComponent } from '@/components/ui/lazy-component';
-import { getItalyMonth, getItalyYear, toDate } from '@/lib/utils/dateHelpers';
-import { MONTH_NAMES } from '@/lib/constants/months';
+import { getItalyMonthYear } from '@/lib/utils/dateHelpers';
+import { buildFixedIncomeSavingsSeries } from '@/lib/utils/fixedIncomeSavingsRate';
 
 /** The plot's height: the chart draws at it and its placeholder holds it, so it lands in place. */
 const SAVINGS_CHART_HEIGHT = 200;
@@ -42,11 +43,20 @@ const RANGE_OPTIONS: ReadonlyArray<{ value: TrendRange; label: string }> = [
   { value: 'all', label: 'Tutto' },
 ];
 
-// ── SavingsRateTrendSection ───────────────────────────────────────────────────
-
 interface SavingsRateTrendSectionProps {
   allExpenses: Expense[];
   historyStartYear: number;
+  /** Whose data is shown: the owner of the account, never the viewer of a shared one. */
+  ownerId: string | undefined;
+  /** The declared default income and the month it first became effective. */
+  fixedIncomeEur: number | undefined;
+  activationMonth: string | null | undefined;
+  /** Corrections keyed by Italian `YYYY-MM`. */
+  overrides: Record<string, number>;
+  /** A failed read is not an empty set of corrections. */
+  overridesFailed: boolean;
+  /** The tab's clock, injected so the axis is testable. */
+  now: Date;
   /**
    * When set, the chart is restricted to a single calendar year (Jan → Dec, or
    * Jan → current month for the current year) and the range toggle is hidden.
@@ -61,114 +71,74 @@ interface SavingsRateTrendSectionProps {
  * When `scopeYear` is set the window is locked to that calendar year and the
  * toggle is hidden. Otherwise a 12m/24m/Tutto range toggle (default Tutto)
  * controls the window; 'Tutto' spans the full history from historyStartYear to
- * the current month.
- *
- * The section is always present in the DOM — it shows a placeholder message
- * when fewer than 3 months of income data are available.
+ * the current month. The section is always present in the DOM.
  */
 export function SavingsRateTrendSection({
   allExpenses,
   historyStartYear,
+  ownerId,
+  fixedIncomeEur,
+  activationMonth,
+  overrides,
+  overridesFailed,
+  now,
   scopeYear,
 }: SavingsRateTrendSectionProps) {
   const chartColors = useChartColors();
   const [range, setRange] = useState<TrendRange>('all');
+  const editor = useMonthlyIncomeOverrideEditor(ownerId, fixedIncomeEur);
   const isScoped = scopeYear != null;
 
-  const trendData = useMemo(() => {
-    const today = new Date();
-    // Convert to Italy timezone to get the correct current month
-    const italyToday = new Date(today.toLocaleString('en-US', { timeZone: 'Europe/Rome' }));
-    const currentMonth = italyToday.getMonth() + 1; // 1-12
-    const currentYear = italyToday.getFullYear();
-
-    // When scoped to a single year, walk back from December of that year (or the
-    // current month if it's the ongoing year) down to January; the range toggle
-    // is irrelevant. Otherwise 'all' walks back to January of historyStartYear;
-    // the loop already skips months before that floor, so no empty leading
-    // buckets appear.
-    const refYear = isScoped ? (scopeYear as number) : currentYear;
-    const refMonth = isScoped
-      ? (scopeYear as number) === currentYear
-        ? currentMonth
-        : 12
-      : currentMonth;
+  const { axis, count } = useMemo(() => {
+    const today = getItalyMonthYear(now);
+    const refYear = isScoped ? (scopeYear as number) : today.year;
+    const refMonth = isScoped ? ((scopeYear as number) === today.year ? today.month : 12) : today.month;
     const floorYear = isScoped ? (scopeYear as number) : historyStartYear;
+    const visible =
+      refYear * 12 + refMonth - (floorYear * 12 + 1) + 1;
+    return {
+      axis: { endYear: refYear, endMonth: refMonth },
+      count: isScoped ? refMonth : Math.max(1, range === '12m' ? 12 : range === '24m' ? 24 : visible),
+    };
+  }, [historyStartYear, isScoped, now, range, scopeYear]);
 
-    const effectiveMonthsToShow = isScoped
-      ? refMonth
-      : range === '12m'
-      ? 12
-      : range === '24m'
-      ? 24
-      : (currentYear - historyStartYear) * 12 + currentMonth;
+  const series = useMemo(
+    () =>
+      buildFixedIncomeSavingsSeries({
+        expenses: allExpenses,
+        fixedIncomeEur,
+        activationMonth,
+        overrides,
+        now,
+        ...axis,
+        count,
+      }),
+    [allExpenses, fixedIncomeEur, activationMonth, overrides, now, axis, count],
+  );
 
-    const result: Array<{ label: string; rate: number | null; month: number; year: number }> = [];
+  const chartData = useMemo(
+    () => series.months.map((month) => ({ label: month.longLabel, rate: month.savingsRate })),
+    [series.months],
+  );
+  const hasEnoughData = chartData.filter((point) => point.rate !== null).length >= 3;
 
-    let m = refMonth;
-    let y = refYear;
-
-    for (let i = 0; i < effectiveMonthsToShow; i++) {
-      const month = m;
-      const year = y;
-
-      // Respect the floor year — skip months before the active data window
-      if (year >= floorYear) {
-        const monthExpenses = allExpenses.filter(e => {
-          const d = toDate(e.date);
-          return getItalyYear(d) === year && getItalyMonth(d) === month;
-        });
-
-        const income = monthExpenses
-          .filter(e => e.type === 'income')
-          .reduce((s, e) => s + e.amount, 0);
-
-        const expenses = monthExpenses
-          .filter(e => e.type !== 'income' && e.type !== 'transfer')
-          .reduce((s, e) => s + Math.abs(e.amount), 0);
-
-        // No income in this month → null (gap in chart, not zero)
-        const rate = income > 0 ? ((income - expenses) / income) * 100 : null;
-
-        result.unshift({
-          label: `${MONTH_NAMES[month - 1].slice(0, 3)} ${year.toString().slice(2)}`,
-          rate,
-          month,
-          year,
-        });
-      }
-
-      // Walk backward one month
-      m--;
-      if (m < 1) {
-        m = 12;
-        y--;
-      }
-    }
-
-    return result;
-  }, [allExpenses, historyStartYear, range, isScoped, scopeYear]);
-
-  // Need at least 3 months with actual income data to show a meaningful trend
-  const hasEnoughData = trendData.filter(d => d.rate !== null).length >= 3;
-
-  const currentYear = getItalyYear(new Date());
+  const currentYear = getItalyMonthYear(now).year;
   const subtitle = isScoped
     ? scopeYear === currentYear
       ? 'anno corrente'
       : `anno ${scopeYear}`
     : range === '12m'
-    ? 'ultimi 12 mesi'
-    : range === '24m'
-    ? 'ultimi 24 mesi'
-    : 'intero storico';
+      ? 'ultimi 12 mesi'
+      : range === '24m'
+        ? 'ultimi 24 mesi'
+        : 'intero storico';
 
   return (
     <Tile
       eyebrow="Andamento risparmio"
       aside={
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <span>tasso di risparmio mensile · {subtitle}</span>
+          <span>tasso di risparmio mensile · reddito fisso · {subtitle}</span>
           {!isScoped && (
             <AsideToggle ariaLabel="Finestra temporale" value={range} onChange={setRange} options={RANGE_OPTIONS} />
           )}
@@ -177,11 +147,30 @@ export function SavingsRateTrendSection({
     >
       <div className="mt-3">
         {!hasEnoughData ? (
-          <p className="py-6 text-center text-[13px] text-muted-foreground">Servono almeno 3 mesi di entrate per il trend</p>
+          <p className="py-6 text-center text-[13px] text-muted-foreground">
+            {series.configured
+              ? 'Servono almeno 3 mesi con reddito impostato per il trend.'
+              : 'Imposta il reddito fisso mensile in Impostazioni per vedere il trend.'}
+          </p>
         ) : (
-          <SavingsRateLineChart data={trendData} colors={chartColors} height={SAVINGS_CHART_HEIGHT} fallback={<Skeleton className="w-full" style={{ height: SAVINGS_CHART_HEIGHT }} />} />
+          <SavingsRateLineChart
+            data={chartData}
+            colors={chartColors}
+            height={SAVINGS_CHART_HEIGHT}
+            fallback={<Skeleton className="w-full" style={{ height: SAVINGS_CHART_HEIGHT }} />}
+          />
         )}
       </div>
+      {series.configured && ownerId && (
+        <MonthlyIncomeOverrideControls months={series.months} onEdit={editor.edit} failed={overridesFailed} />
+      )}
+      <MonthlyIncomeOverrideDialog
+        target={editor.target}
+        origin={editor.origin}
+        onClose={editor.close}
+        onSave={editor.save}
+        onRemove={editor.remove}
+      />
     </Tile>
   );
 }
