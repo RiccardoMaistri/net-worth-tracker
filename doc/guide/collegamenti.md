@@ -222,6 +222,13 @@
   mancanti sono **proposte** in `categoriesToCreate` e create solo dopo l'approvazione. Un
   rimborso è un importo positivo nella stessa categoria, con `amountSign: 'refund'` esplicito;
   `originalAmount`/`originalCurrency` sono dichiarati ma non totalizzati.
+- **Carburante e spese auto restano in «Trasporti».** La regola `fuel` di
+  `trMerchantCategoryRules.ts` riconosce i distributori italiani (IP, Eni, Esso, Shell, Q8,
+  Tamoil, Total/TotalErg, API, ERG, Repsol, benzinaio/distributore) come «Trasporti › Carburante»
+  (`variable`); pedaggi, telepass e parcheggi restano in «Trasporti › Trasporto pubblico». I nomi
+  brevi sono pattern a parola intera (`\bip\b`), così «Skip» o «TripAdvisor» non diventano un
+  rifornimento. Il carburante viene PRIMA delle utenze ed Eni non compare tra le utenze: «Eni Gas»
+  ed «Eni Energia» restano `Trasporti › Carburante`, non una bolletta.
 - **Nessun `linkedCashAssetId`.** Il saldo contanti del broker riflette già il pagamento della
   carta: muovere anche un conto contanti locale conterebbe lo stesso euro due volte. Ogni riga
   porta `source: 'traderepublic-card'`, `sourceRef` e `sourceFingerprint` per provenienza.

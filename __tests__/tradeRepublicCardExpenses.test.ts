@@ -125,6 +125,37 @@ describe('detectTrCardCategory', () => {
       subCategoryName: 'Streaming',
     });
   });
+
+  it.each([
+    'IP Station', 'Eni Station', 'ESSO', 'Shell', 'Q8', 'Tamoil', 'Total', 'API', 'ERG',
+    'Distributore Benzina',
+  ])('maps the Italian forecourt brand %s to Trasporti › Carburante', (merchant) => {
+    expect(detectTrCardCategory({ merchant, icon: 'card/default' })).toMatchObject({
+      categoryName: 'Trasporti',
+      subCategoryName: 'Carburante',
+      type: 'variable',
+      ruleId: 'fuel',
+      fallback: false,
+    });
+  });
+
+  it.each(['Skip', 'TripAdvisor', 'Clip', 'Equipaggio'])(
+    'does not read the short fuel brand inside %s',
+    (merchant) => {
+      expect(detectTrCardCategory({ merchant, icon: 'card/default' }).fallback).toBe(true);
+    }
+  );
+
+  it('reads Eni as transport even on a gas or energia bill, never as a utility', () => {
+    for (const merchant of ['Eni Gas', 'Eni Energia']) {
+      expect(detectTrCardCategory({ merchant, icon: 'card/default' })).toMatchObject({
+        categoryName: 'Trasporti',
+        subCategoryName: 'Carburante',
+        type: 'variable',
+        ruleId: 'fuel',
+      });
+    }
+  });
 });
 
 describe('parseTrCardExpenses', () => {

@@ -13,7 +13,9 @@
  * that does not exist is PROPOSED in the preview and created only after the user confirms.
  *
  * A pattern is a lowercase substring of the merchant line (`title` + `subtitle`). Keep it specific
- * enough not to catch a product name: `bar` catches a café, `car` would catch `card`.
+ * enough not to catch a product name: `bar` catches a café, `car` would catch `card`. A pattern
+ * wrapped in `\b` is matched as a WHOLE WORD: short brands such as `ip` need it, or a plain
+ * substring would categorize «Skip» and «TripAdvisor» as a petrol station.
  */
 
 import type { ImportableExpenseType } from '@/types/expenseImport';
@@ -21,7 +23,7 @@ import type { ImportableExpenseType } from '@/types/expenseImport';
 export interface TrMerchantCategoryRule {
   /** Stable id, used by tests and by the preview's disclosure. */
   id: string;
-  /** Lowercase substrings matched against the merchant line. */
+  /** Lowercase substrings, or `\b`-wrapped whole words, matched against the merchant line. */
   patterns: readonly string[];
   categoryName: string;
   subCategoryName?: string;
@@ -66,11 +68,17 @@ export const TR_MERCHANT_RULES: readonly TrMerchantCategoryRule[] = [
     type: 'variable',
   },
   // ── Fuel and transport ──────────────────────────────────────────────────
+  // Italian forecourt brands. Short names are whole-word patterns so a merchant
+  // like «Skip» or «TripAdvisor» is not silently turned into a petrol station.
+  // This rule comes BEFORE utilities: Eni is only transport, never a bill — even
+  // when the merchant line says «Eni Gas» or «Eni Energia».
   {
     id: 'fuel',
     patterns: [
-      'eni', 'q8', 'tamoil', 'esso', 'shell', 'totalerg', 'api ', 'benzina', 'carburante',
-      'distributore', 'stazione di servizio',
+      '\\beni\\b', '\\bq8\\b', '\\btamoil\\b', '\\besso\\b', '\\bshell\\b',
+      '\\btotal\\b', 'totalerg', '\\bapi\\b', '\\bip\\b', '\\berg\\b',
+      '\\brepsol\\b', 'benzina', 'benzinaio', 'carburante', 'distributore',
+      'stazione di servizio', 'pompa di benzina',
     ],
     categoryName: 'Trasporti',
     subCategoryName: 'Carburante',
@@ -87,10 +95,11 @@ export const TR_MERCHANT_RULES: readonly TrMerchantCategoryRule[] = [
     type: 'variable',
   },
   // ── Utilities and telecom ───────────────────────────────────────────────
+  // No Eni here: it is a forecourt brand, not a utility (see the fuel rule above).
   {
     id: 'utilities',
     patterns: [
-      'eni gas', 'eni energia', 'enel', 'a2a', 'hera', 'acea', 'iren', 'sorgenia',
+      'enel', 'a2a', 'hera', 'acea', 'iren', 'sorgenia',
       'edison', 'engie', 'illumia', 'plenitude', 'luce', 'gas ', 'acquedotto',
     ],
     categoryName: 'Utenze',
@@ -347,6 +356,14 @@ function fromRule(rule: TrMerchantCategoryRule): TrDetectedCardCategory {
   };
 }
 
+/** A `\b`-wrapped pattern is a whole word; anything else stays a plain substring. */
+function matchesPattern(haystack: string, pattern: string): boolean {
+  if (pattern.startsWith('\\b') && pattern.endsWith('\\b') && pattern.length > 4) {
+    return new RegExp(pattern).test(haystack);
+  }
+  return haystack.includes(pattern);
+}
+
 /** Detect the category of one card row. Deterministic: merchant, then icon, then «Altro». */
 export function detectTrCardCategory(input: {
   merchant: string;
@@ -355,12 +372,12 @@ export function detectTrCardCategory(input: {
 }): TrDetectedCardCategory {
   const haystack = `${input.merchant} ${input.subtitle ?? ''}`.toLowerCase();
   for (const rule of TR_MERCHANT_RULES) {
-    if (rule.patterns.some((pattern) => haystack.includes(pattern))) return fromRule(rule);
+    if (rule.patterns.some((pattern) => matchesPattern(haystack, pattern))) return fromRule(rule);
   }
   const icon = (input.icon ?? '').toLowerCase();
   if (icon) {
     for (const rule of TR_ICON_RULES) {
-      if (rule.patterns.some((pattern) => icon.includes(pattern))) return fromRule(rule);
+      if (rule.patterns.some((pattern) => matchesPattern(icon, pattern))) return fromRule(rule);
     }
   }
   return { ...TR_CARD_FALLBACK_CATEGORY, fallback: true };
