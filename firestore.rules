@@ -321,6 +321,21 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Trade Republic card-import LEDGER (doc id = ownerUid, array `sourceRefs`) and TOMBSTONES
+    // (subcollection `refs/{sourceRef}`). Both are server-owned exactly like `assetTransactions`:
+    // they are the memory that turns «the row is gone from Cashflow» into «the user deleted it, so
+    // do not bring it back». A client that could write them could defeat the idempotency promise,
+    // so the route is the only writer (Admin SDK + `assertCanAccessAccount`). Read is allowed to
+    // the owner only for inspection/export; no client code reads them today.
+    match /brokerCardExpenseImports/{userId} {
+      allow read: if canAccess(userId);
+      allow write: if false;
+    }
+    match /brokerExpenseTombstones/{userId}/refs/{sourceRef} {
+      allow read: if canAccess(userId);
+      allow write: if false;
+    }
+
     // Collezione account-access - concessioni di accesso delegato (doc id = ownerUid)
     // Lettura: il proprietario, o un membro elencato (abilita sia get() delle rules
     //   sopra sia la query array-contains con cui il viewer scopre gli account condivisi).

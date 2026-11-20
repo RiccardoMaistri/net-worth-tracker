@@ -944,6 +944,29 @@ describe('describeBrokerConnections', () => {
     ).not.toContain('piano di accumulo');
   });
 
+  it('names the card expenses as a separate act from the sync, and drops the clause at zero', () => {
+    const text = plain(
+      describeBrokerConnections('traderepublic', {
+        lastSyncAt: '2026-09-18T10:00:00.000Z',
+        holdingsCount: 2,
+        cashBalance: 500,
+        cardExpenseCount: 42,
+      })
+    );
+    expect(text).toBe(
+      'Ultima lettura 18/09/2026 da Trade Republic: 2 posizioni e liquidità 500 € — le quantità restano del Registro, i prezzi arrivano da Yahoo. 42 movimenti carta importati nel Cashflow.'
+    );
+    expect(
+      plain(
+        describeBrokerConnections('traderepublic', {
+          lastSyncAt: '2026-09-18T10:00:00.000Z',
+          holdingsCount: 2,
+          cardExpenseCount: 0,
+        })
+      )
+    ).not.toContain('movimenti carta');
+  });
+
   it('states the Trade Republic empty state with its own scope', () => {
     expect(plain(describeBrokerConnections('traderepublic', {}))).toBe(
       'Nessuna sincronizzazione Trade Republic: la sincronizzazione legge posizioni, liquidità e piani di accumulo, in sola lettura.'

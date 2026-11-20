@@ -27,6 +27,13 @@
 > `lib/server/tradeRepublicQr.ts` (handshake QR), `lib/server/tradeRepublicClient.ts` (sessione),
 > `lib/utils/tradeRepublicSession.ts` (involucro della sessione), `app/api/broker/traderepublic/session`,
 > `lib/server/qrImage.ts`,
+> `lib/constants/trMerchantCategoryRules.ts` (mercante → categoria, solo per le spese carta),
+> `lib/utils/tradeRepublicCardExpenses.ts` (parser, finestra di 12 mesi, esclusione ATM, piano e
+> idempotenza della carta),
+> `lib/server/brokerCardExpenseImportService.ts`, `lib/services/brokerCardExpenseImportService.ts`
+> (Admin SDK e porta client dell'import spese), `lib/types/tradeRepublicCardImport.ts` (DTO),
+> `app/api/broker/traderepublic/card-expenses`,
+> `components/settings/broker/BrokerCardExpenseImportDialog.tsx` (anteprima → applica → annulla),
 > `app/api/broker/**`, `lib/services/brokerConnectionService.ts` (metadati
 > `brokerConnections/{ownerId}/brokers/{broker}`) o `firestore.rules` (la match `brokerSessions`).
 > File: `CLAUDE.md` → *Key Features* → *Collegamenti broker*.
@@ -163,6 +170,70 @@
     dire. Non è un errore di credenziali e non si risolve ritentando.
 - **Il salvataggio scrive solo asset nuovi e la cassa.** Nessun prezzo (non letto), nessuna
   quantità (è del Registro), nessun piano di accumulo (una regola del broker).
+
+## Spese della carta Trade Republic — tre atti, un'unica lettura (`tradeRepublicCardExpenses.ts`)
+
+- **Il terzo pulsante della tile non è una variante della sync.** Portafoglio, registro operazioni
+  e spese carta sono TRE scritture distinte: la prima tocca gli asset, la seconda le operazioni,
+  la terza il Cashflow. Condividono solo la sessione e il topic di lettura
+  (`readTrCardExpenseTimeline`, letto con `readTimeline` come il registro). `TR_READ_COMMANDS`
+  resta la whitelist dei tre topic di portafoglio: la timeline carta è un nuovo fratello di
+  `readTrTradeHistory`, non un quarto comando aggiunto a quella lista. Verso il broker tutto è
+  lettura: nessun endpoint di scrittura, nessun PSD2/TPP.
+- **La finestra è di 12 mesi e si applica ALLA LETTURA.** `readTrCardExpenseTimeline` passa
+  `trCardExpenseWindowStart()` come `from` del `getTimelineTransactions`, mentre il registro operazioni
+  conserva l'archivio intero (`TR_TRANSACTIONS_FROM`, 2015 — nella pratica il 2024-03-28). È la
+  differenza tra due fratelli che leggono lo stesso topic. Filtrare DOPO la lettura sarebbe sbagliato:
+  una riga uscita dalla finestra apparirebbe come «eliminata dall'utente» nel ledger. Il parser
+  applica lo stesso helper come seconda linea di difesa; le righe fuori finestra sono FUORI SCOPO,
+  non «saltate», e non affollano l'elenco dei motivi. Il modal dichiara la finestra sopra l'anteprima.
+- **Un prelievo contanti non è una spesa.** Bonifici e interessi non entrano perché non sono eventi
+  `CARD_*`; i prelievi ATM invece lo sono, e vengono esclusi da `isTrCardAtmWithdrawal` con un motivo
+  dichiarato. Il riconoscimento usa i segnali STRUTTURALI che la timeline mandi — `eventType`, le
+  icone del broker sotto `card/` — e solo frasi inequivocabili nel titolo/sottotitolo: un «ATM»
+  da solo NON basta, perché ATM è anche l'azienda di trasporti di Milano e un biglietto è una spesa
+  vera. Le icone `logos/…` sono marchi, non azioni del broker, e non decidono mai.
+- **Anteprima → applica → annulla, senza scritture silenziose.** Il modal apre sempre sul ramo
+  `preview` (solo letture) e lista le righe per categoria, con checkbox di gruppo e di riga e
+  l'elenco delle categorie da creare. L'utente approva con «Importa N»; il route **rilegge la
+  timeline e ricostruisce il piano sullo stato corrente**, quindi scrive solo l'intersezione con i
+  ref approvati — un'anteprima vecchia non può scrivere una riga che nel frattempo non esiste più,
+  né creare una categoria il cui ogni riga è stata deselezionata (`restrictTrCardPlanToApproved`).
+  Dopo l'applicazione si atterra su `/dashboard/cashflow?tab=tracking` con `useSceneNavigation()`:
+  le righe scritte sono là. Il toast porta «Annulla», che è l'undo; un'applicazione parziale resta
+  aperta e mostra i fallimenti.
+- **L'idempotenza è il doc id, non un indice.** Ogni spesa nasce con
+  `tr_${ownerId}_${sourceRef}` e viene scritta solo con `create()`: una seconda sync trova il
+  documento e lo dice «già importata», senza riscriverlo — quindi non cancella una
+  riclassifica fatta a mano nel Cashflow. L'esistenza si controlla con un `getAll` sui ref
+  deterministici del timeline corrente (nessun indice composito), non con un `where` sul campo
+  `source`.
+- **Una riga eliminata non torna.** Il ledger Admin-only
+  `brokerCardExpenseImports/{ownerId}` ricorda ogni ref importato almeno una volta: se il
+  documento non c'è più, la riga è «rimossa» e resta fuori. L'undo scrive anche
+  `brokerExpenseTombstones/{ownerId}/refs/{sourceRef}`, così l'intenzione sopravvive anche a una
+  ricostruzione del ledger. Entrambe le collezioni sono `if false` nelle rules: le scrive solo la
+  route Admin SDK, che ha già fatto `assertCanAccessAccount`.
+- **La categoria è rilevata in modo deterministico, non inventata.** `detectTrCardCategory`
+  prova le regole sul mercante (`trMerchantCategoryRules.ts`), poi l'icona, poi una categoria
+  esistente con lo stesso nome o sottocategoria; quello che resta finisce in «Altro» ed è
+  dichiarato in un avviso. L'identità è `(nome normalizzato, type)` (`categoryMatchKey`): due
+  categorie con la stessa chiave risolvono alla più vecchia e l'avviso lo dice. Le categorie
+  mancanti sono **proposte** in `categoriesToCreate` e create solo dopo l'approvazione. Un
+  rimborso è un importo positivo nella stessa categoria, con `amountSign: 'refund'` esplicito;
+  `originalAmount`/`originalCurrency` sono dichiarati ma non totalizzati.
+- **Nessun `linkedCashAssetId`.** Il saldo contanti del broker riflette già il pagamento della
+  carta: muovere anche un conto contanti locale conterebbe lo stesso euro due volte. Ogni riga
+  porta `source: 'traderepublic-card'`, `sourceRef` e `sourceFingerprint` per provenienza.
+- **Il conteggio nella riga di lettura è un'altra scrittura.** `saveBrokerCardExpenseCount`
+  fa un merge con soli `cardExpenseCount` e `updatedAt`: non tocca `lastSyncAt`, così una sync
+  di portafoglio non azzera il conteggio e l'import carta non può sovrascrivere i conteggi del
+  portafoglio. `describeBrokerConnections` lo dice come frase separata dalla «Ultima lettura».
+- **Le suite di questa area**: `__tests__/tradeRepublicCardExpenses.test.ts` (parser, piano,
+  idempotenza, tombstone, categorie), `__tests__/brokerCardExpenseImportService.test.ts` (le
+  decisioni di scrittura: `create()`-only, solo i ref approvati, undo),
+  `__tests__/tradeRepublicCardExpensesRoute.test.ts` (dispatch dei tre `action`, autorizzazione,
+  mapping degli errori) e `__tests__/settingsNarrative.test.ts` (la frase del conteggio).
 
 ##Collegamenti broker — sync in sola lettura da Scalable (`scalableImport.ts`, `scalableCli.ts`)
 
@@ -448,6 +519,20 @@
   saldo EUR non viene sommato: se ti serve, creane il conto a parte. E un piano di accumulo qui è
   solo DICHIARATO: l'app non lo usa per calcolare la spesa futura, quindi non aspettarti che
   compaia nel Cashflow o nel piano FIRE.
+- **Spese carta Trade Republic**: «già importate» non significa «identiche a quelle del broker»:
+  la riga che hai riclassificato nel Cashflow resta come l'hai lasciata, e il pulsante non la
+  tocca. Una riga che era stata importata e l'hai eliminata non ricompare — è il ledger a
+  ricordarsela, non un cache. «In «Altro»» non è un errore di lettura: la timeline non porta MCC
+  né categoria, solo titolo, sottotitolo e icona; se nessuna regola riconosce il mercante la
+  categoria è dichiarata di ripiego e la spesa è comunque importata. I movimenti in valuta
+  straniera senza controvalore EUR vengono saltati e il motivo compare in «non importabili» —
+  importarli al cambio sbagliato sarebbe peggio che ometterli. Il primo pulsante non ti porta lo
+  storico dell'account: solo gli ultimi 12 mesi, e la finestra si sposta ogni volta che lo apri —
+  una spesa più vecchia non «torna» se la cerchi a distanza di mesi. I prelievi ATM compaiono tra i
+  «non importabili» con il loro motivo: non sono spese, e il contanti che hai in mano non ha una
+  categoria. Infine «N movimenti carta» è un conteggio di importazioni ENTRO LA FINESTRA, non un
+  saldo: se elimini una riga a mano quel numero non si aggiorna da solo, si aggiorna alla prossima
+  importazione.
 - **Intesa Sanpaolo**: il «Totale Controvalore» del file comprende le posizioni, non la liquidità —
   il saldo arriva dalla sezione Liquidità e diventa un conto a parte. Una riga di certificato porta
   un `Data-Ora` (`16.29.36`) nella colonna della data: non è un numero e non deve finire nel parser

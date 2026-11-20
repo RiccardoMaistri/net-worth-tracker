@@ -7,6 +7,11 @@
 // - transfer: Inter-account transfers (net-zero for portfolio, excluded from all metrics)
 export type ExpenseType = 'fixed' | 'variable' | 'debt' | 'income' | 'transfer';
 
+// Where an expense document was born, when the app did not author it from a form.
+// Today only one value: the Trade Republic card sync (lib/server/brokerCardExpenseImportService.ts).
+// A row without `source` was written by the user (the form, the CSV import, a recurring series).
+export type ExpenseSource = 'traderepublic-card';
+
 // How often a recurring expense series repeats.
 // Declared here rather than next to the date arithmetic (lib/utils/recurrenceDates.ts) so that
 // module can depend on the domain types without the types depending back on it.
@@ -170,6 +175,25 @@ export interface Expense {
   // Set only on expenses written by the historical CSV importer (lib/services/expenseImportService.ts).
   // Groups every row of one import together so the whole batch can be undone in one call.
   importBatchId?: string;
+  // ─── Provenance of a row the app did not author (broker syncs) ───────────────
+  // A synced row is WRITTEN ONCE and then belongs to the user: the importer only ever `create()`s,
+  // never updates, so an edit survives every later sync. These fields say where it came from.
+  //
+  // `sourceRef` is the broker's own movement id and is part of the document id
+  // (`tr_${userId}_${sourceRef}`), which is the idempotency key of the whole import.
+  source?: ExpenseSource;
+  sourceRef?: string;
+  // Content hash of the broker row at import time (date | amount | merchant). Stored for
+  // provenance only — it is never compared to overwrite anything.
+  sourceFingerprint?: string;
+  // The direction the broker reported, for a row whose sign alone cannot say it: a card REFUND is
+  // POSITIVE in its spending category, exactly like an income row, and only this field tells the
+  // two apart. Absent on every row the user wrote.
+  amountSign?: 'expense' | 'refund';
+  // The amount as the card network charged it, when the settlement currency was not EUR.
+  // Declared beside the EUR figure, never summed with it.
+  originalAmount?: number;
+  originalCurrency?: string;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -830,6 +830,8 @@ export interface BrokerConnectionsInput {
   cashBalance?: number;
   /** Trade Republic savings plans («Sparpläne») as last read. */
   savingsPlanCount?: number;
+  /** Card movements already written in Cashflow, from the card-import dialog. */
+  cardExpenseCount?: number;
 }
 
 /**
@@ -843,7 +845,7 @@ export interface BrokerConnectionsInput {
  */
 export function describeBrokerConnections(
   broker: 'scalable' | 'traderepublic' | 'intesa' | 'azimut' | 'binance',
-  { lastSyncAt, holdingsCount, cashBalance, savingsPlanCount }: BrokerConnectionsInput
+  { lastSyncAt, holdingsCount, cashBalance, savingsPlanCount, cardExpenseCount }: BrokerConnectionsInput
 ): Narrative {
   const isTradeRepublic = broker === 'traderepublic';
   const isIntesa = broker === 'intesa';
@@ -899,5 +901,14 @@ export function describeBrokerConnections(
             ? ' — le quantità restano del Registro, i prezzi arrivano da Yahoo o da Binance.'
             : ' — i prezzi si aggiornano, le quantità restano del Registro.'
     ),
+    // A separate sentence, not a clause of «Ultima lettura»: the card count is written by the card
+    // import, which is a different act from the portfolio sync whose date the first sentence names.
+    ...(isTradeRepublic && cardExpenseCount !== undefined && cardExpenseCount > 0
+      ? [
+          prose(
+            ` ${cardExpenseCount} ${cardExpenseCount === 1 ? 'movimento carta importato' : 'movimenti carta importati'} nel Cashflow.`
+          ),
+        ]
+      : []),
   ];
 }

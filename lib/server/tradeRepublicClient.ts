@@ -41,6 +41,7 @@ import {
   serializeTrSession,
   type TrCookieJar,
 } from '@/lib/utils/tradeRepublicSession';
+import { trCardExpenseWindowStart } from '@/lib/utils/tradeRepublicCardExpenses';
 
 const SESSIONS_COLLECTION = 'brokerSessions';
 
@@ -410,27 +411,63 @@ function tradeRowsNeedingDetail(timeline: unknown): { sourceRef: string; detailI
  */
 export async function readTrTradeHistory(ownerId: string): Promise<TrTradeHistory> {
   const entry = await ownerClient(ownerId);
+  const timeline = await readTimeline(ownerId, entry);
+
+  const details: Record<string, unknown> = {};
+  const rows = tradeRowsNeedingDetail(timeline);
+  for (const row of rows.slice(0, TR_DETAIL_READ_CAP)) {
+    try {
+      // The parser joins through `action.payload` (`detailId`), not the timeline row id. Those
+      // two values often differ: storing the result under `sourceRef` made every such otherwise
+      // valid order look as if its detail had failed to load.
+      details[row.detailId] = await entry.client.topic('timelineDetailV2').get({ id: row.detailId });
+    } catch {
+      // Absent by design — see the docstring.
+    }
+  }
+
+  void persistRefreshedSession(ownerId, entry.client);
+  return { timeline, details };
+}
+
+/**
+ * The timeline a CARD-EXPENSE import reads: the same topic as the trade history, narrowed to the
+ * last 12 months, with no detail reads.
+ *
+ * Read-only like everything else here, and a deliberate sibling of `readTrTradeHistory` rather
+ * than a fourth entry in `TR_READ_COMMANDS`: the card rows come from the SAME `timelineTransactions`
+ * topic the ledger reads, and a card import has no per-row detail to fetch (the detail topic
+ * carries quantity and unit price, which a card purchase does not have). Keeping it out of the
+ * route command union leaves that union describing the portfolio reads only.
+ *
+ * THE WINDOW: the trade history asks for the whole broker archive (from 2015, which really starts
+ * in 2024), but the card import asks only for the last 12 months. This is the read's `from`, so the
+ * ledger and the preview see the SAME population — filtering after the read would make a row that
+ * fell out of the window look like one the user deleted. `trCardExpenseWindowStart` is the one
+ * definition of that boundary; the parser applies the same helper as a second line of defence.
+ */
+export async function readTrCardExpenseTimeline(ownerId: string): Promise<unknown> {
+  const entry = await ownerClient(ownerId);
+  const timeline = await readTimeline(ownerId, entry, trCardExpenseWindowStart());
+  void persistRefreshedSession(ownerId, entry.client);
+  return timeline;
+}
+
+/**
+ * The one place a failed timeline read becomes the right error. Shared by the trade history and
+ * the card import so the two cannot drift into telling the user different things about the same
+ * dead session.
+ */
+async function readTimeline(
+  ownerId: string,
+  entry: OwnerClient,
+  from: Date = TR_TRANSACTIONS_FROM
+): Promise<unknown> {
   try {
-    const timeline = await entry.client.getTimelineTransactions({
-      from: TR_TRANSACTIONS_FROM,
+    return await entry.client.getTimelineTransactions({
+      from,
       maxPages: TR_TRANSACTION_MAX_PAGES,
     });
-
-    const details: Record<string, unknown> = {};
-    const rows = tradeRowsNeedingDetail(timeline);
-    for (const row of rows.slice(0, TR_DETAIL_READ_CAP)) {
-      try {
-        // The parser joins through `action.payload` (`detailId`), not the timeline row id. Those
-        // two values often differ: storing the result under `sourceRef` made every such otherwise
-        // valid order look as if its detail had failed to load.
-        details[row.detailId] = await entry.client.topic('timelineDetailV2').get({ id: row.detailId });
-      } catch {
-        // Absent by design — see the docstring.
-      }
-    }
-
-    void persistRefreshedSession(ownerId, entry.client);
-    return { timeline, details };
   } catch (error) {
     if (error instanceof TradeRepublicAuthError) throw error;
     const status = entry.client.session.getSnapshot().validity;
