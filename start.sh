@@ -37,10 +37,17 @@ java_major() { "$1" -version 2>&1 | sed -n 's/.*version "\([0-9]*\).*/\1/p' | he
 
 # The Firestore emulator needs Java >= 21. Prefer an existing JAVA_HOME if it
 # qualifies, else the portable Temurin JRE in ~/.jdk (no sudo needed), else a
+# Homebrew openjdk@21 (keg-only, so NOT on PATH by default — the opt symlink is
+# under /opt/homebrew on Apple Silicon and /usr/local on Intel), else a
 # system-wide 21 in /usr/lib/jvm, else whatever java is on PATH.
 pick_java21() {
-  local bin major
-  for bin in ${JAVA_HOME:+"$JAVA_HOME/bin/java"} "$HOME"/.jdk/*/bin/java /usr/lib/jvm/*/bin/java "$(command -v java)"; do
+  local bin major brew_prefix=""
+  if command -v brew >/dev/null 2>&1; then
+    brew_prefix="$(brew --prefix openjdk@21 2>/dev/null || true)"
+  fi
+  for bin in ${JAVA_HOME:+"$JAVA_HOME/bin/java"} "$HOME"/.jdk/*/bin/java \
+    /opt/homebrew/opt/openjdk@21/bin/java /usr/local/opt/openjdk@21/bin/java \
+    ${brew_prefix:+"$brew_prefix/bin/java"} /usr/lib/jvm/*/bin/java "$(command -v java)"; do
     [ -x "$bin" ] || continue
     major="$(java_major "$bin")"
     if [ -n "$major" ] && [ "$major" -ge 21 ] 2>/dev/null; then
@@ -53,7 +60,8 @@ pick_java21() {
 
 JAVA_BIN="$(pick_java21)" || {
   echo "No Java >= 21 found. Install one, e.g.:" >&2
-  echo "  sudo apt install -y openjdk-21-jre-headless" >&2
+  echo "  brew install openjdk@21                       # macOS (Homebrew)" >&2
+  echo "  sudo apt install -y openjdk-21-jre-headless   # Debian/Ubuntu" >&2
   echo "or a portable Temurin 21 JRE into ~/.jdk (see SETUP.md, Step 6)." >&2
   exit 1
 }
