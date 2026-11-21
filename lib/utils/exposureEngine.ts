@@ -39,6 +39,7 @@ import { expandAssetExposure, type ExposureComponent } from '@/lib/utils/assetEx
 import { getAssetDisplayTicker } from '@/lib/utils/assetDisplay';
 import { sectorLabel } from '@/lib/constants/exposureSectors';
 import { effectiveProfileTicker, isExposureBaseAsset, isQuotedInstrument, profileModuleFor } from '@/lib/utils/exposureRequests';
+import { matchIndexRegionComposition } from '@/lib/constants/indexRegionCompositions';
 
 // ─── What each class can say about itself ────────────────────────────────────
 
@@ -91,7 +92,22 @@ export const NON_LOOKTHROUGH_ASSET_CLASSES: ReadonlySet<string> = new Set(
   (Object.keys(LEG_DESTINY) as AssetClass[]).filter((assetClass) => LEG_DESTINY[assetClass] === 'notApplicable'),
 );
 
-/** Determines a region label from an instrument ticker suffix when Yahoo profile is absent. */
+/** Maps country region names to continents. */
+const regionToContinent: Record<string, string> = {
+  Italia: 'Europa',
+  Germania: 'Europa',
+  Francia: 'Europa',
+  'Gran Bretagna': 'Europa',
+  Svizzera: 'Europa',
+  Brasile: 'Sud America',
+  Canada: 'Nord America',
+  Australia: 'Oceania',
+  'Hong Kong': 'Asia',
+  'Corea del Sud': 'Asia',
+  Spagna: 'Europa',
+};
+
+/** Determines a continent label from an instrument ticker suffix when Yahoo profile is absent. */
 function tickerToRegion(ticker: string): string | null {
   const upper = ticker.toUpperCase();
   // Check for exact suffix matches
@@ -106,6 +122,46 @@ function tickerToRegion(ticker: string): string | null {
   if (upper === 'CH' || upper.endsWith('.SW')) return 'Svizzera';
   return null;
 }
+
+/** Maps a region name to its continent; falls through to the original region if unknown. */
+function regionToContinentName(region: string): string {
+  const continent = regionToContinent[region];
+  return continent ?? region;
+}
+
+/** Reads geographic region slices from an asset's profile for the "regions" view. */
+const readRegions: SliceReader = ({ asset, profile }) => {
+  const profileModule = profileModuleFor(asset.type);
+  if (profileModule === 'stock') {
+    const region = tickerToRegion(effectiveProfileTicker(asset));
+    if (region) {
+      const continent = regionToContinentName(region);
+      return [{ key: continent.toUpperCase(), label: continent, weight: 1 }];
+    }
+    return null;
+  }
+  if (profileModule === 'fund') {
+    // Try to match the fund's index name against known region compositions.
+    // The fund family as Yahoo writes it is used as the name to match against.
+    if (profile?.fund?.family) {
+      const composition = matchIndexRegionComposition(profile.fund.family);
+      if (composition) {
+        const heaviestRegion = Object.keys(composition.weights).reduce(
+          (a, b) => (composition.weights as any)[a] > (composition.weights as any)[b] ? a : b,
+        );
+        return [{ key: heaviestRegion.toUpperCase(), label: heaviestRegion, weight: 1 }];
+      }
+    }
+    // Fall back to ticker suffix region detection.
+    const region = tickerToRegion(effectiveProfileTicker(asset));
+    if (region) {
+      const continent = regionToContinentName(region);
+      return [{ key: continent.toUpperCase(), label: continent, weight: 1 }];
+    }
+    return null;
+  }
+  return null;
+};
 
 // ─── Accumulators ────────────────────────────────────────────────────────────
 
@@ -357,6 +413,6 @@ export function computeExposure(assets: Asset[], profiles: Record<string, Instru
     sectors: accumulateEquityView(baseAssets, readSectors, false),
     issuers: accumulateIssuers(baseAssets),
     quotedCount: baseAssets.filter((base) => base.quoted).length,
-    regions: accumulateEquityView(baseAssets, readSectors, false),
+    regions: accumulateEquityView(baseAssets, readRegions, false),
   };
 }
