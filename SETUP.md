@@ -539,7 +539,7 @@ Gli asset hanno checksum e una firma minisign del manifest, e il README upstream
 solo binari di cui ti fidi «especially before logging in». Con `minisign` e `gh` installati:
 
 ```bash
-tag="vX.Y.Z"
+tag="v1.3.0"
 arch="x86_64"            # oppure aarch64
 repo="ScalableCapital/scalable-cli"
 minisign_public_key="<prendi dalla sezione 'Release artifact provenance' del README, per QUESTA release>"
