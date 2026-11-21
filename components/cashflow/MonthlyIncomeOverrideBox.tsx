@@ -20,6 +20,7 @@ import { resolveCenteredModalOrigin } from '@/lib/utils/modalOrigin';
 import { TILE_EYEBROW_CLASS } from '@/components/ui/tile';
 import { MonthlyIncomeOverrideDialog } from '@/components/cashflow/MonthlyIncomeOverrideDialog';
 import { useMonthlyIncomeOverrideEditor } from '@/lib/hooks/useMonthlyIncomeOverrideEditor';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   isFixedIncomeConfigured,
   monthKeyOf,
@@ -69,6 +70,7 @@ export function MonthlyIncomeOverrideBox({
   }
 
   if (overridesFailed) {
+    const queryClient = useQueryClient();
     return (
       <div
         role="status"
@@ -79,6 +81,13 @@ export function MonthlyIncomeOverrideBox({
       >
         <span className={TILE_EYEBROW_CLASS}>Reddito</span>
         <span className="text-[11px] text-destructive">correzioni non disponibili</span>
+        <button
+          onClick={() => queryClient.refetchQueries({ queryKey: ['monthly-income-overrides', ownerId] })}
+          className="ml-2 text-[10px] text-primary hover:underline"
+          aria-label="Riprova a caricare le correzioni"
+        >
+          Riprova
+        </button>
       </div>
     );
   }
