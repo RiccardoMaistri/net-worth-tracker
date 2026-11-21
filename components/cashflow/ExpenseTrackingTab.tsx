@@ -763,7 +763,7 @@ export function ExpenseTrackingTab({
     );
   }, [windowExpenses, period, now]);
 
-  const verdict = useMemo(() => buildCashflowVerdict({ period, now, totals, delta, scheduled }), [period, now, totals, delta, scheduled]);
+  const verdict = useMemo(() => buildCashflowVerdict({ period, now, totals, delta, scheduled, fixedIncomeEur }), [period, now, totals, delta, scheduled]);
   const comparisonPhrase = describeComparisonPhrase(period, now);
   const previousLabel = describePreviousPeriodLabel(period, now);
 
