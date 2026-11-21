@@ -52,6 +52,12 @@ export interface BrokerConnection {
   depositInterestRate?: number;
   /** Trade Republic savings plans («Sparpläne») as last read. DECLARED, never written. */
   savingsPlanCount?: number;
+  /**
+   * Card movements the Trade Republic sync has written into Cashflow (imported or already there).
+   * Written ONLY by the card import, so a portfolio sync must never clear it — that is why the
+   * tile's save does not carry it and `setDoc` merges.
+   */
+  cardExpenseCount?: number;
   createdAssets?: number;
   updatedPrices?: number;
   createdAt: Date;
@@ -100,6 +106,8 @@ function toBrokerConnection(
       typeof data['depositInterestRate'] === 'number' ? data['depositInterestRate'] : undefined,
     savingsPlanCount:
       typeof data['savingsPlanCount'] === 'number' ? data['savingsPlanCount'] : undefined,
+    cardExpenseCount:
+      typeof data['cardExpenseCount'] === 'number' ? data['cardExpenseCount'] : undefined,
     createdAssets: typeof data['createdAssets'] === 'number' ? data['createdAssets'] : undefined,
     updatedPrices: typeof data['updatedPrices'] === 'number' ? data['updatedPrices'] : undefined,
     createdAt: toDate(data['createdAt'], now),
@@ -134,6 +142,35 @@ export async function saveBrokerConnection(
   await setDoc(
     ref,
     existing.exists() ? payload : { ...payload, createdAt: now },
+    { merge: true }
+  );
+}
+
+/**
+ * Record how many card movements the import has put in Cashflow.
+ *
+ * A writer of its own rather than a `saveBrokerConnection` call: that one requires the portfolio
+ * counts (`holdingsCount`), and passing them from the import dialog would mean the card import
+ * overwriting a sync it never performed. Here only this field and `updatedAt` move — `setDoc`
+ * merges, so the portfolio metadata the sync wrote stays exactly as it was.
+ */
+export async function saveBrokerCardExpenseCount(
+  ownerId: string,
+  count: number,
+  broker: BrokerId = 'traderepublic'
+): Promise<void> {
+  const ref = connectionRef(ownerId, broker);
+  const now = new Date();
+  const existing = await getDoc(ref);
+  await setDoc(
+    ref,
+    removeUndefinedDeep({
+      userId: ownerId,
+      broker,
+      cardExpenseCount: count,
+      updatedAt: now,
+      ...(existing.exists() ? {} : { createdAt: now }),
+    }),
     { merge: true }
   );
 }

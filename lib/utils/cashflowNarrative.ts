@@ -498,14 +498,14 @@ function historyRate(rate: number): NarrativeSegment {
 
 /**
  * "In media il 31%; il mese migliore è stato aprile (44%), il peggiore dicembre (12%)." —
- * only over the months that had income; one measured month is named as such, none → null.
+ * only over the months with a declared income; one measured month is named as such, none → null.
  */
 export function describeSavingsHistory(history: SavingsHistory): Narrative | null {
   if (history.measuredCount === 0 || history.average === null || !history.best || !history.worst) return null;
 
   if (history.measuredCount === 1) {
     return [
-      prose(`Un solo mese con entrate: ${monthInSentence(history.best.month)} (`),
+      prose(`Un solo mese con reddito impostato: ${monthInSentence(history.best.month)} (`),
       historyRate(history.best.savingsRate ?? 0),
       prose(').'),
     ];
@@ -521,7 +521,7 @@ export function describeSavingsHistory(history: SavingsHistory): Narrative | nul
 
   // Equal rates everywhere are not a ranking.
   if ((history.best.savingsRate ?? 0) === (history.worst.savingsRate ?? 0)) {
-    return [prose('In media '), ...average, ...scope, prose(`, uguale in tutti ${pluralArticleFor(history.measuredCount)} ${history.measuredCount} mesi con entrate.`)];
+    return [prose('In media '), ...average, ...scope, prose(`, uguale in tutti ${pluralArticleFor(history.measuredCount)} ${history.measuredCount} mesi con reddito impostato.`)];
   }
 
   return [
@@ -586,9 +586,9 @@ export function describeDeficitMonths(history: SavingsHistory, now: Date): Narra
   const deficit = history.deficitMonths;
   if (deficit.length === 0) {
     const { measuredCount, closedCount, months } = history;
-    if (measuredCount === 1) return [prose("Nessun deficit nell'unico mese con entrate.")];
+    if (measuredCount === 1) return [prose("Nessun deficit nell'unico mese con reddito impostato.")];
     if (measuredCount < closedCount) {
-      return [prose(`Nessun mese in deficit ne${pluralArticleFor(measuredCount)} `), figure(String(measuredCount)), prose(' con entrate.')];
+      return [prose(`Nessun mese in deficit ne${pluralArticleFor(measuredCount)} `), figure(String(measuredCount)), prose(' con reddito impostato.')];
     }
     if (history.ongoing) {
       return [prose(`Nessun mese in deficit ne${pluralArticleFor(closedCount)} `), figure(String(closedCount)), prose(' chiusi.')];

@@ -42,8 +42,8 @@ export default function AnalisiPage() {
   const categoriesQuery = useExpenseCategories(ownerId);
   const { data: categories = [], isLoading: categoriesLoading, isError: categoriesError } = categoriesQuery;
 
-  // The two settings the page reads — the history floor and the 50/30/20 flag — from the ONE
-  // settings key every page shares (2026-09-29): a visit after Cashflow opens on the cache.
+  // The settings the page reads — history floor, 50/30/20 flag and the declared monthly income
+  // behind the savings trend — from the ONE settings key every page shares (2026-09-29).
   const settingsQuery = useSettings(ownerId);
   const { data: settings, isLoading: settingsLoading, isError: settingsError } = settingsQuery;
   // The header's «Aggiornato alle…» while figures restored from the persisted cache are being
@@ -80,6 +80,9 @@ export default function AnalisiPage() {
         loading={loading}
         loadFailed={loadFailed}
         historyStartYear={cashflowHistoryStartYear}
+        ownerId={ownerId}
+        fixedIncomeEur={settings?.fixedMonthlyIncomeEur}
+        activationMonth={settings?.fixedMonthlyIncomeStartMonth}
         spendingRolesEnabled={spendingRolesEnabled}
         freshness={freshness}
       />

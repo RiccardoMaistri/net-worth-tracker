@@ -46,6 +46,9 @@ import { Dividend } from '@/types/dividend';
 import { FamilyMember } from '@/types/assets';
 import type { Expense } from '@/types/expenses';
 import { useExpensesInRange, useExpenseBounds, useExpenseCategories } from '@/lib/hooks/useExpenses';
+import { useMonthlyIncomeOverrides } from '@/lib/hooks/useMonthlyIncomeOverrides';
+import { MonthlyIncomeOverrideBox } from '@/components/cashflow/MonthlyIncomeOverrideBox';
+import { resolveAnchorMonth } from '@/lib/utils/tracciamentoSummary';
 import { useAssets } from '@/lib/hooks/useAssets';
 import { useSettings } from '@/lib/hooks/useSettings';
 import { useFreshness } from '@/lib/hooks/useFreshness';
@@ -130,6 +133,13 @@ export default function CashflowPage() {
   const categoriesQuery = useExpenseCategories(ownerId);
   const assetsQuery = useAssets(ownerId);
   const settingsQuery = useSettings(ownerId);
+  // The month corrections behind Tracciamento's savings chart AND the box beside «Nuova Spesa»:
+  // one key, so the header and the tab share one read.
+  const { data: incomeOverrides = {}, isLoading: overridesLoading, isError: overridesFailed } = useMonthlyIncomeOverrides(ownerId);
+  // The box corrects the period's anchor month — the page's one axis. The clock is read once, like
+  // the tab's, so the box and the chart behind it name the same month for the life of the page.
+  const now = useMemo(() => new Date(), []);
+  const trackingAnchor = useMemo(() => resolveAnchorMonth(trackingPeriod, now), [trackingPeriod, now]);
   const { data: trackingExpenses = EMPTY_EXPENSES, isLoading: expensesLoading, isError: expensesError } = expensesQuery;
   const { data: categories = [], isLoading: categoriesLoading, isError: categoriesError } = categoriesQuery;
   const { data: allAssets = [], isLoading: assetsLoading, isError: assetsError } = assetsQuery;
@@ -289,17 +299,35 @@ export default function CashflowPage() {
         actions={
           <div className="flex items-center gap-2">
             {effectiveTab === 'tracking' && (
-              <Button
-                size="sm"
-                disabled={isDemo}
-                aria-label={isDemo ? 'Nuova Spesa — non disponibile in modalità demo' : 'Nuova Spesa'}
-                title={isDemo ? 'Non disponibile in modalità demo' : undefined}
-                onClick={() => window.dispatchEvent(new CustomEvent('cashflow:add-expense'))}
-                className="hidden desktop:flex"
-              >
-                <Plus className="h-4 w-4" />
-                Nuova Spesa
-              </Button>
+              <>
+                {/* The month's declared income, beside the add button: it corrects the month the
+                    period is about and opens the same dialog the savings charts use. Hidden in the
+                    phone's header — there the tab renders it in its own row (PageHeader mounts
+                    `actions` twice). */}
+                <MonthlyIncomeOverrideBox
+                  className="hidden desktop:flex"
+                  ownerId={ownerId ?? undefined}
+                  fixedIncomeEur={settings?.fixedMonthlyIncomeEur}
+                  activationMonth={settings?.fixedMonthlyIncomeStartMonth}
+                  overrides={incomeOverrides}
+                  overridesLoading={overridesLoading}
+                  overridesFailed={overridesFailed}
+                  year={trackingAnchor.year}
+                  month={trackingAnchor.month}
+                  isDemo={isDemo}
+                />
+                <Button
+                  size="sm"
+                  disabled={isDemo}
+                  aria-label={isDemo ? 'Nuova Spesa — non disponibile in modalità demo' : 'Nuova Spesa'}
+                  title={isDemo ? 'Non disponibile in modalità demo' : undefined}
+                  onClick={() => window.dispatchEvent(new CustomEvent('cashflow:add-expense'))}
+                  className="hidden desktop:flex"
+                >
+                  <Plus className="h-4 w-4" />
+                  Nuova Spesa
+                </Button>
+              </>
             )}
             {/* Dividendi's two page-level actions. The tab owns the dialogs behind them, so the
                 header only dispatches — the same channel «Nuova Spesa» uses above. Both are
@@ -429,6 +457,8 @@ export default function CashflowPage() {
               onRefresh={handleRefresh}
               assetNameMap={assetNameMap}
               splitEnabled={expenseSplitEnabled === true}
+              fixedIncomeEur={settings?.fixedMonthlyIncomeEur}
+              activationMonth={settings?.fixedMonthlyIncomeStartMonth}
               familyMembers={familyMembers}
             />
           </motion.div>

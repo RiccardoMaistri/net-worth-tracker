@@ -30,7 +30,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeftRight, ExternalLink, Link2, Loader2, LogOut, QrCode, RefreshCw } from 'lucide-react';
+import { ArrowLeftRight, CreditCard, ExternalLink, Link2, Loader2, LogOut, QrCode, RefreshCw } from 'lucide-react';
 import Image from 'next/image';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
@@ -46,6 +46,7 @@ import {
 } from '@/components/ui/select';
 import { Tile } from '@/components/ui/tile';
 import { BrokerTradeImportDialog } from '@/components/settings/broker/BrokerTradeImportDialog';
+import { BrokerCardExpenseImportDialog } from '@/components/settings/broker/BrokerCardExpenseImportDialog';
 import { describeBrokerConnections } from '@/lib/utils/settingsNarrative';
 import { authenticatedFetch } from '@/lib/utils/authFetch';
 import { errorMessage, failureWarning } from '@/lib/utils/errorMessage';
@@ -356,6 +357,8 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
   const [revoking, setRevoking] = useState(false);
   /** The trade-ledger import is a separate modal, not a step of the portfolio sync above. */
   const [tradeImportOpen, setTradeImportOpen] = useState(false);
+  /** Card expenses are a THIRD independent act: they write Cashflow, not the portfolio or ledger. */
+  const [cardExpenseImportOpen, setCardExpenseImportOpen] = useState(false);
   /**
    * Whether a SESSION exists, asked of the server — not inferred from the sync metadata, which
    * would call someone «non collegato» for having linked and not yet pressed Sincronizza.
@@ -551,6 +554,7 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
         holdingsCount: connection?.holdingsCount,
         cashBalance: connection?.cashBalance,
         savingsPlanCount: connection?.savingsPlanCount,
+        cardExpenseCount: connection?.cardExpenseCount,
       });
 
   return (
@@ -602,6 +606,24 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
           </Button>
           <span className="text-[11px] text-muted-foreground">
             Porta acquisti e vendite nel registro operazioni.
+          </span>
+        </div>
+
+        {/* Card expenses are neither positions nor ledger trades: they are Cashflow rows. A third
+            button keeps the three writes distinguishable — and the card one is the only path that
+            can create categories, so it previews before writing. */}
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          <Button
+            variant="outline"
+            onClick={() => setCardExpenseImportOpen(true)}
+            disabled={disabled || !connected}
+            className="h-10"
+          >
+            <CreditCard className="h-4 w-4" />
+            Importa spese della carta
+          </Button>
+          <span className="text-[11px] text-muted-foreground">
+            Porta i pagamenti della carta nel Cashflow, con categoria rilevata.
           </span>
         </div>
 
@@ -858,6 +880,13 @@ export function TradeRepublicConnectionTile({ ownerId, disabled = false }: Trade
         ownerId={ownerId}
         source="traderepublic"
         brokerName="Trade Republic"
+      />
+      <BrokerCardExpenseImportDialog
+        open={cardExpenseImportOpen}
+        onClose={() => setCardExpenseImportOpen(false)}
+        ownerId={ownerId}
+        disabled={disabled}
+        onImported={() => void loadAll()}
       />
     </Tile>
   );

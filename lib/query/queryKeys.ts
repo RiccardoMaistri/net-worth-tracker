@@ -72,6 +72,13 @@ export const queryKeys = {
     months: (userId: string, monthKeys: string[]) => ['budget-history', userId, ...monthKeys] as const,
   },
 
+  // User-corrected monthly income (monthlyIncomeOverrides/{uid}/months/{YYYY-MM}).
+  // Intentionally NOT a persisted prefix: a stale correction restored from IndexedDB would show
+  // a salary the owner has since removed, and a reload must always read the stored overrides.
+  monthlyIncomeOverrides: {
+    all: (userId: string) => ['monthly-income-overrides', userId] as const,
+  },
+
   // Assistant
   assistant: {
     threads: (userId: string) => ['assistant', 'threads', userId] as const,

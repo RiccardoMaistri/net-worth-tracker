@@ -69,9 +69,12 @@ import { ExpenseTable } from '@/components/expenses/ExpenseTable';
 import { SeriesDeleteDialog, resolveSeriesDeleteMode, type SeriesDeleteRequest } from '@/components/expenses/SeriesDeleteDialog';
 import { LinkSeriesDialog, type LinkSeriesRequest } from '@/components/expenses/LinkSeriesDialog';
 import { useAssets } from '@/lib/hooks/useAssets';
+import { useMonthlyIncomeOverrides } from '@/lib/hooks/useMonthlyIncomeOverrides';
+import { buildFixedIncomeSavingsSeries } from '@/lib/utils/fixedIncomeSavingsRate';
 import { TransactionFeed } from '@/components/cashflow/TransactionFeed';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { MobileFiltersDrawer } from '@/components/cashflow/MobileFiltersDrawer';
+import { MonthlyIncomeOverrideBox } from '@/components/cashflow/MonthlyIncomeOverrideBox';
 import { PageVerdict } from '@/components/ui/page-verdict';
 import { TILE_CELL_CLASS, TILE_FOOTER_ACTION_CLASS } from '@/components/ui/tile';
 import { TileGridSkeleton, VerdictSkeleton } from '@/components/ui/tile-grid-skeleton';
@@ -164,6 +167,10 @@ interface ExpenseTrackingTabProps {
   assetNameMap: Map<string, string>;
   /** Cashflow › Divisione is on: the owner filter and the owner chips exist. */
   splitEnabled: boolean;
+  /** settings.fixedMonthlyIncomeEur — the declared denominator of the savings-rate chart. */
+  fixedIncomeEur?: number;
+  /** settings.fixedMonthlyIncomeStartMonth — the first month the declared income applies. */
+  activationMonth?: string | null;
   /** The household, from the settings — the people a row can be attributed to. */
   familyMembers: FamilyMember[];
   /**
@@ -283,12 +290,16 @@ export function ExpenseTrackingTab({
   onRefresh,
   assetNameMap,
   splitEnabled,
+  fixedIncomeEur,
+  activationMonth,
   familyMembers,
   initialOwnerId = null,
   deepLink = null,
 }: ExpenseTrackingTabProps) {
   const { user } = useAuth();
   const { ownerId } = useActiveAccount();
+  const overridesQuery = useMonthlyIncomeOverrides(ownerId ?? undefined);
+  const { data: incomeOverrides = {}, isLoading: overridesLoading, isError: overridesFailed } = overridesQuery;
   const isDemo = useDemoMode();
   const queryClient = useQueryClient();
   const router = useRouter();
@@ -765,9 +776,23 @@ export function ExpenseTrackingTab({
   // Only a month is ONE bar of the chart; a year or a range is the whole axis.
   const highlightKey = period.kind === 'month' ? `${anchor.year}-${String(anchor.month).padStart(2, '0')}` : null;
 
+  const savingsSeries = useMemo(
+    () =>
+      buildFixedIncomeSavingsSeries({
+        expenses: windowExpenses,
+        fixedIncomeEur,
+        activationMonth,
+        overrides: incomeOverrides,
+        now,
+        endYear: anchor.year,
+        endMonth: anchor.month,
+        count: HISTORY_MONTHS,
+      }),
+    [windowExpenses, fixedIncomeEur, activationMonth, incomeOverrides, now, anchor],
+  );
   const savingsHistory = useMemo(
-    () => summarizeSavingsHistory(buildTrailingMonthFlows(windowExpenses, anchor.year, anchor.month, HISTORY_MONTHS), now),
-    [windowExpenses, anchor, now],
+    () => summarizeSavingsHistory(savingsSeries.activeMonths, now),
+    [savingsSeries.activeMonths, now],
   );
 
   // Where spending lands at the current pace — only while the month is still running.
@@ -821,10 +846,23 @@ export function ExpenseTrackingTab({
         </div>
       </div>
 
-      {/* ── Below desktop: the period (the page's axis) under the verdict, plus the landscape
-          add button (the portrait FAB in the bottom nav is the only «add» there) ────── */}
+      {/* ── Below desktop: the period (the page's axis) under the verdict, the month's declared
+          income beside it, plus the landscape add button (the portrait FAB in the bottom nav is
+          the only «add» there). The income box follows the period: it corrects the month the page
+          is about, and on desktop it lives in the header beside «Nuova Spesa» ──────────────── */}
       <div className="desktop:hidden flex flex-wrap items-center justify-center gap-2">
         <PeriodPicker value={period} onChange={onPeriodChange} availableYears={availableYears} className="shrink-0 max-w-[190px]" />
+        <MonthlyIncomeOverrideBox
+          ownerId={ownerId ?? undefined}
+          fixedIncomeEur={fixedIncomeEur}
+          activationMonth={activationMonth}
+          overrides={incomeOverrides}
+          overridesLoading={overridesLoading}
+          overridesFailed={overridesFailed}
+          year={anchor.year}
+          month={anchor.month}
+          isDemo={isDemo}
+        />
         <Button
           size="sm"
           onClick={handleAddExpense}
@@ -1181,6 +1219,7 @@ export function ExpenseTrackingTab({
         <div className={cn(TILE_CELL_CLASS, 'tablet:col-span-2 desktop:col-span-7')}>
           <RisparmioTile
             history={savingsHistory}
+            series={savingsSeries}
             aside={describeMonthWindow(savingsHistory.months, now)}
             reading={describeSavingsHistory(savingsHistory)}
             footer={describeDeficitMonths(savingsHistory, now)}

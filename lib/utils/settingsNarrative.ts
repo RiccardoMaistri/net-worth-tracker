@@ -257,6 +257,10 @@ export interface CashflowSettingsInput {
   historyStartYear: number;
   costCentersEnabled: boolean;
   expenseSplitEnabled: boolean;
+  /** Net monthly salary the reader set; absent means no fixed income, never «0 €». */
+  fixedMonthlyIncomeEur?: number;
+  /** ISO 'YYYY-MM' of the first activation; the clause names it only with an amount set. */
+  fixedMonthlyIncomeStartMonth?: string;
   // How many people are configured under Famiglia. The split needs two: with fewer, the
   // toggle is on and nothing happens, so the reading has to say which input is missing
   // rather than promising a division the page cannot compute.
@@ -275,6 +279,8 @@ export function describeCashflowSettings({
   historyStartYear,
   costCentersEnabled,
   expenseSplitEnabled,
+  fixedMonthlyIncomeEur,
+  fixedMonthlyIncomeStartMonth,
   familyMemberCount,
   categoriesUnread = false,
 }: CashflowSettingsInput): Narrative {
@@ -300,7 +306,21 @@ export function describeCashflowSettings({
     figure(String(historyStartYear)),
     prose(costCentersEnabled ? '; Centri di Costo attivi' : '; Centri di Costo spenti')
   );
+  segments.push(...describeFixedIncomeClause(fixedMonthlyIncomeEur, fixedMonthlyIncomeStartMonth));
   segments.push(...describeSplitClause(expenseSplitEnabled, familyMemberCount));
+  return segments;
+}
+
+/**
+ * The fixed salary's downstream effect: from its activation month it feeds the savings-rate trend.
+ * With no amount the whole clause is dropped — «0 €» would claim the reader chose no salary when
+ * the truth is that they never set one (Narrative Honesty Rule).
+ */
+function describeFixedIncomeClause(amount: number | undefined, startMonth: string | undefined): Narrative {
+  if (amount === undefined || !Number.isFinite(amount) || amount <= 0) return [];
+  const segments: Narrative = [prose('; reddito fisso di '), figure(euro(amount)), prose(' al mese')];
+  if (startMonth) segments.push(prose(` da ${monthYearInSentence(startMonth)}`));
+  segments.push(prose(" per l'andamento del tasso di risparmio"));
   return segments;
 }
 
@@ -830,6 +850,8 @@ export interface BrokerConnectionsInput {
   cashBalance?: number;
   /** Trade Republic savings plans («Sparpläne») as last read. */
   savingsPlanCount?: number;
+  /** Card movements already written in Cashflow, from the card-import dialog. */
+  cardExpenseCount?: number;
 }
 
 /**
@@ -843,7 +865,7 @@ export interface BrokerConnectionsInput {
  */
 export function describeBrokerConnections(
   broker: 'scalable' | 'traderepublic' | 'intesa' | 'azimut' | 'binance',
-  { lastSyncAt, holdingsCount, cashBalance, savingsPlanCount }: BrokerConnectionsInput
+  { lastSyncAt, holdingsCount, cashBalance, savingsPlanCount, cardExpenseCount }: BrokerConnectionsInput
 ): Narrative {
   const isTradeRepublic = broker === 'traderepublic';
   const isIntesa = broker === 'intesa';
@@ -899,5 +921,14 @@ export function describeBrokerConnections(
             ? ' — le quantità restano del Registro, i prezzi arrivano da Yahoo o da Binance.'
             : ' — i prezzi si aggiornano, le quantità restano del Registro.'
     ),
+    // A separate sentence, not a clause of «Ultima lettura»: the card count is written by the card
+    // import, which is a different act from the portfolio sync whose date the first sentence names.
+    ...(isTradeRepublic && cardExpenseCount !== undefined && cardExpenseCount > 0
+      ? [
+          prose(
+            ` ${cardExpenseCount} ${cardExpenseCount === 1 ? 'movimento carta importato' : 'movimenti carta importati'} nel Cashflow.`
+          ),
+        ]
+      : []),
   ];
 }

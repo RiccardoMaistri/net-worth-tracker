@@ -20,13 +20,14 @@ import {
   composeSettingsDocument,
   createSettingsDraft,
   isSliceDirty,
+  resolveFixedMonthlyIncomeStartMonth,
   revealTargetProblem,
   settingsDraftReducer,
   sliceSettings,
   targetFieldId,
   type SettingsSlices,
 } from '@/lib/utils/settingsDraft';
-import type { AssetAllocationTarget } from '@/types/assets';
+import type { AssetAllocationSettings, AssetAllocationTarget } from '@/types/assets';
 import { FULL_PAGE_SETTINGS, STORED_SETTINGS } from './fixtures/storedSettings';
 
 /** `getDefaultTargets()` of the service, without the service (its module loads the SDK). */
@@ -40,7 +41,8 @@ const DEFAULT_TARGETS: AssetAllocationTarget = {
 const WRITTEN_KEYS = [
   'autoCalculateEquityBonds', 'cashflowHistoryStartYear', 'checkingAccountSubCategory', 'costCentersEnabled',
   'defaultCreditCashAssetId', 'defaultDebitCashAssetId', 'dividendCashAssetId', 'dividendIncomeCategoryId',
-  'dividendIncomeSubCategoryId', 'expenseSplitEnabled', 'familyMembers', 'goalBasedInvestingEnabled',
+  'dividendIncomeSubCategoryId', 'expenseSplitEnabled', 'familyMembers', 'fixedMonthlyIncomeEur',
+  'fixedMonthlyIncomeStartMonth', 'goalBasedInvestingEnabled',
   'goalDrivenAllocationEnabled', 'includePrimaryResidenceInFIRE', 'laborIncomeCategoryIds', 'monthlyEmailEnabled',
   'monthlyEmailRecipients', 'pensionReturnStartMonth', 'performanceExcludesCash', 'performanceIncludesExcludedAssets',
   'performanceIncludesPensionFunds', 'plannedAnnualExpenses', 'quarterlyEmailEnabled', 'riskFreeRate',
@@ -49,8 +51,8 @@ const WRITTEN_KEYS = [
   'yearlyEmailEnabled',
 ].sort();
 
-function composeOk(slices: SettingsSlices, current = FULL_PAGE_SETTINGS) {
-  const result = composeSettingsDocument(slices, current);
+function composeOk(slices: SettingsSlices, current: AssetAllocationSettings | null = FULL_PAGE_SETTINGS, now?: Date) {
+  const result = composeSettingsDocument(slices, current, now);
   if (!result.ok) throw new Error(`compose refused: ${result.problem.kind}`);
   return result;
 }
@@ -113,7 +115,12 @@ describe('sliceSettings ∘ composeSettingsDocument — the identity', () => {
     const slices = sliceSettings(FULL_PAGE_SETTINGS, DEFAULT_TARGETS);
     slices.dividendi = { dividendIncomeCategoryId: '', dividendIncomeSubCategoryId: '', dividendCashAssetId: '__none__' };
     slices.spese = { ...slices.spese, defaultDebitCashAssetId: '__none__', transferFeeCategoryId: '' };
-    slices.generale = { ...slices.generale, pensionReturnStartMonth: '' };
+    slices.generale = {
+      ...slices.generale,
+      pensionReturnStartMonth: '',
+      fixedMonthlyIncomeEur: undefined,
+      fixedMonthlyIncomeStartMonth: '',
+    };
     slices.allocazione = { ...slices.allocazione, userAge: undefined };
 
     const { document } = composeOk(slices);
@@ -123,9 +130,71 @@ describe('sliceSettings ∘ composeSettingsDocument — the identity', () => {
     expect(document.defaultDebitCashAssetId).toBeUndefined();
     expect(document.transferFeeCategoryId).toBeUndefined();
     expect(document.pensionReturnStartMonth).toBeUndefined();
+    expect(document.fixedMonthlyIncomeEur).toBeUndefined();
+    expect(document.fixedMonthlyIncomeStartMonth).toBeUndefined();
     // Present-but-undefined: the service's `'x' in settings` guard needs the KEY to clear the field.
     expect('userAge' in document).toBe(true);
     expect(document.userAge).toBeUndefined();
+    expect('fixedMonthlyIncomeEur' in document).toBe(true);
+    expect('fixedMonthlyIncomeStartMonth' in document).toBe(true);
+  });
+});
+
+describe('the fixed monthly income activation month', () => {
+  const FIRST_SAVE = new Date('2025-12-31T23:30:00Z'); // Already 1 January in Italy.
+  const LATER_EDIT = new Date('2026-06-15T10:00:00Z');
+
+  it('resolves the month from its three inputs, in Italian calendar time', () => {
+    expect(resolveFixedMonthlyIncomeStartMonth(1850, undefined, FIRST_SAVE)).toBe('2026-01');
+    expect(resolveFixedMonthlyIncomeStartMonth(2100, '2025-06', LATER_EDIT)).toBe('2025-06');
+    expect(resolveFixedMonthlyIncomeStartMonth(undefined, '2025-06', LATER_EDIT)).toBeUndefined();
+    expect(resolveFixedMonthlyIncomeStartMonth(0, '2025-06', LATER_EDIT)).toBeUndefined();
+    expect(resolveFixedMonthlyIncomeStartMonth(Number.NaN, '2025-06', LATER_EDIT)).toBeUndefined();
+  });
+
+  it('stamps the current Italian month on first activation', () => {
+    const slices = sliceSettings(null, DEFAULT_TARGETS);
+    slices.generale = { ...slices.generale, fixedMonthlyIncomeEur: 1850 };
+
+    const { document } = composeOk(slices, null, FIRST_SAVE);
+
+    expect(document.fixedMonthlyIncomeStartMonth).toBe('2026-01');
+    expect(document.fixedMonthlyIncomeEur).toBe(1850);
+  });
+
+  it('never moves the month on a later amount edit and clears both fields on clearing', () => {
+    const slices = sliceSettings(null, DEFAULT_TARGETS);
+    slices.generale = { ...slices.generale, fixedMonthlyIncomeEur: 1850 };
+    const first = composeOk(slices, null, FIRST_SAVE).document;
+
+    const edited = {
+      ...slices,
+      generale: { ...slices.generale, fixedMonthlyIncomeEur: 2100.5 },
+    };
+    const second = composeOk(edited, first, LATER_EDIT).document;
+    expect(second.fixedMonthlyIncomeStartMonth).toBe('2026-01');
+    expect(second.fixedMonthlyIncomeEur).toBe(2100.5);
+
+    const cleared = {
+      ...edited,
+      generale: { ...edited.generale, fixedMonthlyIncomeEur: undefined, fixedMonthlyIncomeStartMonth: '' },
+    };
+    const third = composeOk(cleared, second, LATER_EDIT).document;
+    expect(third.fixedMonthlyIncomeEur).toBeUndefined();
+    expect(third.fixedMonthlyIncomeStartMonth).toBeUndefined();
+    expect('fixedMonthlyIncomeStartMonth' in third).toBe(true);
+  });
+
+  it('keeps the stored month through the identity and marks only the generale slice as dirty', () => {
+    const saved = sliceSettings(FULL_PAGE_SETTINGS, DEFAULT_TARGETS);
+    const draft = settingsDraftReducer(
+      { slices: saved, saved, loaded: true, pendingFocus: null },
+      { type: 'generale/set', patch: { fixedMonthlyIncomeEur: 2300 } }
+    );
+
+    expect(isSliceDirty('generale', draft.slices, saved)).toBe(true);
+    expect(isSliceDirty('spese', draft.slices, saved)).toBe(false);
+    expect(composeOk(draft.slices, FULL_PAGE_SETTINGS, LATER_EDIT).document.fixedMonthlyIncomeStartMonth).toBe('2026-03');
   });
 });
 

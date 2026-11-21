@@ -44,6 +44,10 @@ const nextConfig: NextConfig = {
   // and in silence, and `npm run lint` does not see most of the causes:
   // __tests__/reactCompilerCoverage.test.ts is the map (AGENTS.md § Motion).
   reactCompiler: true,
+  experimental: {
+    // Marker for Next.js agent-led security upgrades; set by the 16.4.0 → 16.4.6 advisory fix.
+    agentUpgrade: 'security',
+  },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
   },

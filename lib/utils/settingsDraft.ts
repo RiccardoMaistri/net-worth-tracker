@@ -41,6 +41,7 @@ import {
   type TargetProblem,
 } from '@/lib/utils/allocationTargetValidation';
 import { calculateFormulaEquityPercentage, resolveAutoEquityBondsSplit } from '@/lib/utils/equityBondsAutoTargets';
+import { getItalyMonthYear } from '@/lib/utils/dateHelpers';
 
 // ─── Identifiers ──────────────────────────────────────────────────────────────────────────
 
@@ -139,6 +140,10 @@ export interface GeneraleSlice {
   checkingAccountSubCategory: string;
   cashflowHistoryStartYear: number;
   laborIncomeCategoryIds: string[];
+  /** Net monthly salary, undefined when the reader has not set one (or has cleared it). */
+  fixedMonthlyIncomeEur: number | undefined;
+  /** 'YYYY-MM' of first activation, '' while unset — read-only in the view, stamped on save. */
+  fixedMonthlyIncomeStartMonth: string;
   costCentersEnabled: boolean;
   expenseSplitEnabled: boolean;
   performanceIncludesPensionFunds: boolean;
@@ -207,6 +212,27 @@ const roundToTwoDecimals = (value: number): number => Math.round(value * 100) / 
 
 const DEFAULT_STAMP_DUTY_RATE = 0.2;
 const DEFAULT_HISTORY_START_YEAR = 2025;
+
+/**
+ * The activation month of the fixed monthly income: stamped once, on the first save that sets an
+ * amount, and never moved by later amount edits. Clearing the amount clears the month too — both
+ * keys are then emitted as undefined so the service's presence guards can delete them.
+ *
+ * `now` is a parameter so the first-activation rule is testable at the Italian midnight edge;
+ * the Italian month comes from the app's one calendar helper, never from the process timezone.
+ */
+export function resolveFixedMonthlyIncomeStartMonth(
+  amount: number | undefined,
+  savedStartMonth: string | undefined,
+  now: Date
+): string | undefined {
+  // Zero is «no declared income», the same absence as a blank field: never stamp an activation
+  // the charts would then refuse to draw (they need a strictly positive denominator).
+  if (amount === undefined || !Number.isFinite(amount) || amount <= 0) return undefined;
+  if (savedStartMonth) return savedStartMonth;
+  const { month, year } = getItalyMonthYear(now);
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
 
 /** A class's rows from its saved target entry, in both saved shapes (number, SubCategoryTarget). */
 function toSubTargetDrafts(subTargets: AssetAllocationTarget[string]['subTargets']): SubTargetDraft[] {
@@ -371,6 +397,8 @@ export function sliceSettings(
     checkingAccountSubCategory: data.checkingAccountSubCategory || NO_SELECTION,
     cashflowHistoryStartYear: data.cashflowHistoryStartYear ?? DEFAULT_HISTORY_START_YEAR,
     laborIncomeCategoryIds: data.laborIncomeCategoryIds ?? [],
+    fixedMonthlyIncomeEur: data.fixedMonthlyIncomeEur,
+    fixedMonthlyIncomeStartMonth: data.fixedMonthlyIncomeStartMonth ?? '',
     costCentersEnabled: data.costCentersEnabled ?? false,
     expenseSplitEnabled: data.expenseSplitEnabled ?? false,
     performanceIncludesPensionFunds: data.performanceIncludesPensionFunds ?? false,
@@ -483,11 +511,13 @@ export type ComposeResult =
  *
  * @param slices - The draft as edited.
  * @param current - The document as it is NOW (the pre-read of «Salva»), for the two FIRE fields
- *   the write carries through unchanged.
+ *   the write carries through unchanged and the fixed income's activation month.
+ * @param now - Injectable clock for the first-activation month (the Italian calendar day).
  */
 export function composeSettingsDocument(
   slices: SettingsSlices,
-  current: AssetAllocationSettings | null
+  current: AssetAllocationSettings | null,
+  now: Date = new Date()
 ): ComposeResult {
   const cleaned = cleanAllocazioneSlice(slices.allocazione);
   const problem = findTargetProblem(sumClassTargets(cleaned), toClassTargetDrafts(cleaned));
@@ -517,6 +547,14 @@ export function composeSettingsDocument(
     checkingAccountSubCategory: generale.checkingAccountSubCategory,
     cashflowHistoryStartYear: generale.cashflowHistoryStartYear,
     laborIncomeCategoryIds: generale.laborIncomeCategoryIds,
+    // Both keys are always emitted: a present-but-undefined pair is how the service's `'x' in`
+    // guards clear the stored fields. The month is set once, from the saved doc when it has one.
+    fixedMonthlyIncomeEur: generale.fixedMonthlyIncomeEur,
+    fixedMonthlyIncomeStartMonth: resolveFixedMonthlyIncomeStartMonth(
+      generale.fixedMonthlyIncomeEur,
+      generale.fixedMonthlyIncomeStartMonth || current?.fixedMonthlyIncomeStartMonth,
+      now
+    ),
     costCentersEnabled: generale.costCentersEnabled,
     expenseSplitEnabled: generale.expenseSplitEnabled,
     spendingRolesEnabled: spese.spendingRolesEnabled,

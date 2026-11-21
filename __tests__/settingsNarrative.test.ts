@@ -355,6 +355,73 @@ describe('describeCashflowSettings', () => {
     );
   });
 
+  it('reads the fixed income from its activation month, as the savings-rate trend input', () => {
+    expect(
+      plain(
+        describeCashflowSettings({
+          laborCategoryNames: ['Stipendio'],
+          historyStartYear: 2025,
+          costCentersEnabled: false,
+          fixedMonthlyIncomeEur: 1850,
+          fixedMonthlyIncomeStartMonth: '2026-03',
+          ...SPLIT_OFF,
+        })
+      )
+    ).toBe(
+      "Stipendio conta come reddito da lavoro; lo storico parte dal 2025; Centri di Costo spenti; reddito fisso di 1850 € al mese da marzo 2026 per l'andamento del tasso di risparmio; Divisione spenta."
+    );
+  });
+
+  it('drops the fixed-income clause entirely when no amount is set, never printing 0 €', () => {
+    const reading = plain(
+      describeCashflowSettings({
+        laborCategoryNames: ['Stipendio'],
+        historyStartYear: 2025,
+        costCentersEnabled: false,
+        ...SPLIT_OFF,
+      })
+    );
+
+    expect(reading).toBe(
+      'Stipendio conta come reddito da lavoro; lo storico parte dal 2025; Centri di Costo spenti; Divisione spenta.'
+    );
+    expect(reading).not.toContain('0 €');
+  });
+
+  it('drops the clause for a zero amount too — zero declares no salary, not a free month', () => {
+    const reading = plain(
+      describeCashflowSettings({
+        laborCategoryNames: ['Stipendio'],
+        historyStartYear: 2025,
+        costCentersEnabled: false,
+        fixedMonthlyIncomeEur: 0,
+        fixedMonthlyIncomeStartMonth: '2026-03',
+        ...SPLIT_OFF,
+      })
+    );
+
+    expect(reading).toBe(
+      'Stipendio conta come reddito da lavoro; lo storico parte dal 2025; Centri di Costo spenti; Divisione spenta.'
+    );
+    expect(reading).not.toContain('0 €');
+  });
+
+  it('reads the amount without a month clause while the activation month is missing', () => {
+    expect(
+      plain(
+        describeCashflowSettings({
+          laborCategoryNames: ['Stipendio'],
+          historyStartYear: 2025,
+          costCentersEnabled: false,
+          fixedMonthlyIncomeEur: 1850,
+          ...SPLIT_OFF,
+        })
+      )
+    ).toBe(
+      "Stipendio conta come reddito da lavoro; lo storico parte dal 2025; Centri di Costo spenti; reddito fisso di 1850 € al mese per l'andamento del tasso di risparmio; Divisione spenta."
+    );
+  });
+
   it('states what the Divisione does once two people exist', () => {
     expect(
       plain(
@@ -942,6 +1009,29 @@ describe('describeBrokerConnections', () => {
         })
       )
     ).not.toContain('piano di accumulo');
+  });
+
+  it('names the card expenses as a separate act from the sync, and drops the clause at zero', () => {
+    const text = plain(
+      describeBrokerConnections('traderepublic', {
+        lastSyncAt: '2026-09-18T10:00:00.000Z',
+        holdingsCount: 2,
+        cashBalance: 500,
+        cardExpenseCount: 42,
+      })
+    );
+    expect(text).toBe(
+      'Ultima lettura 18/09/2026 da Trade Republic: 2 posizioni e liquidità 500 € — le quantità restano del Registro, i prezzi arrivano da Yahoo. 42 movimenti carta importati nel Cashflow.'
+    );
+    expect(
+      plain(
+        describeBrokerConnections('traderepublic', {
+          lastSyncAt: '2026-09-18T10:00:00.000Z',
+          holdingsCount: 2,
+          cardExpenseCount: 0,
+        })
+      )
+    ).not.toContain('movimenti carta');
   });
 
   it('states the Trade Republic empty state with its own scope', () => {

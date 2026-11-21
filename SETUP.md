@@ -416,10 +416,17 @@ service still answers*. Find the real owner and stop it by PID:
 Get-NetTCPConnection -LocalPort 8080 -State Listen
 ```
 
+### The emulator refuses to start for lack of Java 21 (macOS)
+
+`brew install openjdk@21` installs a **keg-only** JDK: Java 21 exists at `$(brew --prefix openjdk@21)/bin/java` but is
+not added to `PATH`, so `java -version` can still name an older system JDK and `start.sh` used to answer «No Java >= 21
+found» (2026-11-20; `apt` is Debian/Ubuntu, not macOS). Since that date `start.sh` also probes the Homebrew opt paths
+(`/opt/homebrew` and `/usr/local`), so `./start.sh` works with `JAVA_HOME` unset. Export
+`JAVA_HOME="$(brew --prefix openjdk@21)"` only for tools called directly rather than through `start.sh`.
+
 ### The emulator refuses to start for lack of Java 21 (Windows)
 
-Moved here from AGENTS.md on 2026-09-06; on macOS a Homebrew OpenJDK (26 at the time of writing) starts the emulators
-with `JAVA_HOME` unset, and `kill -INT` on the `firebase` CLI process runs the export-on-exit.
+Moved here from AGENTS.md on 2026-09-06; `kill -INT` on the `firebase` CLI process runs the export-on-exit.
 
 **The emulator needs Java ≥ 21; this machine now HAS it, and a shell already running may still not see it.** Temurin
   21 (`C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot`) was installed on 2026-08-30, the USER `JAVA_HOME`
@@ -532,7 +539,7 @@ Gli asset hanno checksum e una firma minisign del manifest, e il README upstream
 solo binari di cui ti fidi «especially before logging in». Con `minisign` e `gh` installati:
 
 ```bash
-tag="vX.Y.Z"
+tag="v1.3.0"
 arch="x86_64"            # oppure aarch64
 repo="ScalableCapital/scalable-cli"
 minisign_public_key="<prendi dalla sezione 'Release artifact provenance' del README, per QUESTA release>"

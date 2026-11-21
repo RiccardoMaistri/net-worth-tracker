@@ -12,7 +12,7 @@
 
 Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
 
-- **Cashflow**: `app/dashboard/cashflow/page.tsx`; Tracciamento `components/cashflow/ExpenseTrackingTab.tsx` + `components/cashflow/{TransactionFeed,CompactExpenseRow,MobileFiltersDrawer}.tsx` + `components/expenses/ExpenseTable.tsx` (the «Tabella» view: armed row delete, `SeriesDeleteDialog`), pure `lib/utils/{tracciamentoSummary,cashflowNarrative,movementsOwnerFilter}.ts` (`settleTotals` = the lived part the verdict judges; `currentComparisonWindow`/`previousComparisonWindow` = the two comparable windows, same days of the previous month for the month in progress; the «Intestatario» filter and the owner chip), `lib/constants/expenseTypeColors.ts` (the ONE type→colour map: dot, badge, flow series), specs `e2e/cashflow.{tracciamento,mobile,owner,accounts}.spec.ts`
+- **Cashflow**: `app/dashboard/cashflow/page.tsx`; Tracciamento `components/cashflow/ExpenseTrackingTab.tsx` + `components/cashflow/{TransactionFeed,CompactExpenseRow,MobileFiltersDrawer,MonthlyIncomeOverrideBox}.tsx` + `components/expenses/ExpenseTable.tsx` (the «Tabella» view: armed row delete, `SeriesDeleteDialog`), pure `lib/utils/{tracciamentoSummary,cashflowNarrative,movementsOwnerFilter,fixedIncomeSavingsRate}.ts` (`settleTotals` = the lived part the verdict judges; `currentComparisonWindow`/`previousComparisonWindow` = the two comparable windows, same days of the previous month for the month in progress; the «Intestatario» filter and the owner chip; `fixedIncomeSavingsRate` = the declared-income series shared with Analisi), `lib/constants/expenseTypeColors.ts` (the ONE type→colour map: dot, badge, flow series), specs `e2e/cashflow.{tracciamento,mobile,owner,accounts}.spec.ts`
 - **Suites to run after a change here — Cashflow › Tracciamento** (moved from `AGENTS.md` § Commands on 2026-09-30): `tracciamentoSummary`, `cashflowNarrative` (+ `overviewNarrative` for `projectMonthEndSpending`, `patrimonioNarrative` for the articles)
 
 ## Cashflow › Tracciamento (`components/cashflow/ExpenseTrackingTab.tsx`, `components/cashflow/tiles/*`)
@@ -130,6 +130,23 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
   (`summarizeSavingsHistory(months, now)` → `ongoing`/`closedCount`): its salary is in and its spending is not, so it
   would be «il mese migliore» by construction; the reading says «su 11 mesi chiusi». A window is called «ultimi N
   mesi» only when it ends today (`describeMonthWindow`/`describeFlowWindow`), else it is named by its bounds.
+- **The savings history now measures a DECLARED income, not the recorded entries** (2026-11-20): the trailing 12
+  months come from the same pure `buildFixedIncomeSavingsSeries` the Analisi trend uses, with
+  `fixedMonthlyIncomeEur` / `fixedMonthlyIncomeStartMonth` from the ONE settings key and the month corrections from
+  `useMonthlyIncomeOverrides`. `summarizeSavingsHistory` still owns «measured»/«ongoing»/«closedCount», but its input
+  is `series.activeMonths`: a month before activation carries no rate, no income and no spending, and a month with a
+  correction carries the override. The tile draws the WHOLE axis (`series.months`), so the empty slots before
+  activation stay visible and named instead of shortening the window; only the narrative ranks the active months.
+  The tile's bars mark a corrected month with a neutral rule and a bullet. The correction itself is
+  opened from the COMPACT BOX beside the add button (`MonthlyIncomeOverrideBox`): in the page header
+  next to «Nuova Spesa» from `desktop:`, in the tab's row under the verdict below it. The box names
+  the month the PERIOD is about (`resolveAnchorMonth`) — it follows the page's one axis, never a
+  second one — and the income in use, and opens the one `MonthlyIncomeOverrideDialog`. A month before
+  activation has nothing to correct and renders no box; a failed overrides read is declared IN the
+  box («correzioni non disponibili»), and the box stays disabled while that read is in flight so the
+  dialog can never seed the default over a correction it has not seen. Analisi keeps its row of 44px
+  month buttons under the chart. No window widened: Tracciamento still reads `trackingWindow`; an
+  activation older than twelve months simply shows twelve measured months.
 - **Italian tense is data**: `describePeriodSubject` returns `ongoing` (the current month/year, a custom range whose
   `to` is today or later) and the headline conjugates on it («sta andando bene» / «è andato bene», «tiene» / «ha
   tenuto»); the article before the savings rate follows the figure AS PRINTED (`articleForPercent(rate, 0)`, now

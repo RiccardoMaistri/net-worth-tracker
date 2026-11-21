@@ -388,6 +388,11 @@ export interface AssetAllocationSettings {
   checkingAccountSubCategory?: string; // Cash subcategory name representing checking accounts (conti correnti); stamp duty applies only if value > 5000€
   cashflowHistoryStartYear?: number; // Min year shown in TotalHistoryTab charts (excludes bulk-imported older data); defaults to 2025
   laborIncomeCategoryIds?: string[]; // Category IDs of type 'income' representing labor/salary income; used for dashboard KPI cards
+  // Net monthly salary the reader has instead of tracing every income entry. Optional and
+  // user-clearable: clearing it clears the activation month too. Later amount edits leave that
+  // month alone — it is stamped once, on first activation, in Italian calendar time.
+  fixedMonthlyIncomeEur?: number;
+  fixedMonthlyIncomeStartMonth?: string; // ISO 'YYYY-MM' of the FIRST activation, never moved by later amount edits
   assistantResponseStyle?: 'balanced' | 'concise' | 'deep'; // Mirrors assistant preference for cross-feature defaults
   assistantMacroContextEnabled?: boolean; // Enables macro/web context in assistant flows when explicitly requested
   assistantMemoryEnabled?: boolean; // Allows the assistant to persist reusable user context

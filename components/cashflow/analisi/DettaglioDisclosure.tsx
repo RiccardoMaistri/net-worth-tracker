@@ -9,6 +9,7 @@ import { TILE_EYEBROW_CLASS } from '@/components/ui/tile';
 import { SAVINGS_LAZY_CHARTS, SavingsRateTrendSection } from '@/components/cashflow/SavingsRateTrendSection';
 import { ANDAMENTO_LAZY_CHARTS, AndamentoStoricoSection } from '@/components/cashflow/AndamentoStoricoSection';
 import { usePreloadWhenIdle } from '@/components/ui/lazy-component';
+import { useMonthlyIncomeOverrides } from '@/lib/hooks/useMonthlyIncomeOverrides';
 
 /** The two sections' lazy plots, fetched while the page is idle so an opening draws them at once. */
 const DETTAGLIO_LAZY_CHARTS = [...SAVINGS_LAZY_CHARTS, ...ANDAMENTO_LAZY_CHARTS];
@@ -20,6 +21,13 @@ interface DettaglioDisclosureProps {
   scopeYear: number | null;
   /** History mode only: the per-year/per-month evolution of flows, categories and types. */
   showHistory: boolean;
+  /** Whose corrections are read and written (the displayed account's owner). */
+  ownerId: string | undefined;
+  /** The fixed income from Impostazioni and the month it first became effective. */
+  fixedIncomeEur: number | undefined;
+  activationMonth: string | null | undefined;
+  /** The tab's clock, injected into the pure series builder. */
+  now: Date;
 }
 
 /**
@@ -28,9 +36,21 @@ interface DettaglioDisclosureProps {
  * history mode only, the evolution over time (in the year modes the Confronto already covers
  * the period, and a Mese/Anno axis would degenerate to one bucket). Closed by default.
  */
-export function DettaglioDisclosure({ allExpenses, historyStartYear, scopeYear, showHistory }: DettaglioDisclosureProps) {
+export function DettaglioDisclosure({
+  allExpenses,
+  historyStartYear,
+  scopeYear,
+  showHistory,
+  ownerId,
+  fixedIncomeEur,
+  activationMonth,
+  now,
+}: DettaglioDisclosureProps) {
   const [open, setOpen] = useState(false);
   usePreloadWhenIdle(DETTAGLIO_LAZY_CHARTS);
+  // The disclosure is closed by default: no Firestore read until a reader opens it.
+  const overridesQuery = useMonthlyIncomeOverrides(ownerId, { enabled: open });
+  const { data: overrides = {}, isError: overridesFailed } = overridesQuery;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -46,7 +66,17 @@ export function DettaglioDisclosure({ allExpenses, historyStartYear, scopeYear, 
       <CollapsibleContent className="pt-1">
         <div className="flex flex-col gap-3">
           {showHistory && <AndamentoStoricoSection allExpenses={allExpenses} historyStartYear={historyStartYear} />}
-          <SavingsRateTrendSection allExpenses={allExpenses} historyStartYear={historyStartYear} scopeYear={scopeYear} />
+          <SavingsRateTrendSection
+            allExpenses={allExpenses}
+            historyStartYear={historyStartYear}
+            scopeYear={scopeYear}
+            ownerId={ownerId}
+            fixedIncomeEur={fixedIncomeEur}
+            activationMonth={activationMonth}
+            overrides={overrides}
+            overridesFailed={overridesFailed}
+            now={now}
+          />
         </div>
       </CollapsibleContent>
     </Collapsible>

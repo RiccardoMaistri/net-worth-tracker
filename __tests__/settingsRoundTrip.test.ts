@@ -95,6 +95,13 @@ describe('getSettings — lettura', () => {
     expect(settings?.dividendCashAssetId).toBe('cash-1');
   });
 
+  it('returns the fixed monthly income and its activation month instead of dropping them', async () => {
+    const settings = await getSettings('user-1');
+
+    expect(settings?.fixedMonthlyIncomeEur).toBe(1850);
+    expect(settings?.fixedMonthlyIncomeStartMonth).toBe('2025-06');
+  });
+
   it('returns the RITA rule settings instead of dropping them', async () => {
     const settings = await getSettings('user-1');
 
@@ -177,6 +184,8 @@ describe('setSettings — scrittura, ramo con targets (setDoc senza merge)', () 
     ['dividendCashAssetId', 'cash-1'],
     ['transferFeeCategoryId', 'cat-fee'],
     ['transferFeeSubCategoryId', 'sub-fee'],
+    ['fixedMonthlyIncomeEur', 1850],
+    ['fixedMonthlyIncomeStartMonth', '2025-06'],
   ])('drops %s from the payload when it is cleared', async (field, stored) => {
     vi.mocked(getDoc).mockResolvedValue({
       exists: () => true,
@@ -199,6 +208,8 @@ describe('setSettings — scrittura, ramo con targets (setDoc senza merge)', () 
     ['dividendCashAssetId', 'cash-1'],
     ['transferFeeCategoryId', 'cat-fee'],
     ['transferFeeSubCategoryId', 'sub-fee'],
+    ['fixedMonthlyIncomeEur', 1850],
+    ['fixedMonthlyIncomeStartMonth', '2025-06'],
   ])('leaves an untouched %s alone when the key is absent from the update', async (field, stored) => {
     vi.mocked(getDoc).mockResolvedValue({
       exists: () => true,
@@ -267,6 +278,15 @@ describe('setSettings — scrittura, ramo senza targets (merge: true)', () => {
     expect(writtenPayload().spendingRolesEnabled).toBe(true);
   });
 
+  it('writes the fixed income and its activation month through both chains', async () => {
+    const update = { fixedMonthlyIncomeEur: 1850, fixedMonthlyIncomeStartMonth: '2025-06' };
+    await setSettings('user-1', update as AssetAllocationSettings);
+    expect(writtenPayload()).toMatchObject(update);
+
+    await setSettings('user-1', { targets: TARGETS, ...update } as AssetAllocationSettings);
+    expect(writtenPayload()).toMatchObject(update);
+  });
+
   it('does not touch the start month when the key is absent from the update', async () => {
     await setSettings('user-1', { costCentersEnabled: true } as AssetAllocationSettings);
 
@@ -275,7 +295,7 @@ describe('setSettings — scrittura, ramo senza targets (merge: true)', () => {
 
   // Lo stesso per gli altri quattro campi svuotabili: qui si scrive con merge, quindi omettere
   // la chiave lascerebbe il valore vecchio — serve un deleteField() esplicito (2026-08-29).
-  it.each(['userAge', 'riskFreeRate', 'dividendIncomeCategoryId', 'dividendIncomeSubCategoryId', 'dividendCashAssetId', 'transferFeeCategoryId', 'transferFeeSubCategoryId'])(
+  it.each(['userAge', 'riskFreeRate', 'dividendIncomeCategoryId', 'dividendIncomeSubCategoryId', 'dividendCashAssetId', 'transferFeeCategoryId', 'transferFeeSubCategoryId', 'fixedMonthlyIncomeEur', 'fixedMonthlyIncomeStartMonth'])(
     'uses deleteField to clear %s, since omitting the key would keep it',
     async (field) => {
       await setSettings('user-1', { [field]: undefined } as unknown as AssetAllocationSettings);
@@ -284,7 +304,7 @@ describe('setSettings — scrittura, ramo senza targets (merge: true)', () => {
     }
   );
 
-  it.each(['userAge', 'riskFreeRate', 'dividendIncomeCategoryId', 'dividendIncomeSubCategoryId', 'dividendCashAssetId', 'transferFeeCategoryId', 'transferFeeSubCategoryId'])(
+  it.each(['userAge', 'riskFreeRate', 'dividendIncomeCategoryId', 'dividendIncomeSubCategoryId', 'dividendCashAssetId', 'transferFeeCategoryId', 'transferFeeSubCategoryId', 'fixedMonthlyIncomeEur', 'fixedMonthlyIncomeStartMonth'])(
     'does not touch %s when the key is absent from the update',
     async (field) => {
       await setSettings('user-1', { costCentersEnabled: true } as AssetAllocationSettings);
