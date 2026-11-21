@@ -12,6 +12,7 @@ import { fromZonedTime } from 'date-fns-tz';
 import type { Expense } from '@/types/expenses';
 import {
   buildFixedIncomeSavingsSeries,
+  isFixedIncomeConfigured,
   isValidMonthKey,
   monthKeyOf,
   resolveMonthIncome,
@@ -76,6 +77,15 @@ describe('month keys and income resolution', () => {
     expect(resolveMonthIncome('2026-06', FIXED, { '2026-06': 3100 })).toEqual({ income: 3100, source: 'override', corrected: true });
     expect(resolveMonthIncome('2026-06', FIXED, { '2026-06': 0 })).toEqual({ income: FIXED, source: 'fixed', corrected: false });
     expect(resolveMonthIncome('2026-06', undefined, {})).toEqual({ income: 0, source: 'none', corrected: false });
+  });
+
+  it('calls the feature configured only with a valid activation AND a positive amount', () => {
+    expect(isFixedIncomeConfigured(FIXED, ACTIVATION)).toBe(true);
+    expect(isFixedIncomeConfigured(undefined, ACTIVATION)).toBe(false);
+    expect(isFixedIncomeConfigured(0, ACTIVATION)).toBe(false);
+    expect(isFixedIncomeConfigured(Number.NaN, ACTIVATION)).toBe(false);
+    expect(isFixedIncomeConfigured(FIXED, null)).toBe(false);
+    expect(isFixedIncomeConfigured(FIXED, '2026-6')).toBe(false);
   });
 });
 

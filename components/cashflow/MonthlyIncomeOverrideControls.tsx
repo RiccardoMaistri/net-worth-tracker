@@ -41,7 +41,14 @@ export function MonthlyIncomeOverrideControls({ months, onEdit, failed }: Monthl
               variant={month.corrected ? 'secondary' : 'outline'}
               className="h-11 shrink-0 px-3 text-[12px]"
               onClick={(event: MouseEvent<HTMLButtonElement>) =>
-                onEdit({ month, origin: resolveCenteredModalOrigin(event.currentTarget.getBoundingClientRect()) })
+                onEdit({
+                  key: month.key,
+                  year: month.year,
+                  month: month.month,
+                  effectiveIncome: month.income,
+                  corrected: month.corrected,
+                  origin: resolveCenteredModalOrigin(event.currentTarget.getBoundingClientRect()),
+                })
               }
               aria-label={`Correggi reddito di ${MONTH_NAMES[month.month - 1]} ${month.year}${month.corrected ? ' (corretto)' : ''}`}
             >

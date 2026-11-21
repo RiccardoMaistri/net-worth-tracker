@@ -9,20 +9,11 @@ import { formatPercentage } from '@/lib/services/chartService';
 import { cn } from '@/lib/utils';
 import { Tile } from '@/components/ui/tile';
 import { NarrativeText } from '@/components/ui/narrative-text';
-import { MonthlyIncomeOverrideControls } from '@/components/cashflow/MonthlyIncomeOverrideControls';
-import { MonthlyIncomeOverrideDialog } from '@/components/cashflow/MonthlyIncomeOverrideDialog';
-import { useMonthlyIncomeOverrideEditor } from '@/lib/hooks/useMonthlyIncomeOverrideEditor';
 
 interface RisparmioTileProps {
   history: SavingsHistory;
   /** The same months with their declared income, activation state and corrections. */
   series: FixedIncomeSeries;
-  /** Whose corrections are read and written (the displayed account's owner). */
-  ownerId: string | undefined;
-  /** The declared default income from Impostazioni. */
-  fixedIncomeEur: number | undefined;
-  /** A failed overrides read is not an empty set of corrections. */
-  overridesFailed: boolean;
   /** The window as the narrative names it: «ultimi 12 mesi», or its bounds when anchored on a past period. */
   aside: Narrative;
   reading: Narrative | null;
@@ -173,17 +164,12 @@ function SavingsRateBars({
 export function RisparmioTile({
   history,
   series,
-  ownerId,
-  fixedIncomeEur,
-  overridesFailed,
   aside,
   reading,
   footer,
   highlightKey,
   className,
 }: RisparmioTileProps) {
-  const editor = useMonthlyIncomeOverrideEditor(ownerId, fixedIncomeEur);
-
   return (
     <Tile eyebrow="Risparmio nel tempo" aside={<NarrativeText segments={aside} figureClassName="font-medium" />} reading={reading} className={className}>
       {history.measuredCount === 0 ? (
@@ -197,16 +183,6 @@ export function RisparmioTile({
           <SavingsRateBars months={series.months} average={history.average} highlightKey={highlightKey} />
         </div>
       )}
-      {series.configured && ownerId && (
-        <MonthlyIncomeOverrideControls months={series.months} onEdit={editor.edit} failed={overridesFailed} />
-      )}
-      <MonthlyIncomeOverrideDialog
-        target={editor.target}
-        origin={editor.origin}
-        onClose={editor.close}
-        onSave={editor.save}
-        onRemove={editor.remove}
-      />
       {footer && (
         <NarrativeText segments={footer} className="mt-auto border-t border-border pt-3.5 text-[11px] text-muted-foreground" figureClassName="font-medium" />
       )}

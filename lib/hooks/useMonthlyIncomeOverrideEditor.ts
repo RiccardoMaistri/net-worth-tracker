@@ -1,13 +1,27 @@
 'use client';
 
-/** The shared state + writers behind both chart-side «Correggi reddito del mese» dialogs. */
+/**
+ * The shared state + writers behind every «Correggi reddito del mese» entry: the compact box
+ * beside Tracciamento's add button and the row of month controls under the Analisi chart.
+ *
+ * The edit carries the month's FACTS (key, year, month, the income in use, whether it is already
+ * a correction), so a caller that holds no `FixedIncomeMonth` — the box reads the month from the
+ * page's period axis — opens the same dialog.
+ */
 
 import { useState } from 'react';
 import { useRemoveMonthlyIncomeOverride, useSaveMonthlyIncomeOverride } from '@/lib/hooks/useMonthlyIncomeOverrides';
-import type { FixedIncomeMonth } from '@/lib/utils/fixedIncomeSavingsRate';
 
 export interface MonthlyIncomeOverrideEdit {
-  month: FixedIncomeMonth;
+  /** The Italian `YYYY-MM` of the month being corrected. */
+  key: string;
+  year: number;
+  month: number;
+  /** The income currently used, before this dialog changes it. */
+  effectiveIncome: number;
+  /** Whether that value already comes from an override. */
+  corrected: boolean;
+  /** The trigger's viewport rect, resolved to a transform-origin at click time. */
   origin: string | undefined;
 }
 
@@ -27,14 +41,13 @@ export function useMonthlyIncomeOverrideEditor(ownerId: string | undefined, defa
   const saveMutation = useSaveMonthlyIncomeOverride(ownerId ?? '');
   const removeMutation = useRemoveMonthlyIncomeOverride(ownerId ?? '');
 
-  const month = selection?.month;
-  const target: MonthlyIncomeOverrideTarget | null = month
+  const target: MonthlyIncomeOverrideTarget | null = selection
     ? {
-        key: month.key,
-        year: month.year,
-        month: month.month,
-        effectiveIncome: month.income,
-        corrected: month.corrected,
+        key: selection.key,
+        year: selection.year,
+        month: selection.month,
+        effectiveIncome: selection.effectiveIncome,
+        corrected: selection.corrected,
         defaultIncome: defaultIncome ?? 0,
       }
     : null;

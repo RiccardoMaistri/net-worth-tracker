@@ -29,6 +29,24 @@ export function isValidMonthKey(key: string | null | undefined): key is string {
   return typeof key === 'string' && MONTH_KEY_PATTERN.test(key);
 }
 
+/**
+ * Whether the feature is configured at all: a valid activation month AND a positive default.
+ * ONE rule for the series builder and for the control that opens a month's correction — a month
+ * before activation carries no declared income, so a control there would write something no chart
+ * ever reads.
+ */
+export function isFixedIncomeConfigured(
+  fixedIncomeEur: number | undefined | null,
+  activationMonth: string | null | undefined,
+): activationMonth is string {
+  return (
+    isValidMonthKey(activationMonth) &&
+    typeof fixedIncomeEur === 'number' &&
+    Number.isFinite(fixedIncomeEur) &&
+    fixedIncomeEur > 0
+  );
+}
+
 export type FixedIncomeSource = 'fixed' | 'override' | 'none';
 export type FixedIncomeGapReason = 'before-activation' | 'no-income' | null;
 
@@ -102,7 +120,7 @@ export function buildFixedIncomeSavingsSeries({
   endMonth,
   count,
 }: FixedIncomeSeriesInput): FixedIncomeSeries {
-  const configured = isValidMonthKey(activationMonth) && typeof fixedIncomeEur === 'number' && Number.isFinite(fixedIncomeEur) && fixedIncomeEur > 0;
+  const configured = isFixedIncomeConfigured(fixedIncomeEur, activationMonth);
   const activationKey = configured ? activationMonth : null;
   const today = getItalyMonthYear(now);
   const startsAfterToday = (year: number, month: number) =>

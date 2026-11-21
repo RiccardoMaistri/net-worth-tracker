@@ -74,6 +74,7 @@ import { buildFixedIncomeSavingsSeries } from '@/lib/utils/fixedIncomeSavingsRat
 import { TransactionFeed } from '@/components/cashflow/TransactionFeed';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { MobileFiltersDrawer } from '@/components/cashflow/MobileFiltersDrawer';
+import { MonthlyIncomeOverrideBox } from '@/components/cashflow/MonthlyIncomeOverrideBox';
 import { PageVerdict } from '@/components/ui/page-verdict';
 import { TILE_CELL_CLASS, TILE_FOOTER_ACTION_CLASS } from '@/components/ui/tile';
 import { TileGridSkeleton, VerdictSkeleton } from '@/components/ui/tile-grid-skeleton';
@@ -298,7 +299,7 @@ export function ExpenseTrackingTab({
   const { user } = useAuth();
   const { ownerId } = useActiveAccount();
   const overridesQuery = useMonthlyIncomeOverrides(ownerId ?? undefined);
-  const { data: incomeOverrides = {}, isError: overridesFailed } = overridesQuery;
+  const { data: incomeOverrides = {}, isLoading: overridesLoading, isError: overridesFailed } = overridesQuery;
   const isDemo = useDemoMode();
   const queryClient = useQueryClient();
   const router = useRouter();
@@ -845,10 +846,23 @@ export function ExpenseTrackingTab({
         </div>
       </div>
 
-      {/* ── Below desktop: the period (the page's axis) under the verdict, plus the landscape
-          add button (the portrait FAB in the bottom nav is the only «add» there) ────── */}
+      {/* ── Below desktop: the period (the page's axis) under the verdict, the month's declared
+          income beside it, plus the landscape add button (the portrait FAB in the bottom nav is
+          the only «add» there). The income box follows the period: it corrects the month the page
+          is about, and on desktop it lives in the header beside «Nuova Spesa» ──────────────── */}
       <div className="desktop:hidden flex flex-wrap items-center justify-center gap-2">
         <PeriodPicker value={period} onChange={onPeriodChange} availableYears={availableYears} className="shrink-0 max-w-[190px]" />
+        <MonthlyIncomeOverrideBox
+          ownerId={ownerId ?? undefined}
+          fixedIncomeEur={fixedIncomeEur}
+          activationMonth={activationMonth}
+          overrides={incomeOverrides}
+          overridesLoading={overridesLoading}
+          overridesFailed={overridesFailed}
+          year={anchor.year}
+          month={anchor.month}
+          isDemo={isDemo}
+        />
         <Button
           size="sm"
           onClick={handleAddExpense}
@@ -1206,9 +1220,6 @@ export function ExpenseTrackingTab({
           <RisparmioTile
             history={savingsHistory}
             series={savingsSeries}
-            ownerId={ownerId ?? undefined}
-            fixedIncomeEur={fixedIncomeEur}
-            overridesFailed={overridesFailed}
             aside={describeMonthWindow(savingsHistory.months, now)}
             reading={describeSavingsHistory(savingsHistory)}
             footer={describeDeficitMonths(savingsHistory, now)}
