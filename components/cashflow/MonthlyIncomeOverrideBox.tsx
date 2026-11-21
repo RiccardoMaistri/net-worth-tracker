@@ -82,7 +82,10 @@ export function MonthlyIncomeOverrideBox({
         <span className={TILE_EYEBROW_CLASS}>Reddito</span>
         <span className="text-[11px] text-destructive">correzioni non disponibili</span>
         <button
-          onClick={() => queryClient.refetchQueries({ queryKey: ['monthly-income-overrides', ownerId] })}
+          onClick={() => {
+            queryClient.invalidateQueries({ queryKey: ['monthly-income-overrides', ownerId] });
+            queryClient.refetchQueries({ queryKey: ['monthly-income-overrides', ownerId] });
+          }}
           className="ml-2 text-[10px] text-primary hover:underline"
           aria-label="Riprova a caricare le correzioni"
         >
