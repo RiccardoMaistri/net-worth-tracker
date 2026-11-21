@@ -269,10 +269,15 @@ function resolveTone(savingsRate: number | null, expenses: number): VerdictTone 
   return savingsRate >= GOOD_SAVINGS_RATE ? 'positive' : 'neutral';
 }
 
-function resolveHeadline(subject: PeriodSubject, totals: PeriodCashflowTotals, settled = false): string {
+function resolveHeadline(subject: PeriodSubject, totals: PeriodCashflowTotals, settled = false, fixedIncomeEur?: number): string {
   const { savingsRate, income, expenses } = totals;
   // Judging the lived part with a calendar still ahead: an empty lived part is «not yet», not «none».
   if (income <= 0 && expenses <= 0) return settled ? `Nessun movimento ancora ${subject.inPeriod}.` : `Nessuna entrata né spesa ${subject.inPeriod}.`;
+  // When savingsRate is null but fixed income is configured in preferences, acknowledge it rather than
+  // claiming there's no income (the overrides may have failed, but the fixed denominator exists).
+  if (savingsRate === null && fixedIncomeEur !== undefined && fixedIncomeEur > 0) {
+    return `${capitalise(subject.inPeriod)} ha reddito configurato ma rate non calcolabile.`;
+  }
   if (savingsRate === null) return `${capitalise(subject.inPeriod)} hai speso senza entrate.`;
   if (savingsRate < 0) return `${capitalise(subject.inPeriod)} hai speso più di quanto è entrato.`;
   if (savingsRate >= GOOD_SAVINGS_RATE) return `${subject.subject} ${subject.ongoing ? 'sta andando' : 'è andato'} bene.`;
@@ -382,14 +387,15 @@ function calendarSentence(period: Period, now: Date, totals: PeriodCashflowTotal
  * the calendar takes it. Until 2026-09-14 the tone came from the whole span, so on the 14th a
  * salary dated the 15th made the month «andare bene».
  */
-export function buildCashflowVerdict(input: CashflowVerdictInput): PageVerdictModel {
+export function buildCashflowVerdict(input: CashflowVerdictInput & { fixedIncomeEur?: number }): PageVerdictModel {
   const subject = describePeriodSubject(input.period, input.now);
   const { totals, scheduled } = input;
   const comparison = describeComparisonPhrase(input.period, input.now);
   const hasCalendar = scheduled.expenses > 0 || scheduled.income > 0;
+  const fixedIncomeEur = input.fixedIncomeEur;
 
   if (!hasCalendar) {
-    const headline = resolveHeadline(subject, totals);
+    const headline = resolveHeadline(subject, totals, false, fixedIncomeEur);
     const tone = resolveTone(totals.savingsRate, totals.expenses);
     if (totals.income <= 0 && totals.expenses <= 0) {
       // A transfer is a movement, not a flow: the inventory counts it, the verdict must not deny it.
@@ -403,7 +409,7 @@ export function buildCashflowVerdict(input: CashflowVerdictInput): PageVerdictMo
   }
 
   const settled = settleTotals(totals, scheduled);
-  const headline = resolveHeadline(subject, settled, true);
+  const headline = resolveHeadline(subject, settled, true, fixedIncomeEur);
   const tone = resolveTone(settled.savingsRate, settled.expenses);
   const calendar = calendarSentence(input.period, input.now, totals, scheduled);
 
