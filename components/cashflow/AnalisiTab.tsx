@@ -165,6 +165,8 @@ interface AnalisiTabProps {
   spendingRolesEnabled?: boolean;
   /** The page's freshness reading for the header the tab owns (`useFreshness`). */
   freshness?: PageFreshness;
+  /** Owner's monthly income overrides, keyed by Italian `YYYY-MM`. */
+  incomeOverrides?: Record<string, number>;
 }
 
 // The focusable expense types, used to validate the focusType URL param without trusting
@@ -264,7 +266,7 @@ function resolvePeriodLabel(period: AnalisiPeriod): string {
   return String(period.year);
 }
 
-export function AnalisiTab({ allExpenses, categories, loading, loadFailed, historyStartYear = 2024, ownerId, fixedIncomeEur, activationMonth, spendingRolesEnabled = false, freshness }: AnalisiTabProps) {
+export function AnalisiTab({ allExpenses, categories, loading, loadFailed, historyStartYear = 2024, ownerId, fixedIncomeEur, activationMonth, spendingRolesEnabled = false, freshness, incomeOverrides }: AnalisiTabProps) {
   const COLORS = useChartColors();
   // The Scheda's trend plot is lazy: fetched when the page is idle AFTER its data, so a
   // Scheda draws it at once and the preload never competes with the first figures.
@@ -438,7 +440,7 @@ export function AnalisiTab({ allExpenses, categories, loading, loadFailed, histo
 
   // ─── Figures (pure modules) ──────────────────────────────────────────────────
 
-  const totals = useMemo(() => summarizePeriodCashflow(periodExpenses), [periodExpenses]);
+  const totals = useMemo(() => summarizePeriodCashflow(periodExpenses, incomeOverrides), [periodExpenses, incomeOverrides]);
   // A row still ahead ranks with the others (it is in the total) and says so in its caption.
   const topExpenses = useMemo(() => rankTopExpenses(periodExpenses, dayOf, 5, (expense) => isScheduledRow(expense, nowDate)), [periodExpenses, nowDate]);
   const expenseSlices = useMemo(() => buildExpenseComposition(periodExpenses), [periodExpenses]);

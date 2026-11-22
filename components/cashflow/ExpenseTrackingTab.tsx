@@ -185,6 +185,8 @@ interface ExpenseTrackingTabProps {
    * once, keyed on `key`, then strips the params from the URL. Null on every other entry.
    */
   deepLink?: { key: string; draft: ExpenseDeepLinkDraft } | null;
+  /** Owner's monthly income overrides, keyed by Italian `YYYY-MM`. */
+  incomeOverrides?: Record<string, number>;
 }
 
 interface ListFilters {
@@ -738,14 +740,14 @@ export function ExpenseTrackingTab({
 
   // ─── Tile figures (lib/utils/tracciamentoSummary.ts) and words (cashflowNarrative.ts) ──
 
-  const totals = useMemo(() => summarizePeriodCashflow(expenses), [expenses]);
+  const totals = useMemo(() => summarizePeriodCashflow(expenses, incomeOverrides, period), [expenses, incomeOverrides, period]);
 
   // The previous period's totals, for the deltas and the projection's reference; null when
   // the period has no honest predecessor (a custom range).
   const previousTotals = useMemo(() => {
     const previous = previousPeriod(period, now);
-    return previous ? summarizePeriodCashflow(filterExpensesByPeriod(windowExpenses, previous)) : null;
-  }, [windowExpenses, period, now]);
+    return previous ? summarizePeriodCashflow(filterExpensesByPeriod(windowExpenses, previous), incomeOverrides, period) : null;
+  }, [windowExpenses, period, now, incomeOverrides]);
 
   // The delta compares like with like. `totals` spans the whole period — for a year still
   // running that includes months the previous year cannot match, for the month in progress the
@@ -758,8 +760,8 @@ export function ExpenseTrackingTab({
     const previous = previousComparisonWindow(period, now);
     if (!current || !previous) return null;
     return computePeriodDelta(
-      summarizePeriodCashflow(filterExpensesByPeriod(windowExpenses, current)),
-      summarizePeriodCashflow(filterExpensesByPeriod(windowExpenses, previous)),
+      summarizePeriodCashflow(filterExpensesByPeriod(windowExpenses, current), incomeOverrides, period),
+      summarizePeriodCashflow(filterExpensesByPeriod(windowExpenses, previous), incomeOverrides, period),
     );
   }, [windowExpenses, period, now]);
 

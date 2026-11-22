@@ -460,6 +460,7 @@ export default function CashflowPage() {
               fixedIncomeEur={settings?.fixedMonthlyIncomeEur}
               activationMonth={settings?.fixedMonthlyIncomeStartMonth}
               familyMembers={familyMembers}
+              incomeOverrides={incomeOverrides}
             />
           </motion.div>
         </TabsContent>
