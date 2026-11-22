@@ -25,6 +25,7 @@ import { useEffect } from 'react';
 import { useActiveAccount } from '@/contexts/ActiveAccountContext';
 import { useExpenses, useExpenseCategories } from '@/lib/hooks/useExpenses';
 import { useSettings } from '@/lib/hooks/useSettings';
+import { useMonthlyIncomeOverrides } from '@/lib/hooks/useMonthlyIncomeOverrides';
 import { useFreshness } from '@/lib/hooks/useFreshness';
 import { AnalisiTab } from '@/components/cashflow/AnalisiTab';
 import { PageContainer } from '@/components/layout/PageContainer';
@@ -46,6 +47,8 @@ export default function AnalisiPage() {
   // behind the savings trend — from the ONE settings key every page shares (2026-09-29).
   const settingsQuery = useSettings(ownerId);
   const { data: settings, isLoading: settingsLoading, isError: settingsError } = settingsQuery;
+  // Owner's monthly income overrides, keyed by Italian `YYYY-MM`.
+  const { data: incomeOverrides = {}, isLoading: overridesLoading, isError: overridesFailed } = useMonthlyIncomeOverrides(ownerId);
   // The header's «Aggiornato alle…» while figures restored from the persisted cache are being
   // reread; the tab owns the header, so the reading travels down as a prop.
   const freshness = useFreshness([expensesQuery, categoriesQuery, settingsQuery]);
@@ -85,6 +88,7 @@ export default function AnalisiPage() {
         activationMonth={settings?.fixedMonthlyIncomeStartMonth}
         spendingRolesEnabled={spendingRolesEnabled}
         freshness={freshness}
+        incomeOverrides={incomeOverrides}
       />
     </PageContainer>
   );

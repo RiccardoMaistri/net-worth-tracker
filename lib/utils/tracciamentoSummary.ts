@@ -53,7 +53,11 @@ function buildTotals(income: number, spending: number, transferCount: number): P
 }
 
 /** Totals of a list of rows, classified by type. Amount signs are ignored on purpose. */
-export function summarizePeriodCashflow(expenses: Expense[]): PeriodCashflowTotals {
+export function summarizePeriodCashflow(
+  expenses: Expense[],
+  overrides?: Record<string, number>,
+  period?: { kind: string; year?: number; month?: number }
+): PeriodCashflowTotals {
   let income = 0;
   let spending = 0;
   let transferCount = 0;
@@ -67,6 +71,28 @@ export function summarizePeriodCashflow(expenses: Expense[]): PeriodCashflowTota
       // Spending is a magnitude (the convention of calculateTotalExpenses): a positive
       // spending row never turns into income.
       spending += Math.abs(expense.amount);
+    }
+  }
+  // Aggiungi l'override mensile se presente e conosciamo il periodo
+  if (overrides && period && period.kind === 'month' && period.month) {
+    const key = `${period.year}-${String(period.month).padStart(2, '0')}`;
+    if (typeof overrides[key] === 'number') {
+      income += overrides[key];
+    }
+  } else if (overrides && period && period.kind === 'year' && period.year) {
+    // Per l'anno, sommiamo tutti gli override del anno
+    const yearKeyPrefix = String(period.year);
+    for (const [k, v] of Object.entries(overrides)) {
+      if (k.startsWith(yearKeyPrefix + '-')) {
+        income += v;
+      }
+    }
+  } else if (overrides) {
+    // Se non c'è periodo ma ci sono override, li sommiamo tutti (uso generale)
+    for (const [, v] of Object.entries(overrides)) {
+      if (typeof v === 'number' && v > 0) {
+        income += v;
+      }
     }
   }
   return buildTotals(income, spending, transferCount);
