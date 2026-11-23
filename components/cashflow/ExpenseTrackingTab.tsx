@@ -48,6 +48,10 @@ import {
   getExpensesByInstallmentParentId,
 } from '@/lib/services/expenseService';
 import { reverseAppliedBalances } from '@/lib/services/cashBalanceReconciliation';
+import { halveExpenseAmount } from '@/lib/services/expenseHalvingService';
+import { halvedAmount } from '@/lib/utils/expenseHalving';
+import { formatCurrency } from '@/lib/utils/formatters';
+import { describeWriteError } from '@/lib/utils/dialogNarrative';
 import { rowsDeletedWith } from '@/lib/utils/transferFee';
 import { isRepayableProperty } from '@/lib/utils/mortgageRepayment';
 import { queryKeys } from '@/lib/query/queryKeys';
@@ -499,6 +503,37 @@ export function ExpenseTrackingTab({
     setDialogOpen(true);
   };
 
+  /**
+   * «Dividi a metà» from the feed's detail: the row's amount becomes half and its account gets
+   * back the difference it had already moved (lib/services/expenseHalvingService.ts). The detail
+   * armed the button and closed itself, like the delete; the list re-reads on refresh.
+   */
+  const handleHalveExpense = useCallback(
+    async (expense: Expense) => {
+      if (halvedAmount(expense.amount) === null) {
+        toast.error('L’importo è troppo piccolo per essere diviso a metà.');
+        return;
+      }
+      const invalidationOwner = user && ownerId ? ownerId : null;
+      try {
+        const result = await halveExpenseAmount(expense, new Date());
+        if (result.assetsMoved) {
+          if (invalidationOwner) {
+            queryClient.invalidateQueries({ queryKey: queryKeys.assets.all(invalidationOwner) });
+            queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.overview(invalidationOwner) });
+          }
+        }
+        if (invalidationOwner) queryClient.invalidateQueries({ queryKey: queryKeys.costCenters.all(invalidationOwner) });
+        toast.success(`Importo dimezzato: ${formatCurrency(result.amount)}`);
+        await onRefresh();
+      } catch (error) {
+        console.error('Error halving expense:', error);
+        toast.error(describeWriteError(error));
+      }
+    },
+    [user, ownerId, queryClient, onRefresh],
+  );
+
   const handleDialogClose = () => {
     setDialogOpen(false);
     setEditingExpense(null);
@@ -945,6 +980,7 @@ export function ExpenseTrackingTab({
       grouped={mobileSortKey === 'date-desc' || mobileSortKey === 'date-asc'}
       onEdit={handleEditExpense}
       onDelete={handleDeleteExpense}
+      onHalve={handleHalveExpense}
       onLinkSeries={(expense, target) => {
         const mode = resolveSeriesDeleteMode(expense);
         if (mode) setLinkRequest({ expense, mode, target });

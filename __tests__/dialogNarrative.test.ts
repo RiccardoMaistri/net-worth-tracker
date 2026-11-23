@@ -11,6 +11,7 @@ import {
   describeScrapeReading,
   describeDummyDataReading,
   describeExpenseDeleteConsequence,
+  describeExpenseHalveConsequence,
   describeExpenseIntent,
   describeFormRefusal,
   describeSeriesDeleteReading,
@@ -556,6 +557,52 @@ describe('describeExpenseDeleteConsequence — the row says what the second pres
   it('says that a transfer takes its fee with it', () => {
     expect(describeExpenseDeleteConsequence({ type: 'transfer', amount: 500, hasAccount: true, hasFee: true })).toBe('Eliminando, i due conti tornano come prima del trasferimento, e la sua commissione con lui.');
     expect(describeExpenseDeleteConsequence({ type: 'transfer', amount: 500, hasAccount: false, hasFee: true })).toBe('Eliminando, il trasferimento sparisce dal registro, e la sua commissione con lui.');
+  });
+});
+
+describe('describeExpenseHalveConsequence — «Dividi a metà» says what the second press does', () => {
+  const facts = { type: 'variable' as const, amount: -80, hasAccount: true, applied: true };
+
+  it('names both amounts and the difference the account gets back, or pays', () => {
+    expect(plain([{ text: describeExpenseHalveConsequence(facts) }])).toBe(
+      'Dimezzando, questa voce passa da 80,00 € a 40,00 €, e il conto viene riaccreditato di 40,00 €.',
+    );
+    expect(plain([{ text: describeExpenseHalveConsequence({ ...facts, type: 'income', amount: 2456 }) }])).toBe(
+      'Dimezzando, questa voce passa da 2456,00 € a 1228,00 €, e il conto viene addebitato di 1228,00 €.',
+    );
+  });
+
+  it('prints the cent the writer writes, not a naive half', () => {
+    expect(plain([{ text: describeExpenseHalveConsequence({ ...facts, hasAccount: false, amount: -373.81 }) }])).toBe(
+      'Dimezzando, questa voce passa da 373,81 € a 186,91 €.',
+    );
+  });
+
+  it('says an unlinked row only changes its amount', () => {
+    expect(plain([{ text: describeExpenseHalveConsequence({ ...facts, hasAccount: false }) }])).toBe(
+      'Dimezzando, questa voce passa da 80,00 € a 40,00 €.',
+    );
+  });
+
+  it('says a row still waiting for its date will move the smaller amount then', () => {
+    expect(plain([{ text: describeExpenseHalveConsequence({ ...facts, applied: false }) }])).toBe(
+      'Dimezzando, questa voce passa da 80,00 € a 40,00 €; il conto si muoverà alla data della voce.',
+    );
+  });
+
+  it('declares the mortgage principal that is split again, applied or still to come', () => {
+    expect(plain([{ text: describeExpenseHalveConsequence({ ...facts, hasAccount: false, repaysProperty: true }) }])).toBe(
+      'Dimezzando, questa voce passa da 80,00 € a 40,00 € e la quota capitale del mutuo viene ricalcolata.',
+    );
+    expect(plain([{ text: describeExpenseHalveConsequence({ ...facts, applied: false, repaysProperty: true }) }])).toBe(
+      'Dimezzando, questa voce passa da 80,00 € a 40,00 €; il conto si muoverà alla data della voce e la quota capitale del mutuo sarà ricalcolata alla data.',
+    );
+  });
+
+  it('never promises an amount when the row is too small to halve', () => {
+    expect(plain([{ text: describeExpenseHalveConsequence({ ...facts, amount: -0.01 }) }])).toBe(
+      'L’importo di 0,01 € è troppo piccolo per essere dimezzato.',
+    );
   });
 });
 
