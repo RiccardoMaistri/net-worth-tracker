@@ -22,6 +22,7 @@ import {
   buildPatrimonioVerdict,
   describeBondRow,
   describeCashAccounts,
+  describeCashInflationLoss,
   describeInstrumentReturns,
   describeInstruments,
   describeLastPriceUpdate,
@@ -419,5 +420,19 @@ describe('describeMortgageYearScope — a partial year says so', () => {
 
   it('should leave a whole past year bare', () => {
     expect(describeMortgageYearScope(year(2027, null), 2028)).toBeNull();
+  });
+});
+
+describe('describeCashInflationLoss', () => {
+  it('names the rate, the loss and the estimate on today’s balance', () => {
+    expect(plain(describeCashInflationLoss(640, 2.1, { year: 2026, month: 9 })!)).toBe(
+      'Negli ultimi 12 mesi (fino a settembre 2026) l’inflazione (2,1%) ha tolto ≈ 640 € di potere d’acquisto alla liquidità. È una stima sul saldo di oggi.',
+    );
+  });
+
+  it('drops the line when there is no loss to claim', () => {
+    expect(describeCashInflationLoss(0, 2.1, { year: 2026, month: 9 })).toBeNull();
+    expect(describeCashInflationLoss(-10, 2.1, { year: 2026, month: 9 })).toBeNull();
+    expect(describeCashInflationLoss(640, Number.NaN, { year: 2026, month: 9 })).toBeNull();
   });
 });

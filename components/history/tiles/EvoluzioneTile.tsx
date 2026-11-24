@@ -17,12 +17,14 @@ import { MessageSquare, TrendingDown, TrendingUp } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from '@/components/ui/charts/recharts';
 import type { Narrative } from '@/lib/utils/narrative';
 import type { EvolutionPoint, GrowthPace, GrowthSummary } from '@/lib/utils/storicoSummary';
-import { formatPeriodMonth } from '@/lib/utils/storicoNarrative';
+import { formatPeriodMonth, describeEvolutionInflation, type EvolutionInflationState } from '@/lib/utils/storicoNarrative';
+import { formatInflationMonth } from '@/lib/utils/inflation';
 import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
 import { formatCurrencyCompact, formatPercentage } from '@/lib/services/chartService';
 import { signChipClass, signTextClass } from '@/lib/utils/metricColors';
 import { cn } from '@/lib/utils';
 import { Tile, TILE_SUB_EYEBROW_CLASS } from '@/components/ui/tile';
+import { SegmentedPill, type SegmentedPillOption } from '@/components/ui/segmented-pill';
 import { OverviewAnimatedCurrency } from '@/components/dashboard/OverviewAnimatedCurrency';
 import { CHART_TICK_STYLE } from '@/components/cashflow/costCenterStyles';
 
@@ -37,8 +39,17 @@ interface EvoluzioneTileProps {
   onAddNote: () => void;
   /** Demo mode: the note dialog would write into the shared demo snapshots. */
   disabled?: boolean;
+  /** The unit of the line and the chips: nominal euro, or the euro of the last published HICP month. */
+  valueMode: 'nominal' | 'real';
+  onValueModeChange: (mode: 'nominal' | 'real') => void;
+  inflation: Omit<EvolutionInflationState, 'mode'>;
   className?: string;
 }
+
+const VALUE_MODE_OPTIONS: ReadonlyArray<SegmentedPillOption<'nominal' | 'real'>> = [
+  { value: 'nominal', label: 'Nominale' },
+  { value: 'real', label: 'Reale' },
+];
 
 // ─── Chips ────────────────────────────────────────────────────────────────────
 
@@ -122,9 +133,15 @@ const yearOfTick = (date: string) => `20${date.slice(3)}`;
 
 // ─── Tile ─────────────────────────────────────────────────────────────────────
 
-export function EvoluzioneTile({ aside, reading, growth, pace, points, noteCount, onAddNote, disabled = false, className }: EvoluzioneTileProps) {
+export function EvoluzioneTile({ aside, reading, growth, pace, points, noteCount, onAddNote, disabled = false, valueMode, onValueModeChange, inflation, className }: EvoluzioneTileProps) {
   const prefersReducedMotion = useReducedMotion();
   const gradientId = `evo-${useId().replace(/:/g, '')}`;
+
+  const inflationStatus = describeEvolutionInflation({ mode: valueMode, ...inflation });
+  const valueModeDisabled = inflation.loading || inflation.unavailable;
+  const realReference = valueMode === 'real' && inflation.latestMonth
+    ? `, in euro di ${formatInflationMonth(inflation.latestMonth)}`
+    : '';
 
   // One tick per January; with fewer than two years of history Recharts picks its own.
   const januaryTicks = points.filter((p) => p.month === 1).map((p) => p.date);
@@ -145,9 +162,27 @@ export function EvoluzioneTile({ aside, reading, growth, pace, points, noteCount
         className="mt-2.5 block font-mono text-[32px] font-bold leading-none tracking-[-0.03em] tabular-nums desktop:text-[36px]"
       />
 
+      {/* The unit switch sits above the chips it changes, named by the same word the caption uses.
+          A failed or missing HICP read disables «Reale» and says why — never a silent nominal. */}
+      <div className="mt-3.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <SegmentedPill
+          options={VALUE_MODE_OPTIONS}
+          value={valueMode}
+          onChange={onValueModeChange}
+          layoutId="evolution-value-mode"
+          ariaLabel="Valori nominali o reali"
+          semantics="radio"
+          disabled={valueModeDisabled}
+          optionClassName="min-h-11 px-3 text-[11px] desktop:min-h-8"
+        />
+        {inflationStatus && (
+          <p className="max-w-[38ch] text-[10.5px] leading-[1.4] text-muted-foreground">{inflationStatus}</p>
+        )}
+      </div>
+
       {/* The three chips, one grouped row that wraps (The Grouped Chip Rule) — on a phone too: stacked one
           per line they held the curve under the fold. */}
-      <div className="mt-4 flex flex-row flex-wrap items-start gap-x-2.5 gap-y-2.5">
+      <div className="mt-3 flex flex-row flex-wrap items-start gap-x-2.5 gap-y-2.5">
         {growth.snapshotCount > 1 && (
           <Chip value={growth.delta} caption="dal primo snapshot">
             <GrowthIcon className="h-[13px] w-[13px] shrink-0" aria-hidden="true" />
@@ -156,7 +191,7 @@ export function EvoluzioneTile({ aside, reading, growth, pace, points, noteCount
           </Chip>
         )}
         {growth.cagr !== null && (
-          <Chip value={growth.cagr} caption="versamenti inclusi, non un rendimento">
+          <Chip value={growth.cagr} caption={valueMode === 'real' ? 'CAGR reale' : 'versamenti inclusi, non un rendimento'}>
             {/* One string: a flex container drops the leading space of a separate text node. */}
             {`${signedPct(growth.cagr)} l'anno`}
           </Chip>
@@ -191,7 +226,7 @@ export function EvoluzioneTile({ aside, reading, growth, pace, points, noteCount
                   data={points}
                   margin={{ top: 8, right: 20, left: 0, bottom: 0 }}
                   role="img"
-                  aria-label={`Evoluzione del patrimonio da ${formatPeriodMonth(growth.first)} a ${formatPeriodMonth(growth.latest)}: da ${cachedFormatCurrencyEUR(growth.first.value, true)} a ${cachedFormatCurrencyEUR(growth.latest.value, true)}, ${growth.snapshotCount} rilevazioni.`}
+                  aria-label={`Evoluzione del patrimonio da ${formatPeriodMonth(growth.first)} a ${formatPeriodMonth(growth.latest)}${realReference}: da ${cachedFormatCurrencyEUR(growth.first.value, true)} a ${cachedFormatCurrencyEUR(growth.latest.value, true)}, ${growth.snapshotCount} rilevazioni.`}
                   accessibilityLayer={false}
                 >
                   <defs>
@@ -226,6 +261,9 @@ export function EvoluzioneTile({ aside, reading, growth, pace, points, noteCount
 
       <div className={cn('flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-border pt-3.5 text-[11px] leading-[1.45] text-muted-foreground', hasChart ? 'mt-3.5' : 'mt-auto pt-4')}>
         <span>
+          {valueMode === 'real' && inflation.latestMonth && (
+            <>Valori reali in euro di {formatInflationMonth(inflation.latestMonth)}. </>
+          )}
           Il primo snapshot è {formatPeriodMonth(growth.first)} (<span className="font-mono tabular-nums">{cachedFormatCurrencyEUR(growth.first.value, true)}</span>); ogni punto è la fotografia di fine mese.
         </span>
         <button

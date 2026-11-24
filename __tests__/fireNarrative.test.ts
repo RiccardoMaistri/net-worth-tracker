@@ -25,6 +25,7 @@ import {
   describeDettaglio,
   describeEmptyTiles,
   describeImpostazioni,
+  describeInflationReference,
   describeLock,
   describeParametri,
   describePassiveIncome,
@@ -603,5 +604,42 @@ describe('the disclosures', () => {
     expect(plain(describeRunway({ years: null, liquidYears: null, delta: null, targetYears: 25, monthLabel: null, pointCount: 0 }))).toBe('Servono almeno 12 snapshot mensili per la runway storica.');
     // Points exist but the trailing twelve months had no expenses: a different absence, said as such.
     expect(plain(describeRunway({ years: null, liquidYears: null, delta: null, targetYears: 25, monthLabel: 'luglio 2026', pointCount: 14 }))).toBe('Nessuna spesa negli ultimi 12 mesi: la runway non è misurabile.');
+  });
+});
+
+describe('describeInflationReference', () => {
+  it('prints the real HICP datum beside the hypotheses, with its month', () => {
+    expect(
+      plain(
+        describeInflationReference({
+          status: 'ready',
+          ratePct: 2.1,
+          latestMonth: { year: 2026, month: 9 },
+          stale: false,
+        }),
+      ),
+    ).toBe('HICP Italia ultimi 12 mesi: 2,1% (fino a settembre 2026).');
+  });
+
+  it('declares loading and a failed read, never a silent nothing', () => {
+    expect(plain(describeInflationReference({ status: 'loading', ratePct: null, latestMonth: null, stale: false }))).toBe(
+      'HICP Italia: lettura in corso…',
+    );
+    expect(plain(describeInflationReference({ status: 'unavailable', ratePct: null, latestMonth: null, stale: false }))).toBe(
+      'HICP Italia non disponibile.',
+    );
+  });
+
+  it('flags a stale reading', () => {
+    expect(
+      plain(
+        describeInflationReference({
+          status: 'ready',
+          ratePct: 2.1,
+          latestMonth: { year: 2026, month: 9 },
+          stale: true,
+        }),
+      ),
+    ).toContain("Lettura non aggiornata: uso l'ultimo dato salvato.");
   });
 });

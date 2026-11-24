@@ -18,6 +18,7 @@
 
 import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
 import { formatPercentageIt as formatPercentage } from '@/lib/utils/formatters';
+import { formatInflationMonth, type YearMonth } from '@/lib/utils/inflation';
 import { MONTH_NAMES } from '@/lib/constants/months';
 import { getItalyDate } from '@/lib/utils/dateHelpers';
 import { resolveDeclineCause, resolveTaxedGrowth, type PeriodSalesSummary } from '@/lib/utils/periodSales';
@@ -304,6 +305,28 @@ export function describeCashAccounts(
     return [...opening, prose(` ${largest.name}.`)];
   }
   return [...opening, prose('i conti; '), figure(cachedFormatCurrencyEUR(largest.balance, true)), prose(` su ${largest.name}.`)];
+}
+
+/**
+ * The Liquidità tile's inflation line: what the last twelve PUBLISHED months removed from
+ * today's net cash, in today's euro. An estimate on the balance of today — the sentence says
+ * so — and null when there is no positive loss (deflation) or no index at both ends.
+ */
+export function describeCashInflationLoss(
+  loss: number,
+  ratePct: number,
+  reference: YearMonth,
+): Narrative | null {
+  if (!(loss > 0) || !Number.isFinite(ratePct)) return null;
+  return [
+    prose('Negli ultimi 12 mesi (fino a '),
+    prose(formatInflationMonth(reference)),
+    prose(') l’inflazione ('),
+    figure(formatPercentage(ratePct, 1)),
+    prose(') ha tolto ≈ '),
+    figure(cachedFormatCurrencyEUR(loss, true)),
+    prose(' di potere d’acquisto alla liquidità. È una stima sul saldo di oggi.'),
+  ];
 }
 
 /** "Hai comprato 2500 € e venduto 800 €." — the month's buys and sells from the trade ledger. */

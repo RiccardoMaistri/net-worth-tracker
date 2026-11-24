@@ -32,6 +32,7 @@ import {
   describeDrivers,
   describeEvolution,
   describeEvolutionAside,
+  describeEvolutionInflation,
   describeLabor,
   describeLaborTaxes,
   describeLaborWindow,
@@ -591,5 +592,38 @@ describe('buildStoricoVerdict without a snapshot', () => {
     const verdict = buildStoricoVerdict({ growth: null, moves: { best: null, worst: null, risingMonths: 0, measuredMonths: 0 }, pace: { verdict: null, trailingDelta: null, trailingPct: null, trailingMonthly: null, lifetimeMonthly: null }, lastDoubling: null });
     expect(plain(verdict.sentence)).toContain('ne viene salvato uno da solo ogni sera');
     expect(plain(verdict.sentence)).not.toMatch(/cron/i);
+  });
+});
+
+describe('describeEvolutionInflation', () => {
+  const base = {
+    mode: 'nominal' as const,
+    loading: false,
+    unavailable: false,
+    stale: false,
+    latestMonth: { year: 2026, month: 9 },
+  };
+
+  it('names the last published month in nominal mode', () => {
+    expect(describeEvolutionInflation(base)).toBe('HICP Italia noto fino a settembre 2026.');
+  });
+
+  it('names the reference month and the line’s end in real mode', () => {
+    expect(describeEvolutionInflation({ ...base, mode: 'real' })).toBe(
+      'Valori in euro di settembre 2026: la linea reale si ferma al suo ultimo mese pubblicato.',
+    );
+  });
+
+  it('declares loading and a failed read instead of going silent', () => {
+    expect(describeEvolutionInflation({ ...base, loading: true })).toBe('HICP Italia: lettura in corso…');
+    expect(describeEvolutionInflation({ ...base, loading: false, unavailable: true })).toBe(
+      'HICP Italia non disponibile: il confronto reale è disattivato.',
+    );
+  });
+
+  it('flags a stale reading that is still usable', () => {
+    expect(describeEvolutionInflation({ ...base, stale: true })).toBe(
+      "HICP Italia noto fino a settembre 2026. Lettura non aggiornata: uso l'ultimo dato salvato.",
+    );
   });
 });

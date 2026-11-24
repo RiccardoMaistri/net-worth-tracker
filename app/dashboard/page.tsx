@@ -449,7 +449,7 @@ export default function DashboardPage() {
                 goals.length > 0 ? 'desktop:col-span-2' : 'desktop:col-span-4',
               )}
             >
-              <CostiTile metrics={overview.metrics} flags={overview.flags} costDrivers={overview.costDrivers ?? []} />
+              <CostiTile metrics={overview.metrics} flags={overview.flags} costDrivers={overview.costDrivers ?? []} costDrag={overview.costDrag ?? null} />
             </motion.div>
           )}
 

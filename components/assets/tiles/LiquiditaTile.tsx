@@ -3,6 +3,7 @@
 import type { Asset } from '@/types/assets';
 import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
 import { describeCashAccounts } from '@/lib/utils/patrimonioNarrative';
+import type { Narrative } from '@/lib/utils/narrative';
 import type { CashAccountsSummary } from '@/lib/utils/patrimonioSummary';
 import { cn } from '@/lib/utils';
 import { Tile, TILE_FOOTER_ACTION_CLASS, TILE_SUB_EYEBROW_CLASS } from '@/components/ui/tile';
@@ -16,6 +17,8 @@ interface LiquiditaTileProps {
   onAdd: (opener: HTMLElement) => void;
   /** Mutations are gated in demo mode, like everywhere else. */
   isDemo: boolean;
+  /** An optional second reading sentence (the inflation loss); it never replaces the accounts'. */
+  extraReading?: Narrative | null;
   className?: string;
 }
 
@@ -25,14 +28,18 @@ interface LiquiditaTileProps {
  * row's share is of the money HELD, and an account in the red — a credit card — reads «debito».
  * Each row is a button: the account's detail dialog (edit, delete) opens from here.
  */
-export function LiquiditaTile({ summary, accountsById, onSelect, onAdd, isDemo, className }: LiquiditaTileProps) {
+export function LiquiditaTile({ summary, accountsById, onSelect, onAdd, isDemo, extraReading, className }: LiquiditaTileProps) {
   const { accounts } = summary;
+  const accountsReading = describeCashAccounts(summary.shareOfTotal, summary.largest, accounts.length);
+  const reading = accountsReading || extraReading
+    ? [...(accountsReading ?? []), ...(extraReading ?? [])]
+    : null;
 
   return (
     <Tile
       eyebrow="Liquidità"
       aside={accounts.length > 0 ? `${accounts.length} ${accounts.length === 1 ? 'conto' : 'conti'}` : undefined}
-      reading={describeCashAccounts(summary.shareOfTotal, summary.largest, accounts.length)}
+      reading={reading}
       className={className}
     >
       {accounts.length === 0 ? (

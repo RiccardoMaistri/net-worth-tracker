@@ -44,13 +44,15 @@ import { DASHBOARD_OVERVIEW_STALE_TIME_MS, useDashboardOverview } from '@/lib/ho
 import { useFreshness } from '@/lib/hooks/useFreshness';
 import { useChartColors } from '@/lib/hooks/useChartColors';
 import { useDemoMode } from '@/lib/hooks/useDemoMode';
+import { useInflationIndex } from '@/lib/hooks/useInflationIndex';
 import { queryKeys } from '@/lib/query/queryKeys';
 import { authenticatedFetch } from '@/lib/utils/authFetch';
 import { getItalyMonthYear } from '@/lib/utils/dateHelpers';
 import { ASSET_CLASS_CHART_INDEX } from '@/lib/utils/allocationUtils';
 import { filterSparklineByPeriod } from '@/lib/utils/sparklinePeriod';
+import { inflationRateOver, purchasingPowerLoss, resolveLatestInflationMonth } from '@/lib/utils/inflation';
 import { cardItem, staggerContainer } from '@/lib/utils/motionVariants';
-import { buildPatrimonioVerdict, describeLastPriceUpdate, formatHoldingCounts } from '@/lib/utils/patrimonioNarrative';
+import { buildPatrimonioVerdict, describeCashInflationLoss, describeLastPriceUpdate, formatHoldingCounts } from '@/lib/utils/patrimonioNarrative';
 import {
   isCashAccount,
   isHeld,
@@ -118,6 +120,9 @@ export default function AssetsPage() {
   const assetsQuery = useAssets(ownerId);
   const snapshotsQuery = useSnapshots(ownerId);
   const overviewQuery = useDashboardOverview(ownerId);
+  // An enhancement of the Liquidità reading, never part of the page's read state: a failed
+  // macro read drops the sentence and leaves the tile standing.
+  const inflationQuery = useInflationIndex();
   const { data: assets = [], isLoading: loadingAssets, isError: assetsError } = assetsQuery;
   const { data: snapshots = [], isLoading: loadingSnapshots } = snapshotsQuery;
   const { data: overview, isLoading: loadingOverview, isError: overviewError } = overviewQuery;
@@ -254,6 +259,17 @@ export default function AssetsPage() {
   }, [assets, propertyIds, mortgageRows]);
 
   const cashSummary = useMemo(() => summarizeCashAccounts(cashAccounts, totalValue), [cashAccounts, totalValue]);
+  // The last twelve PUBLISHED months of HICP against today's net cash. A missing index at either
+  // end, no cash, or a deflationary window drops the sentence (never a fabricated 0 €).
+  const cashInflationReading = useMemo(() => {
+    const index = inflationQuery.data?.monthlyIndex ?? [];
+    const reference = inflationQuery.data?.latestMonth ?? resolveLatestInflationMonth(index);
+    if (!reference) return null;
+    const loss = purchasingPowerLoss(cashSummary.total, 12, index);
+    const rate = inflationRateOver(index, 12);
+    if (loss === null || rate === null) return null;
+    return describeCashInflationLoss(loss, rate, reference);
+  }, [cashSummary.total, inflationQuery.data]);
   const tradesSummary = useMemo(() => summarizeMonthTrades(trades, today), [trades, today]);
   const gains = useMemo(() => summarizeUnrealizedGains(instruments), [instruments]);
   const ranking = useMemo(() => rankInstrumentReturns(overview?.topAssets ?? []), [overview]);
@@ -529,6 +545,7 @@ export default function AssetsPage() {
               onSelect={openCashDetail}
               onAdd={openCreateCashAccount}
               isDemo={isDemo}
+              extraReading={cashInflationReading}
             />
           </motion.div>
 

@@ -270,6 +270,13 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Collezione inflation-cache - indice HICP Italia mensile (dato globale, letto solo dal server)
+    // Document ID == "hicp-it"; nessun campo userId. La route /api/benchmarks/inflation legge via
+    // Admin SDK: nessun client deve poterla leggere o scrivere.
+    match /inflation-cache/{docId} {
+      allow read, write: if false;
+    }
+
     // Collezione costCenters - centri di costo per raggruppare spese per oggetto/progetto
     match /costCenters/{costCenterId} {
       allow read: if canAccess(resource.data.userId);

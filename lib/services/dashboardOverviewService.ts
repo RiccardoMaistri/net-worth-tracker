@@ -28,6 +28,8 @@ import {
 } from '@/lib/utils/dashboardOverviewUtils';
 import { resolvePensionReturnStart } from '@/lib/utils/pensionReturn';
 import { summarizePeriodSales } from '@/lib/utils/periodSales';
+import { COST_DRAG_HORIZON_YEARS, projectCostDrag } from '@/lib/utils/costDrag';
+import { getDefaultScenarios } from '@/lib/utils/fireScenarios';
 import { getAssetTransactionsAdmin } from '@/lib/server/assetAdminRepository';
 import type { PensionContribution } from '@/types/pension';
 import type { AssetTransaction } from '@/types/assetTransactions';
@@ -427,6 +429,18 @@ function buildLiveOverviewPayload(
       : [];
   const goalProgress = goalProgressList[0] ?? null;
   const costDrivers = rankCostDrivers(assets);
+  // The SAME base `calculatePortfolioWeightedTER` weighs: instruments with a TER, sold ones at 0.
+  // Cash, the house and the pension fund are deliberately outside it — a TER is a fund's fee.
+  const terBaseValue = assets
+    .filter((asset) => asset.totalExpenseRatio !== undefined && asset.totalExpenseRatio > 0)
+    .reduce((sum, asset) => sum + calculateAssetValue(asset), 0);
+  const costDrag = projectCostDrag({
+    invested: terBaseValue,
+    terPct: calculatePortfolioWeightedTER(assets),
+    growthPct:
+      settings?.fireProjectionScenarios?.base?.growthRate ?? getDefaultScenarios().base.growthRate,
+    years: COST_DRAG_HORIZON_YEARS,
+  });
 
   // Top assets for the portfolio list card — active assets sorted by value desc, capped at 15.
   const topAssets: DashboardOverviewTopAsset[] = assets
@@ -527,6 +541,7 @@ function buildLiveOverviewPayload(
     goalProgress,
     goalProgressList,
     costDrivers,
+    costDrag,
   };
 }
 

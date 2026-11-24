@@ -51,6 +51,19 @@ export interface DashboardOverviewCostDriver {
   annualCost: number;
 }
 
+// The TER's cost over the Costi tile's fixed horizon, projected on today's invested base at
+// the base FIRE scenario's growth (see projectCostDrag in lib/utils/costDrag.ts). Optional on
+// the payload so old cached docs degrade gracefully; null when no instrument carries a TER.
+export interface DashboardOverviewCostDrag {
+  invested: number;
+  terPct: number;
+  growthPct: number;
+  years: number;
+  grossValue: number;
+  netValue: number;
+  drag: number;
+}
+
 // One asset class whose MARKET PRICE moved the portfolio this month, most-significant
 // first — the user's own buys and sells are excluded by construction
 // (see computeTopMovers in lib/utils/dashboardOverviewUtils.ts).
@@ -195,4 +208,7 @@ export interface DashboardOverviewPayload {
   // Held instruments with a TER, by annual cost — the Costi tile names the top few.
   // Optional so old cached docs degrade gracefully.
   costDrivers?: DashboardOverviewCostDriver[];
+  // What the TER removes over the tile's horizon, on today's invested base. Optional so old
+  // cached docs degrade gracefully; null when nothing carries a TER.
+  costDrag?: DashboardOverviewCostDrag | null;
 }

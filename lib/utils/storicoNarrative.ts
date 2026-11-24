@@ -19,6 +19,7 @@ import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
 import { formatPercentage } from '@/lib/services/chartService';
 import { MONTH_NAMES } from '@/lib/constants/months';
 import { MONTH_NAMES_SHORT } from '@/lib/utils/period';
+import { formatInflationMonth, type YearMonth } from '@/lib/utils/inflation';
 import { articleForPercent, atThePercent, monthWithPrepositionA } from '@/lib/utils/patrimonioNarrative';
 import type { Narrative, NarrativeSegment, PageVerdictModel, VerdictTone } from '@/lib/utils/narrative';
 import type { DoublingMode, DoublingTimeSummary } from '@/types/assets';
@@ -86,6 +87,32 @@ export function formatPeriodMonth(period: PeriodMonth): string {
 /** «ott 2022» */
 export function formatPeriodMonthShort(period: PeriodMonth): string {
   return `${MONTH_NAMES_SHORT[period.month - 1].toLowerCase()} ${period.year}`;
+}
+
+/**
+ * The Evoluzione tile's Nominale/Reale control, and what the reader is looking at. «Reale» is
+ * only offered when a published index reaches at least one snapshot; the reason a failed or
+ * missing read is not simply silent lives here, next to the control it disables.
+ */
+export interface EvolutionInflationState {
+  mode: 'nominal' | 'real';
+  loading: boolean;
+  unavailable: boolean;
+  stale: boolean;
+  latestMonth: YearMonth | null;
+}
+
+export function describeEvolutionInflation(state: EvolutionInflationState): string | null {
+  if (state.loading) return 'HICP Italia: lettura in corso…';
+  if (state.unavailable) return 'HICP Italia non disponibile: il confronto reale è disattivato.';
+  if (!state.latestMonth) return null;
+
+  const reference = formatInflationMonth(state.latestMonth);
+  const staleSuffix = state.stale ? " Lettura non aggiornata: uso l'ultimo dato salvato." : '';
+  if (state.mode === 'real') {
+    return `Valori in euro di ${reference}: la linea reale si ferma al suo ultimo mese pubblicato.${staleSuffix}`;
+  }
+  return `HICP Italia noto fino a ${reference}.${staleSuffix}`;
 }
 
 /** «a ottobre 2022» / «ad agosto 2024» */

@@ -21,6 +21,7 @@
 import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
 import { formatPercentage } from '@/lib/services/chartService';
 import { articleForPercent } from '@/lib/utils/patrimonioNarrative';
+import { formatInflationMonth, type YearMonth } from '@/lib/utils/inflation';
 import type { Narrative, NarrativeSegment, PageVerdictModel } from '@/lib/utils/narrative';
 import type { FIREProjectionScenarios } from '@/types/assets';
 import type { FanVerdict, FireLock, FireTarget, FireTargetHonest, FireTimeline, PassiveIncome, ScenarioRow } from '@/lib/utils/fireSummary';
@@ -798,6 +799,31 @@ export function describeImpostazioni(hasUnsavedChanges: boolean): Narrative {
 
 export function describeScenarioParams(): Narrative {
   return [prose('Tre ipotesi di mercato: il verdetto usa il base, il grafico del Traguardo le disegna tutte e tre.')];
+}
+
+export interface InflationReferenceState {
+  status: 'loading' | 'unavailable' | 'ready';
+  /** The last twelve published months of HICP Italy, in percent; null when not measurable. */
+  ratePct: number | null;
+  latestMonth: YearMonth | null;
+  stale: boolean;
+}
+
+/**
+ * Beside the scenarios' inflation hypotheses, the REAL datum: HICP Italy over the last twelve
+ * published months. The 2,5% stays an hypothesis about the future — this is what has happened,
+ * and it names the month its series stops at.
+ */
+export function describeInflationReference(state: InflationReferenceState): Narrative | null {
+  if (state.status === 'loading') return [prose('HICP Italia: lettura in corso…')];
+  if (state.status === 'unavailable') return [prose('HICP Italia non disponibile.')];
+  if (!state.latestMonth || state.ratePct === null) return null;
+  return [
+    prose('HICP Italia ultimi 12 mesi: '),
+    figure(formatPercentage(state.ratePct, 1)),
+    prose(` (fino a ${formatInflationMonth(state.latestMonth)}).`),
+    ...(state.stale ? [prose(" Lettura non aggiornata: uso l'ultimo dato salvato.")] : []),
+  ];
 }
 
 /**
