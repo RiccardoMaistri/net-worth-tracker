@@ -61,6 +61,8 @@ export function MonthlyIncomeOverrideBox({
   className,
 }: MonthlyIncomeOverrideBoxProps) {
   const editor = useMonthlyIncomeOverrideEditor(ownerId, fixedIncomeEur);
+  // Called before the early returns below: a hook after a conditional return breaks the order.
+  const queryClient = useQueryClient();
   const key = monthKeyOf(year, month);
   const monthLabel = `${MONTH_NAMES[month - 1]} ${year}`;
 
@@ -70,7 +72,6 @@ export function MonthlyIncomeOverrideBox({
   }
 
   if (overridesFailed) {
-    const queryClient = useQueryClient();
     return (
       <div
         role="status"

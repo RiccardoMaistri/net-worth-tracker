@@ -649,6 +649,38 @@ Sulla regione: Binance blocca alcune aree geografiche (tra cui gli Stati Uniti).
 Vercel sono in `fra1`, che va bene; un host in un'area bloccata risponderebbe con un errore di
 Binance, non del tile.
 
+---
+
+## OKX POC (sola lettura)
+
+Il POC OKX legge conto trading, conto funding e posizioni aperte di **un** account, con il P&L
+spot che OKX stesso calcola (`spotUpl`, metodo del costo medio). Non scrive nulla: nessun asset,
+nessuna transazione, nessun documento. Serve a verificare i campi e le cifre sul conto reale
+prima di costruire il ponte.
+
+1. Su OKX: *Profilo › API › Crea chiave API*. Permessi: **solo lettura**; passphrase a piacere
+   (è la `OKX_API_PASSPHRASE`, non la password di accesso). Se puoi, restringi la chiave
+   all'IP del server.
+2. Nel `.env.local` (e nelle variabili d'ambiente del deploy), mai con prefisso `NEXT_PUBLIC_`:
+
+```bash
+OKX_API_KEY=...
+OKX_API_SECRET=...
+OKX_API_PASSPHRASE=...
+# Default: https://eea.okx.com (conto registrato su my.okx.com). Per un conto globale:
+# OKX_BASE_URL=https://www.okx.com
+# OKX_DEMO=true            # legge il conto demo della stessa chiave
+# OKX_ALLOWED_EMAIL=you@gmail.com   # chi può chiamare la route (default: l'email dell'owner)
+```
+
+3. Da terminale: `npm run okx:poc` (tabella), `-- --json` (la stessa risposta della route),
+   `-- --raw` (i payload OKX, per controllare i campi). La route è
+   `POST /api/broker/okx/poc` con `{ "ownerId": "<uid>" }`, autenticata e ristretta
+   all'allowlist.
+
+**La chiave di un conto `my.okx.com` è rifiutata da `www.okx.com` con codice 50111**: è lo stesso
+errore di una chiave sbagliata, ma il dominio è la causa. Il default EEA evita il caso.
+
 ## Vercel Deployment
 
 > **La sync Scalable NON funziona su Vercel**, e il rifiuto è intenzionale. Per il perché e per

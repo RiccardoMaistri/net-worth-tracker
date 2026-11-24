@@ -16,6 +16,7 @@ import {
 } from '@/lib/server/monthlyEmailService';
 import { getItalyMonthYear } from '@/lib/utils/dateHelpers';
 import { refreshEcbRatesIfStale } from '@/lib/server/ecbRatesService';
+import { refreshInflationIfStale } from '@/lib/server/inflationService';
 import { isWeeklyBudgetDayItaly, buildAndSendWeeklyBudget } from '@/lib/server/weeklyBudgetEmailService';
 import { evaluateActiveGoals } from '@/lib/server/assistant/goalEvaluationService';
 import { captureBudgetHistory } from '@/lib/server/budgetHistoryService';
@@ -146,6 +147,14 @@ export async function GET(request: NextRequest) {
       console.log('[cron] ECB rate cache refreshed');
     } catch (ecbError) {
       console.error('[cron] ECB rate cache refresh failed (non-blocking):', ecbError);
+    }
+
+    // Refresh the shared HICP Italy index if stale — the same contract as the ECB rates
+    try {
+      await refreshInflationIfStale();
+      console.log('[cron] Inflation cache refreshed');
+    } catch (inflationError) {
+      console.error('[cron] Inflation cache refresh failed (non-blocking):', inflationError);
     }
 
     // Phase 2: Send monthly summary emails (only on the last day of the month)

@@ -147,7 +147,7 @@ const readRegions: SliceReader = ({ asset, profile }) => {
       const composition = matchIndexRegionComposition(profile.fund.family);
       if (composition) {
         const heaviestRegion = Object.keys(composition.weights).reduce(
-          (a, b) => (composition.weights as any)[a] > (composition.weights as any)[b] ? a : b,
+          (a, b) => ((composition.weights[a as keyof typeof composition.weights] ?? 0) > (composition.weights[b as keyof typeof composition.weights] ?? 0) ? a : b),
         );
         return [{ key: heaviestRegion.toUpperCase(), label: heaviestRegion, weight: 1 }];
       }

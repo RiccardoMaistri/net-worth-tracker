@@ -186,7 +186,7 @@ export function EvoluzioneTile({ aside, reading, growth, pace, points, noteCount
               so the SVG's 100% height resolves against the row and never against its own ratio. */}
           <div className="relative mt-2 min-h-[220px] flex-1">
             <div className="absolute inset-0">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                 <AreaChart
                   data={points}
                   margin={{ top: 8, right: 20, left: 0, bottom: 0 }}
