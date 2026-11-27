@@ -29,7 +29,6 @@ import {
 import { canUseOkx } from '@/lib/utils/okxAccess';
 import {
   buildOkxPortfolio,
-  OkxParseError,
   parseOkxBalance,
   parseOkxFundingBalances,
   parseOkxPositions,
@@ -90,7 +89,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const [raw, usdEur] = await Promise.all([readOkxAccount(), readUsdEur()]);
     timing.mark('read');
     const portfolio = buildOkxPortfolio({
-      balance: parseOkxBalance(raw.balance),
+      balance: raw.balance === null ? { details: [], totalEquityUsd: null } : parseOkxBalance(raw.balance),
       funding: parseOkxFundingBalances(rows(raw.funding)),
       savings: parseOkxSavingsBalances(rows(raw.savings)),
       staking: parseOkxStakingOrders(rows(raw.staking)),

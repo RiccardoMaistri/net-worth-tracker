@@ -288,8 +288,12 @@ async function call(
 }
 
 export interface OkxRawAccount {
-  /** Trading account rows (`data` of `/account/balance`). Required: without it there is no portfolio. */
-  balance: unknown[];
+  /**
+   * Trading account rows (`data` of `/account/balance`). `null` when the read failed: an EEA account
+   * without an active trading account answers 50001 on every `/account/*` path, while funding and
+   * Earn still read — so it is optional like the others, and only ALL wallets failing is an error.
+   */
+  balance: unknown[] | null;
   /** Funding balances. `null` when the read failed, so the caller never reads an empty account. */
   funding: unknown[] | null;
   /** Simple Earn balances. `null` when the read failed. */
@@ -306,24 +310,29 @@ export interface OkxRawAccount {
 
 export async function readOkxAccount(): Promise<OkxRawAccount> {
   const warnings: string[] = [];
+  let firstError: unknown = null;
   const optional = async <T>(label: string, read: () => Promise<T>, fallback: T): Promise<T> => {
     try {
       return await read();
     } catch (error) {
       if (error instanceof OkxConfigError) throw error;
+      firstError ??= error;
       warnings.push(`${label} non letto: ${error instanceof Error ? error.message : 'errore sconosciuto'}`);
       return fallback;
     }
   };
 
-  // Balance is the one read that may fail the whole POC: without it there is no portfolio to show.
-  const balance = await call('balance');
-  const [funding, savings, staking, positions, tickers] = await Promise.all([
+  const [balance, funding, savings, staking, positions, tickers] = await Promise.all([
+    optional('Conto trading', () => call('balance'), null as unknown[] | null),
     optional('Conto funding', () => call('fundingBalances'), null as unknown[] | null),
     optional('Simple Earn', () => call('savings'), null as unknown[] | null),
     optional('On-chain Earn', () => call('stakingOrders'), null as unknown[] | null),
     optional('Posizioni', () => call('positions'), null as unknown[] | null),
     optional('Prezzi spot', () => call('tickers', { instType: 'SPOT' }), [] as unknown[]),
   ]);
+  if (balance === null && funding === null && savings === null && staking === null) {
+    // Nothing readable: surface the first wallet's own error instead of an empty portfolio.
+    throw firstError instanceof OkxReadError ? firstError : new OkxReadError('Lettura OKX non riuscita: riprova.', 502);
+  }
   return { balance, funding, savings, staking, positions, tickers, warnings };
 }

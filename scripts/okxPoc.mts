@@ -186,7 +186,7 @@ async function main(): Promise<void> {
   }
 
   const portfolio = buildOkxPortfolio({
-    balance: parseOkxBalance(raw.balance),
+    balance: raw.balance === null ? { details: [], totalEquityUsd: null } : parseOkxBalance(raw.balance),
     funding: parseOkxFundingBalances(raw.funding ?? []),
     savings: parseOkxSavingsBalances(raw.savings ?? []),
     staking: parseOkxStakingOrders(raw.staking ?? []),
