@@ -23,7 +23,7 @@ export function OkxConnectionTile({ ownerId, disabled = false }: { ownerId: stri
   if (disabled || !showTile) return null;
 
   return (
-    <Tile eyebrow="OKX" aside="mai letto" reading="mai letto">
+    <Tile eyebrow="OKX">
       <div className="mt-3 p-4 text-sm text-muted-foreground">
         <p>Collegamento OKX configurato</p>
         <p className="mt-2">

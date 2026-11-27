@@ -9,6 +9,17 @@ export type { OkxParseError } from './okxPortfolio'
 
 export type { OkxWallet } from './okxPortfolio'
 
+export type {
+  OkxBalanceSnapshot,
+  OkxBalanceDetail,
+  OkxFundingBalance,
+  OkxSavingsBalance,
+  OkxStakingOrder,
+  OkxPosition,
+  OkxPortfolio,
+  OkxPortfolioTotals,
+} from './okxPortfolio'
+
 export {
   parseOkxBalance,
   parseOkxFundingBalances,
@@ -17,14 +28,6 @@ export {
   parseOkxPositions,
   parseOkxTickers,
   buildOkxPortfolio,
-  OkxPortfolio,
-  OkxPortfolioTotals,
-  OkxBalanceSnapshot,
-  OkxBalanceDetail,
-  OkxFundingBalance,
-  OkxSavingsBalance,
-  OkxStakingOrder,
-  OkxPosition,
 } from './okxPortfolio'
 
 /** Exchange name constant used by the tile UI. */
