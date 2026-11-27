@@ -21,8 +21,12 @@ function allocation(stock = 0.6) {
   return { stock, bond: 0.4, cash: 0, other: 0, preferred: 0, convertible: 0 };
 }
 
-function answer(allocations: Record<string, ReturnType<typeof allocation>>, oldestFetchedAt: string | null) {
-  return new Response(JSON.stringify({ allocations, oldestFetchedAt }), { status: 200 });
+function answer(
+  allocations: Record<string, ReturnType<typeof allocation>>,
+  oldestFetchedAt: string | null,
+  ter: Record<string, { value: number; source: string; fetchedAt: string }> = {}
+) {
+  return new Response(JSON.stringify({ allocations, ter, oldestFetchedAt }), { status: 200 });
 }
 
 /** 41 valid ISINs, so the client splits them into its 40 + 1 chunks. */
@@ -94,7 +98,7 @@ describe('fetchFundAllocations', () => {
   it('answers no allocation without a request when nothing is ISIN-shaped', async () => {
     const result = await fetchFundAllocations(['VWCE.DE', '']);
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ allocations: {}, oldestFetchedAt: null });
+    expect(result).toEqual({ allocations: {}, ter: {}, oldestFetchedAt: null });
   });
 
   it('asks tickers in their own list, never as ISINs', async () => {
@@ -116,5 +120,26 @@ describe('fetchFundAllocations', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(isinsOf(0)).toEqual([A]);
     expect(tickersOf(1)).toEqual(['GRID.MI']);
+  });
+
+  it('merges provider TERs by identity across chunks, fail-soft like allocations', async () => {
+    const isinTer = { value: 0.25, source: 'yahoo-fund-profile', fetchedAt: '2026-10-20T08:00:00.000Z' };
+    const tickerTer = { value: 0.78, source: 'yahoo-quote', fetchedAt: '2026-10-19T08:00:00.000Z' };
+    fetchMock.mockImplementation(async (url: string) => {
+      const params = new URL(url, 'http://localhost').searchParams;
+      if (params.has('isins')) {
+        return answer({ [A]: allocation() }, '2026-10-20T08:00:00.000Z', { [A]: isinTer });
+      }
+      if ((params.get('tickers') ?? '').split(',').includes(FORTY_ONE[40])) {
+        return new Response('nope', { status: 500 });
+      }
+      return answer({ 'GRID.MI': allocation(0.99) }, '2026-10-19T08:00:00.000Z', { 'GRID.MI': tickerTer });
+    });
+
+    const result = await fetchFundAllocations([A], ['GRID.MI', ...FORTY_ONE]);
+
+    expect(result.ter[A]).toEqual(isinTer);
+    expect(result.ter['GRID.MI']).toEqual(tickerTer);
+    expect(Object.keys(result.ter)).toHaveLength(2);
   });
 });

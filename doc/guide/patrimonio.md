@@ -297,7 +297,7 @@ form whose fields depend on a discriminant, and the marker rule itself, stay the
 
 - `AssetDialog`: step 1 picks the type, step 2 shows only that type's fields; edit reuses the same visibility logic and
   shows a ledger asset's quantity/PMC read-only (the ledger owns them). Class select for ETFs, optional `displayTicker`,
-  `leverageRatio`, and an opt-in TER only for `etf`/`commodity`/`crypto`.
+  `leverageRatio`, and an always-visible TER field for `etf`/`fund`/`commodity`/`crypto` — pre-filled from Yahoo's published ratio when one exists.
 - **A field typed key by key is watched by the leaf that reads it, never at the root** (2026-10-07): quantity,
   PMC, nominal, coupon rate, final premium, indexation coefficient and opening date feed six module-level leaves
   (`QuantityChangeNotice`, `BondPurchasePricePreview`, `BondQuoteInEuro`, `CouponPreview`, `FinalPremiumPreview`,
@@ -340,6 +340,22 @@ form whose fields depend on a discriminant, and the marker rule itself, stay the
   `Asset.assetClass` resta il RIPIEGO (quella scelta prima, `equity` di
   default) perché un asset composto non ha una classe propria — le nove classi non esistono: la tavolozza ne ha otto
   (`ASSET_CLASS_CHART_INDEX`), e un nono secchio prenderebbe gli euro che la composizione deve dividere.
+- **Il TER precompilato è una proposta VISIBILE, non una scrittura silenziosa** (2026-11-27): la stessa lettura di
+  `GET /api/portfolio/fund-allocation` che porta il mix pubblicato porta anche l'expense ratio di Yahoo, e `AssetDialog`
+  riempie il campo «TER (%)» dopo 500 ms per `etf`/`fund`/`commodity`/`crypto` con un'identità Yahoo risolvibile.
+  Non c'è uno switch per «attivare» il campo: è sempre visibile per quei tipi, e segue la stessa logica della
+  composizione — un valore scritto dall'utente (touched) non viene mai sostituito, mentre una risposta automatica
+  può essere aggiornata se cambia l'identità. La regola di eleggibilità è UNA, `lib/utils/terAutoFill.ts`, condivisa
+  con lo script `scripts/backfillTer.mts`; il
+  backfill è l'UNICA via che scrive da sola, è **manuale e una tantum** (`npm run ter:backfill:dry -- --uid=…`, poi
+  `npm run ter:backfill:apply -- --uid=…`), non un cron né un effetto di pagina, e salta demo, posizioni vendute o
+  escluse, e chi ha già un TER. Uno **0 esplicito è una risposta**, non un campo vuoto: né la form né lo script lo
+  sovrascrivono, e su entrambe le vie di scrittura `terSource`/`terFetchedAt` viaggiano solo con il numero esatto
+  letto dal provider — modificarlo o cancellarlo li cancella con `deleteField()`. La cache resta quella
+  per-ticker già esistente: `instrument-profile-cache` non contiene dati dell'utente, e un documento scritto prima
+  del campo si risana leggendo il solo modulo `fund` con `requireTer` (al più una volta al giorno); `--dry-run` passa
+  `readOnly` e non tocca neppure la cache. Il campo dice da dove arriva il numero e che si può cambiare: una stima
+  esterna diventa un dato dell'utente solo quando lui la vede e la salva.
 - **A marker on a label is a claim the validation has to honour.** `*` = required, `(opzionale)` in
   `text-muted-foreground font-normal` = explicitly optional; the zod schema, any imperative guard in `onSubmit` and the
   marker's own condition must agree (2026-08-30: Sottocategoria was `.optional()` in zod, blocked by a guard, and

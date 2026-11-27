@@ -114,6 +114,33 @@ describe('normalizeFundAnswer', () => {
     );
     expect(profile.allocation).toBeUndefined();
   });
+
+  it('normalises the published expense ratio, keeping the source field it came from', () => {
+    const profile = normalizeFundAnswer(
+      {
+        fundProfile: { family: 'Vanguard', feesExpensesInvestment: { netExpRatio: 0.0025 } },
+        fundPerformance: { annualReportExpenseRatio: 0.0078 },
+        price: { netExpenseRatio: 0.0099 },
+      },
+      NOW
+    );
+    expect(profile.ter).toEqual({
+      value: 0.25,
+      source: 'yahoo-fund-profile',
+      fetchedAt: '2026-09-28T10:00:00.000Z',
+    });
+    // A fund whose profile has no ratio still gets one from the next module, in precedence order.
+    const fromQuote = normalizeFundAnswer(
+      { fundProfile: { feesExpensesInvestment: null }, price: { netExpenseRatio: 0.0099 } },
+      NOW
+    );
+    expect(fromQuote.ter).toEqual({
+      value: 0.99,
+      source: 'yahoo-quote',
+      fetchedAt: '2026-09-28T10:00:00.000Z',
+    });
+    expect(normalizeFundAnswer({ topHoldings: null }, NOW).ter).toBeUndefined();
+  });
 });
 
 describe('normalizeStockAnswer', () => {
@@ -140,7 +167,9 @@ describe('yahooProfileSource', () => {
   it('asks the fund modules for a fund and the stock modules for a stock', async () => {
     quoteSummaryMock.mockResolvedValueOnce({ topHoldings: { stockPosition: 1, holdings: [{ symbol: 'A', holdingName: 'A', holdingPercent: 0.5 }] }, fundProfile: { family: 'X' } });
     const fund = await yahooProfileSource.fetchFund('VWCE.DE', NOW);
-    expect(quoteSummaryMock).toHaveBeenCalledWith('VWCE.DE', { modules: ['topHoldings', 'fundProfile'] });
+    expect(quoteSummaryMock).toHaveBeenCalledWith('VWCE.DE', {
+      modules: ['topHoldings', 'fundProfile', 'fundPerformance', 'price'],
+    });
     expect(fund?.holdings?.[0]).toEqual({ key: 'A', label: 'A', weight: 0.5 });
 
     quoteSummaryMock.mockResolvedValueOnce({ assetProfile: { sector: 'Technology' }, price: { longName: 'Apple Inc.' } });
@@ -169,7 +198,7 @@ describe('yahooProfileSource', () => {
     expect(quoteSummaryMock).toHaveBeenNthCalledWith(
       2,
       '0P00017T6E.F',
-      { modules: ['topHoldings', 'fundProfile'] },
+      { modules: ['topHoldings', 'fundProfile', 'fundPerformance', 'price'] },
       { validateResult: false }
     );
     expect(fund?.allocation).toMatchObject({ stock: 0.6, bond: 0.3, cash: 0.1 });

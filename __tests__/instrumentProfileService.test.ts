@@ -159,6 +159,56 @@ describe('resolveInstrumentProfiles — the TTL per module', () => {
     expect(fetchFund).not.toHaveBeenCalled();
   });
 
+  it('counts a published TER alone as a useful answer: 30 days, not 24 hours', async () => {
+    const cachedFund: InstrumentFundProfile = {
+      fetchedAt: daysAgo(10),
+      holdingsBasis: 'fund',
+      family: null,
+      ter: { value: 0.25, source: 'yahoo-fund-profile', fetchedAt: daysAgo(10) },
+    };
+    const { store } = memoryStore({ 'VWCE.DE': { fund: cachedFund } });
+    const { source, fetchFund } = fakeSource();
+    const { response } = await resolveInstrumentProfiles([fundRequest], { now: NOW, source, store });
+    expect(fetchFund).not.toHaveBeenCalled();
+    expect(response.profiles['VWCE.DE'].fund?.ter?.value).toBe(0.25);
+  });
+
+  it('heals a cached fund without TER daily when the caller needs one, honouring the 24-hour floor', async () => {
+    const cachedFund: InstrumentFundProfile = {
+      fetchedAt: daysAgo(10),
+      holdingsBasis: 'sleeve',
+      family: 'Vanguard',
+      holdings: [{ key: 'NVDA', label: 'Nvidia', weight: 0.05 }],
+    };
+    const { store } = memoryStore({ 'VWCE.DE': { fund: cachedFund } });
+    const exposureSource = fakeSource();
+    await resolveInstrumentProfiles([fundRequest], { now: NOW, source: exposureSource.source, store });
+    expect(exposureSource.fetchFund).not.toHaveBeenCalled();
+
+    const terAnswer = { value: 0.22, source: 'yahoo-quote' as const, fetchedAt: NOW.toISOString() };
+    const terSource = fakeSource({ fund: { ter: terAnswer } });
+    const { response } = await resolveInstrumentProfiles([fundRequest], {
+      now: NOW,
+      source: terSource.source,
+      store,
+      requireTer: true,
+    });
+    expect(terSource.fetchFund).toHaveBeenCalledTimes(1);
+    expect(response.profiles['VWCE.DE'].fund?.ter).toEqual(terAnswer);
+
+    const youngStore = memoryStore({
+      'VWCE.DE': { fund: { ...cachedFund, fetchedAt: hoursAgo(23) } },
+    });
+    const youngSource = fakeSource();
+    await resolveInstrumentProfiles([fundRequest], {
+      now: NOW,
+      source: youngSource.source,
+      store: youngStore.store,
+      requireTer: true,
+    });
+    expect(youngSource.fetchFund).not.toHaveBeenCalled();
+  });
+
   it('serves the stale useful answer, with its own date, when Yahoo fails', async () => {
     const { store, writes } = memoryStore({ 'VWCE.DE': { fund: { fetchedAt: daysAgo(40), holdingsBasis: 'sleeve', family: 'Vanguard' } } });
     const { source } = fakeSource({ fund: null });
@@ -263,6 +313,23 @@ describe('resolveInstrumentProfiles — nothing of the user’s, nothing that ca
     const { response } = await resolveInstrumentProfiles([fundRequest], { now: NOW, source, store });
     await settle();
     expect(response.profiles['VWCE.DE'].fund?.family).toBe('Vanguard');
+  });
+
+  it('is a TRUE read-only rehearsal: Yahoo is asked, the cache is never written', async () => {
+    const { store, writes } = memoryStore();
+    const { source, fetchFund } = fakeSource({ fund: { ter: { value: 0.25, source: 'yahoo-fund-profile', fetchedAt: NOW.toISOString() } } });
+    const { response } = await resolveInstrumentProfiles([fundRequest], {
+      now: NOW,
+      source,
+      store,
+      requireTer: true,
+      readOnly: true,
+    });
+    await settle();
+
+    expect(fetchFund).toHaveBeenCalledTimes(1);
+    expect(response.profiles['VWCE.DE'].fund?.ter?.value).toBe(0.25);
+    expect(writes).toEqual([]);
   });
 });
 

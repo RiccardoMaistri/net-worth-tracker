@@ -595,7 +595,9 @@ export function allocateContribution(
  * did — and the user re-picks `frozen` for the ones that belong in their percentages. Never
  * silently upgrade a legacy flag to `frozen`: that would move their numbers without them asking.
  */
-export function resolveAllocationRole(asset: Asset): AllocationRole {
+export function resolveAllocationRole(
+  asset: Pick<Asset, 'allocationRole' | 'excludeFromAllocation'>
+): AllocationRole {
   if (asset.allocationRole) return asset.allocationRole;
   return asset.excludeFromAllocation ? 'excluded' : 'tradable';
 }

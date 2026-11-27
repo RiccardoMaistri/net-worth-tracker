@@ -264,6 +264,15 @@ export async function updateAsset(
     if ('notes' in updates && updates.notes === undefined) {
       cleanedUpdates.notes = deleteField();
     }
+    // The TER provenance pair is user-clearable together: editing the visible field — or turning
+    // TER off — drops the provider source, so a hand-typed 0 can never still claim Yahoo's name.
+    // The `in` guard keeps a partial caller (a price refresh, a ledger replay) from wiping it.
+    if ('terSource' in updates && updates.terSource === undefined) {
+      cleanedUpdates.terSource = deleteField();
+    }
+    if ('terFetchedAt' in updates && updates.terFetchedAt === undefined) {
+      cleanedUpdates.terFetchedAt = deleteField();
+    }
     // geographicArea is optional and user-clearable (automatic / unset). Same `in` guard.
     if ('geographicArea' in updates && updates.geographicArea === undefined) {
       cleanedUpdates.geographicArea = deleteField();
@@ -376,6 +385,14 @@ export async function updateAssetMetadata(
     // notes too — the emptied textarea, same `in` guard.
     if ('notes' in updates && updates.notes === undefined) {
       cleanedUpdates.notes = deleteField();
+    }
+    // The TER provenance pair travels with the visible field. The form always sends both keys;
+    // a metadata edit that clears TER clears both, while a partial caller touches neither.
+    if ('terSource' in updates && updates.terSource === undefined) {
+      cleanedUpdates.terSource = deleteField();
+    }
+    if ('terFetchedAt' in updates && updates.terFetchedAt === undefined) {
+      cleanedUpdates.terFetchedAt = deleteField();
     }
     // geographicArea too — macro-region, same `in` guard.
     if ('geographicArea' in updates && updates.geographicArea === undefined) {

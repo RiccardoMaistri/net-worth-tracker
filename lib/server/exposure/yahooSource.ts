@@ -19,6 +19,7 @@
 import YahooFinance from 'yahoo-finance2';
 import type { ExposureLegSlice, InstrumentFundProfile, InstrumentStockProfile } from '@/types/exposure';
 import { sectorLabel, YAHOO_ASSET_PROFILE_SECTOR_TO_KEY } from '@/lib/constants/exposureSectors';
+import { resolveProviderTer, type ProviderTerAnswer } from '@/lib/utils/terAutoFill';
 import { resolveQuotableSymbol } from '@/lib/server/yahooSymbol';
 
 /** What the service asks of Yahoo; injectable so the service is tested without the network. */
@@ -41,9 +42,9 @@ interface RawTopHoldings {
   sectorWeightings?: Array<Record<string, number | null | undefined>> | null;
 }
 
-interface RawFundSummary {
+interface RawFundSummary extends ProviderTerAnswer {
   topHoldings?: RawTopHoldings | null;
-  fundProfile?: { family?: string | null } | null;
+  fundProfile?: { family?: string | null; feesExpensesInvestment?: { netExpRatio?: unknown } | null } | null;
 }
 
 interface RawStockSummary {
@@ -88,6 +89,7 @@ export function normalizeFundAnswer(summary: RawFundSummary | null | undefined, 
     convertible: fraction(topHoldings?.convertiblePosition),
   };
   const hasAllocation = Object.values(allocation).some((weight) => weight > 0);
+  const ter = resolveProviderTer(summary, now.toISOString());
 
   return {
     fetchedAt: now.toISOString(),
@@ -96,6 +98,7 @@ export function normalizeFundAnswer(summary: RawFundSummary | null | undefined, 
     holdingsBasis: stockPosition ? 'sleeve' : 'fund',
     family: typeof family === 'string' && family.trim() !== '' ? family : null,
     ...(hasAllocation ? { allocation } : {}),
+    ...(ter ? { ter } : {}),
   };
 }
 
@@ -151,7 +154,14 @@ export const yahooProfileSource: YahooProfileSource = {
   async fetchFund(ticker, now) {
     try {
       const symbol = await resolveQuotableSymbol(ticker);
-      const summary = await quoteSummaryLoose<RawFundSummary>(symbol, ['topHoldings', 'fundProfile']);
+      // `fundPerformance` and `price` carry the three published expense-ratio fields the form and
+      // the backfill read. `price` is also the stock module's, but here it is the fund's quote.
+      const summary = await quoteSummaryLoose<RawFundSummary>(symbol, [
+        'topHoldings',
+        'fundProfile',
+        'fundPerformance',
+        'price',
+      ]);
       return normalizeFundAnswer(summary, now);
     } catch {
       return null;

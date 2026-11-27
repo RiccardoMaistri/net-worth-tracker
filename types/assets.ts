@@ -1,4 +1,5 @@
 import type { PensionFundDetails } from './pension';
+import type { ProviderTerSource } from './exposure';
 import type { GeographicArea } from '@/lib/constants/geographicAreas';
 export type { GeographicArea };
 
@@ -176,6 +177,14 @@ export interface Asset {
   averageCostEur?: number;
   taxRate?: number; // Tax rate percentage for unrealized gains (e.g., 26 for 26%)
   totalExpenseRatio?: number; // Total Expense Ratio (TER) as a percentage (e.g., 0.20 for 0.20%)
+  /**
+   * Which Yahoo field supplied a provider-derived TER. Absent on a hand-typed value (including an
+   * explicit 0) and on a TER the owner entered before provenance existed. Never written without the
+   * exact `totalExpenseRatio` it describes.
+   */
+  terSource?: ProviderTerSource;
+  /** Instant of the provider answer behind `totalExpenseRatio`; absent with a hand-typed value. */
+  terFetchedAt?: Date;
   stampDutyExempt?: boolean; // If true, asset is excluded from stamp duty (imposta di bollo) calculation (e.g. pension funds, real estate)
   includeInHistoryTables?: boolean; // If true, asset appears in Anno Corrente and Storico price/value tables regardless of cost basis tracking
   currentPrice: number;
@@ -253,6 +262,14 @@ export interface AssetFormData {
   averageCost?: number;
   taxRate?: number; // Tax rate percentage for unrealized gains (e.g., 26 for 26%)
   totalExpenseRatio?: number; // Total Expense Ratio (TER) as a percentage (e.g., 0.20 for 0.20%)
+  /**
+   * Which Yahoo field supplied a provider-derived TER. Absent on a hand-typed value (including an
+   * explicit 0) and on a TER the owner entered before provenance existed. Never written without the
+   * exact `totalExpenseRatio` it describes.
+   */
+  terSource?: ProviderTerSource;
+  /** Instant of the provider answer behind `totalExpenseRatio`; absent with a hand-typed value. */
+  terFetchedAt?: Date;
   stampDutyExempt?: boolean; // If true, asset is excluded from stamp duty (imposta di bollo) calculation
   includeInHistoryTables?: boolean; // If true, asset appears in Anno Corrente and Storico price/value tables regardless of cost basis tracking
   currentPrice: number;

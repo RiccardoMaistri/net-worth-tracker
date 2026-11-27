@@ -107,6 +107,7 @@ export function CostiTile({ metrics, flags, costDrivers, costDrag, className }: 
         <TileMethodNote subject="Costi in 20 anni" className="mt-4">
           <span>
             Il TER medio pesa solo sulle posizioni che lo dichiarano: liquidità, casa e fondo pensione restano fuori.
+            Il valore salvato può essere stato precompilato da Yahoo, ma resta sempre modificabile nello strumento.
           </span>
           <span>
             La proiezione compone oggi quel patrimonio per 20 anni al tasso di crescita dello scenario base FIRE, con e

@@ -59,7 +59,11 @@ export function SummarySection({ data, reportScope }: SummarySectionProps) {
       value: `${data.unrealizedGains >= 0 ? '+' : '−'}${euro(Math.abs(data.unrealizedGains))}`,
       sign: data.unrealizedGains >= 0 ? 'positive' : 'negative',
     },
-    { label: 'TER medio ponderato', value: formatPercentageIt(data.weightedTER, 2), note: 'sui soli strumenti che ne hanno uno' },
+    {
+      label: 'TER medio ponderato',
+      value: formatPercentageIt(data.weightedTER, 2),
+      note: 'sui soli strumenti con TER salvato (precompilabile da Yahoo)',
+    },
     {
       label: 'Distanza dal piano',
       value: `${Math.round(data.allocationScore)} / 100`,

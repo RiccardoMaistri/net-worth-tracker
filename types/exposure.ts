@@ -59,6 +59,26 @@ export interface InstrumentFundAllocation {
   convertible: number;
 }
 
+/**
+ * The exact Yahoo field a published expense ratio came from. The asset stores the same value as
+ * provenance (`Asset.terSource`) so a reader can tell a provider's figure from one typed by hand.
+ */
+export type ProviderTerSource = 'yahoo-fund-profile' | 'yahoo-fund-performance' | 'yahoo-quote';
+
+/**
+ * Yahoo's published TOTAL EXPENSE RATIO, in the app's percent convention (0,25 = 0,25%). It is a
+ * fact about the instrument, never about one account, so it lives in the shared fund module next
+ * to Yahoo's published mix — not in a second cache and not on a user document until the user
+ * accepts it into a form (or the explicit backfill writes it with this same provenance).
+ */
+export interface InstrumentTer {
+  /** Percent, with the app's convention: 0,25 = 0,25%. */
+  value: number;
+  source: ProviderTerSource;
+  /** ISO instant of the Yahoo module this value was read from. */
+  fetchedAt: string;
+}
+
 export interface InstrumentFundProfile {
   /** ISO instant of Yahoo's answer for this module. */
   fetchedAt: string;
@@ -75,6 +95,8 @@ export interface InstrumentFundProfile {
   family: string | null;
   /** The fund's published mix; absent when Yahoo published none («non letto»). */
   allocation?: InstrumentFundAllocation;
+  /** Yahoo's published expense ratio; absent when no module carried one. */
+  ter?: InstrumentTer;
 }
 
 export interface InstrumentStockProfile {
@@ -108,6 +130,8 @@ export interface InstrumentProfilesResponse {
  */
 export interface FundAllocationsResponse {
   allocations: Record<string, InstrumentFundAllocation>;
+  /** Published expense ratios, keyed by the SAME identity as `allocations`; absent means unread. */
+  ter: Record<string, InstrumentTer>;
   /** The oldest `fetchedAt` among the profiles actually answered; null when none was. */
   oldestFetchedAt: string | null;
 }

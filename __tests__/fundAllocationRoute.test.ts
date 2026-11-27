@@ -53,7 +53,13 @@ describe('GET /api/portfolio/fund-allocation', () => {
       response: {
         profiles: {
           IT0005650905: {
-            fund: { fetchedAt: '2026-10-20T08:00:00.000Z', holdingsBasis: 'fund', family: 'Eurizon', allocation: ALLOCATION },
+            fund: {
+              fetchedAt: '2026-10-20T08:00:00.000Z',
+              holdingsBasis: 'fund',
+              family: 'Eurizon',
+              allocation: ALLOCATION,
+              ter: { value: 0.19, source: 'yahoo-fund-profile', fetchedAt: '2026-10-20T08:00:00.000Z' },
+            },
           },
           LU2629378014: {
             fund: { fetchedAt: '2026-10-20T08:00:00.000Z', holdingsBasis: 'fund', family: 'Eurizon' },
@@ -96,12 +102,15 @@ describe('GET /api/portfolio/fund-allocation', () => {
         { ticker: 'IT0005650905', module: 'fund' },
         { ticker: 'LU2629378014', module: 'fund' },
       ],
-      expect.objectContaining({ timing: expect.any(Object), requireAllocation: true })
+      expect.objectContaining({ timing: expect.any(Object), requireAllocation: true, requireTer: true })
     );
     const body = await response.json();
     expect(body.allocations).toEqual({ IT0005650905: ALLOCATION });
     // An unread ISIN is ABSENT, never a zero allocation the client would print as 100/0.
     expect(body.allocations.LU2629378014).toBeUndefined();
+    expect(body.ter).toEqual({
+      IT0005650905: { value: 0.19, source: 'yahoo-fund-profile', fetchedAt: '2026-10-20T08:00:00.000Z' },
+    });
     expect(body.oldestFetchedAt).toBe('2026-10-20T08:00:00.000Z');
   });
 
@@ -109,7 +118,14 @@ describe('GET /api/portfolio/fund-allocation', () => {
     resolveProfilesMock.mockResolvedValueOnce({
       response: {
         profiles: {
-          'GRID.MI': { fund: { fetchedAt: '2026-10-20T08:00:00.000Z', holdingsBasis: 'fund', allocation: ALLOCATION } },
+          'GRID.MI': {
+            fund: {
+              fetchedAt: '2026-10-20T08:00:00.000Z',
+              holdingsBasis: 'fund',
+              allocation: ALLOCATION,
+              ter: { value: 0.78, source: 'yahoo-quote', fetchedAt: '2026-10-20T08:00:00.000Z' },
+            },
+          },
           'EUJP.MI': { fund: { fetchedAt: '2026-10-20T08:00:00.000Z', holdingsBasis: 'fund' } },
         },
         oldestFetchedAt: '2026-10-20T08:00:00.000Z',
@@ -125,11 +141,13 @@ describe('GET /api/portfolio/fund-allocation', () => {
         { ticker: 'GRID.MI', module: 'fund' },
         { ticker: 'EUJP.MI', module: 'fund' },
       ],
-      expect.objectContaining({ requireAllocation: true })
+      expect.objectContaining({ requireAllocation: true, requireTer: true })
     );
     const body = await response.json();
     expect(body.allocations).toEqual({ 'GRID.MI': ALLOCATION });
     expect(body.allocations['EUJP.MI']).toBeUndefined();
+    expect(body.ter['GRID.MI'].value).toBe(0.78);
+    expect(body.ter['EUJP.MI']).toBeUndefined();
   });
 
   it('refuses a query that names no instrument at all', async () => {

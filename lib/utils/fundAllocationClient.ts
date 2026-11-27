@@ -9,7 +9,7 @@
  * says which rows it could not split — never a 100/0 guess.
  */
 import { authenticatedFetch } from '@/lib/utils/authFetch';
-import type { FundAllocationsResponse, InstrumentFundAllocation } from '@/types/exposure';
+import type { FundAllocationsResponse, InstrumentFundAllocation, InstrumentTer } from '@/types/exposure';
 
 /** The route's own bound (`fundAllocationQuerySchema`); one import rarely needs more than one. */
 const INSTRUMENTS_PER_REQUEST = 40;
@@ -22,6 +22,8 @@ const TICKER_PATTERN = /^[A-Za-z0-9.^=\-]{1,20}$/;
 
 export interface FundAllocationsResult {
   allocations: Record<string, InstrumentFundAllocation>;
+  /** Published TERs, keyed by the same identity as `allocations`; absent means Yahoo had none. */
+  ter: Record<string, InstrumentTer>;
   oldestFetchedAt: string | null;
 }
 
@@ -82,18 +84,20 @@ export async function fetchFundAllocations(
         return await fetchChunk(chunk);
       } catch (error) {
         console.error('[fund-allocation] chunk failed:', error);
-        return { allocations: {}, oldestFetchedAt: null } satisfies FundAllocationsResponse;
+        return { allocations: {}, ter: {}, oldestFetchedAt: null } satisfies FundAllocationsResponse;
       }
     })
   );
 
   const allocations: Record<string, InstrumentFundAllocation> = {};
+  const ter: Record<string, InstrumentTer> = {};
   let oldestFetchedAt: string | null = null;
   for (const answer of answers) {
     Object.assign(allocations, answer.allocations);
+    Object.assign(ter, answer.ter ?? {});
     if (answer.oldestFetchedAt && (!oldestFetchedAt || answer.oldestFetchedAt < oldestFetchedAt)) {
       oldestFetchedAt = answer.oldestFetchedAt;
     }
   }
-  return { allocations, oldestFetchedAt };
+  return { allocations, ter, oldestFetchedAt };
 }

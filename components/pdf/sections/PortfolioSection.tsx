@@ -76,7 +76,11 @@ export function PortfolioSection({ data, reportScope }: PortfolioSectionProps) {
       note: `${data.totalUnrealizedGainsPercent >= 0 ? '+' : '−'}${formatPercentageIt(Math.abs(data.totalUnrealizedGainsPercent), 2)} sul capitale versato`,
       sign: data.totalUnrealizedGains >= 0 ? 'positive' : 'negative',
     },
-    { label: 'TER medio ponderato', value: formatPercentageIt(data.weightedTER, 2), note: 'sui soli strumenti che ne hanno uno' },
+    {
+      label: 'TER medio ponderato',
+      value: formatPercentageIt(data.weightedTER, 2),
+      note: 'sui soli strumenti con TER salvato (precompilabile da Yahoo)',
+    },
     { label: 'Costo annuo stimato', value: euro(data.annualCost), note: 'TER × valore, a portafoglio fermo' },
   ];
 

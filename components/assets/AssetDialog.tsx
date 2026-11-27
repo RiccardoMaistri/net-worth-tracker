@@ -65,6 +65,9 @@ import {
   MIXED_CLASS_LABEL,
 } from '@/lib/utils/assetClassChoice';
 import { fetchFundAllocations } from '@/lib/utils/fundAllocationClient';
+import { buildTerWriteFields, hasStoredTer, TER_SOURCE_LABELS } from '@/lib/utils/terAutoFill';
+import type { InstrumentTer } from '@/types/exposure';
+import { effectiveProfileTicker } from '@/lib/utils/exposureRequests';
 import { suggestIsLiquid } from '@/lib/utils/assetLiquidity';
 import { hasMarketPrice } from '@/lib/utils/assetPricing';
 import {
@@ -220,7 +223,8 @@ function buildAssetFormDataFromValues(
   isComposite: boolean,
   composition: AssetComposition[],
   isBondWithIsin: boolean,
-  knownCoefficient: number | undefined
+  knownCoefficient: number | undefined,
+  terProvenance: InstrumentTer | null
 ): AssetFormData {
   return {
     ticker: data.ticker,
@@ -243,10 +247,10 @@ function buildAssetFormDataFromValues(
     // `data.taxRate &&` would treat an explicit 0 as falsy and drop it like an empty field;
     // `!== undefined` + `!isNaN` together already exclude the empty-input case (valueAsNumber → NaN).
     taxRate: data.taxRate !== undefined && !isNaN(data.taxRate) && data.taxRate >= 0 ? data.taxRate : undefined,
-    totalExpenseRatio:
-      data.totalExpenseRatio && !isNaN(data.totalExpenseRatio) && data.totalExpenseRatio >= 0
-        ? data.totalExpenseRatio
-        : undefined,
+    // A provider value keeps its source ONLY while the visible field still holds that exact
+    // number. Editing it — even back to the same number — drops the claim: the figure is now the
+    // user's. `buildTerWriteFields` also preserves an explicit 0 (a statement, not an absence).
+    ...buildTerWriteFields(data.totalExpenseRatio, terProvenance),
     // Leverage is an ETF-only concept; a value of exactly 1 means "no leverage" → store undefined.
     leverageRatio:
       data.type === 'etf' && data.leverageRatio && !isNaN(data.leverageRatio) && data.leverageRatio > 1
@@ -784,13 +788,26 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
   const [compositionTouched, setCompositionTouched] = useState(false);
   /** The ISIN the CURRENT rows were filled from, when the form filled them (not the user). */
   const [compositionSourceIsin, setCompositionSourceIsin] = useState<string | null>(null);
+  /**
+   * TER auto-fill, on the same touched-flag pattern as the composition: the exact provider answer
+   * behind the visible field, the identity it answered, and whether the user has written the value.
+   * A touched field drops the provenance at submit (`buildTerWriteFields`), so changing one digit
+   * stops the form calling the number Yahoo's. There is no opt-in switch — the field is always
+   * visible for fund-like types and the lookup fills it on its own.
+   */
+  const [terProvenance, setTerProvenance] = useState<InstrumentTer | null>(null);
+  const [terTouched, setTerTouched] = useState(false);
+  const [terAnswerIdentity, setTerAnswerIdentity] = useState<string | null>(null);
+  const [terLookup, setTerLookup] = useState<{
+    identity: string;
+    status: 'reading' | 'unavailable';
+  } | null>(null);
   const [hasOutstandingDebt, setHasOutstandingDebt] = useState(false);
   // True once the user has picked an allocation role by hand — from then on the type/sub-category
   // driven suggestion stops overriding their choice.
   const [allocationRoleTouched, setAllocationRoleTouched] = useState(false);
   const [isLiquidTouched, setIsLiquidTouched] = useState(false);
   const [showCostBasis, setShowCostBasis] = useState(false);
-  const [showTER, setShowTER] = useState(false);
   const [showBondDetails, setShowBondDetails] = useState(false);
   const [showStepUp, setShowStepUp] = useState(false);
   const [showCostCalculator, setShowCostCalculator] = useState(false);
@@ -832,9 +849,28 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
   const watchAutoUpdatePrice = useWatch({ control, name: 'autoUpdatePrice' });
   const watchIsComposite = useWatch({ control, name: 'isComposite' });
   const watchCurrency = useWatch({ control, name: 'currency' });
+  const watchTicker = useWatch({ control, name: 'ticker' });
   const watchIsin = useWatch({ control, name: 'isin' });
   /** The ISIN as the route reads it, and the automatic read's line for THIS value only. */
   const normalizedIsin = (watchIsin ?? '').trim().toUpperCase();
+  /**
+   * The identity the TER read is keyed on: an ISIN when the field carries one, else the same
+   * effective Yahoo ticker the Esposizione uses. The form asks the EXISTING fund-allocation route
+   * with it — there is no second provider path and no second eligibility rule.
+   */
+  // Memoised as an OBJECT, not just its three fields in an effect's deps: the async read cancels
+  // itself on cleanup, so a fresh object on every render would cancel the lookup it just started.
+  const terIdentity = useMemo(
+    () =>
+      ISIN_PATTERN.test(normalizedIsin)
+        ? { key: `isin:${normalizedIsin}`, kind: 'isin' as const, value: normalizedIsin }
+        : (() => {
+            const ticker = effectiveProfileTicker({ ticker: watchTicker ?? '', isin: watchIsin ?? '' });
+            return { key: `ticker:${ticker}`, kind: 'ticker' as const, value: ticker };
+          })(),
+    [normalizedIsin, watchTicker, watchIsin]
+  );
+  const currentTerLookup = terLookup?.identity === terIdentity.key ? terLookup : null;
   const compositionLookupStatus =
     compositionLookup?.isin === normalizedIsin ? compositionLookup.status : null;
   const watchExchange = useWatch({ control, name: 'exchange' });
@@ -911,8 +947,8 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
     selectedType !== 'cash' && selectedType !== 'realestate' && selectedType !== 'pensionFund' && selectedType !== 'crowdfunding';
   // TER applies to funds/ETC (ongoing management fee), never to a single stock. `commodity` and
   // `crypto` both double as either a direct spot holding (no TER) or an ETC wrapper around that
-  // same underlying (e.g. WisdomTree Agriculture AIGA.MI, WisdomTree Physical Bitcoin) — the toggle
-  // stays opt-in and off by default, so exposing it costs nothing for the spot case.
+  // same underlying (e.g. WisdomTree Agriculture AIGA.MI, WisdomTree Physical Bitcoin). The field
+  // is always visible for these types; the automatic read either fills it or says it found nothing.
   const newAsset_showTER =
     selectedType === 'etf' || selectedType === 'fund' || selectedType === 'commodity' || selectedType === 'crypto';
   // Leva: only ETFs can be leveraged/composite instruments.
@@ -1020,6 +1056,38 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
       setCompositionLookup(null);
       setCompositionTouched(false);
       setCompositionSourceIsin(null);
+      setTerLookup(null);
+      setTerTouched(false);
+      setTerAnswerIdentity(null);
+      // A saved provider value is an automatic answer for the identity on the document, so a
+      // changed ISIN/ticker may replace it exactly like a value this form just read. A hand-typed
+      // value (no provenance) is treated as touched and is never re-read. The fetchedAt can still
+      // be a Firestore Timestamp on a raw document read.
+      const rawTerFetchedAt = asset?.terFetchedAt as Date | { toDate(): Date } | undefined;
+      const savedTerFetchedAt = rawTerFetchedAt
+        ? rawTerFetchedAt instanceof Date
+          ? rawTerFetchedAt.toISOString()
+          : rawTerFetchedAt.toDate().toISOString()
+        : null;
+      const savedTerIsProviderAnswer =
+        !!asset && hasStoredTer(asset) && !!asset.terSource && !!savedTerFetchedAt;
+      setTerProvenance(
+        savedTerIsProviderAnswer
+          ? { value: asset!.totalExpenseRatio!, source: asset!.terSource!, fetchedAt: savedTerFetchedAt! }
+          : null
+      );
+      if (asset && hasStoredTer(asset)) {
+        if (savedTerIsProviderAnswer) {
+          const savedIsin = (asset.isin ?? '').trim().toUpperCase();
+          setTerAnswerIdentity(
+            ISIN_PATTERN.test(savedIsin)
+              ? `isin:${savedIsin}`
+              : `ticker:${effectiveProfileTicker(asset)}`
+          );
+        } else {
+          setTerTouched(true);
+        }
+      }
       // Reset calculator on every open to avoid stale data from previous session
       setShowCostCalculator(false);
       setBrokerEntries([{ qty: '', price: '' }]);
@@ -1037,7 +1105,8 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
         );
         setHasOutstandingDebt(!!(asset.outstandingDebt && asset.outstandingDebt > 0));
         setShowCostBasis(!!((asset.averageCost && asset.averageCost > 0) || (asset.taxRate && asset.taxRate > 0)));
-        setShowTER(!!(asset.totalExpenseRatio && asset.totalExpenseRatio > 0));
+        // A stored TER — including an explicit 0 — is preserved with `?? undefined`, exactly like
+        // taxRate; the provenance block above decides whether it is an answer or user data.
         setShowBondDetails(!!asset.bondDetails);
         // The step-up switch follows the saved schedule only when the asset HAS bond details;
         // without them it keeps its previous value, exactly as before this block existed.
@@ -1049,7 +1118,6 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
         setComposition([]);
         setHasOutstandingDebt(false);
         setShowCostBasis(false);
-        setShowTER(false);
         setShowBondDetails(false);
         setShowStepUp(false);
       }
@@ -1107,7 +1175,7 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
         // `?? undefined`, not `||`: a saved taxRate of 0 is legitimate and must survive a
         // round-trip through edit (`||` would treat 0 as falsy and blank the field).
         taxRate: asset.taxRate ?? undefined,
-        totalExpenseRatio: asset.totalExpenseRatio || undefined,
+        totalExpenseRatio: asset.totalExpenseRatio ?? undefined,
         leverageRatio: asset.leverageRatio || undefined,
         stampDutyExempt: asset.stampDutyExempt || false,
         isLiquid: defaultIsLiquid,
@@ -1270,6 +1338,91 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
     compositionTouched,
     compositionSourceIsin,
     selectedAssetClass,
+    getValues,
+    setValue,
+  ]);
+
+  /**
+   * TER auto-fill follows the composition's touched-flag pattern: a public fact is offered into a
+   * visible field after the same 500 ms debounce, and the field is never overwritten once the user
+   * writes it. `terAnswerIdentity` is the answer already given for an identity (including «none»),
+   * so a miss is asked once; when the identity changes, an earlier automatic value is replaced or
+   * cleared rather than left under the wrong instrument. The field has no switch to remember.
+   *
+   * A saved provider answer carries its identity, so changing the instrument re-reads it; a saved
+   * value without provenance is user data (`terTouched`) and is left alone. A live `getValues()`
+   * re-check at fire time covers the frame after `reset()`, and the resolution re-check covers a
+   * keystroke made while the request was in flight.
+   */
+  useEffect(() => {
+    if (!open || !newAsset_showTER || terTouched) return;
+    if (!terIdentity.value) return;
+    if (terAnswerIdentity === terIdentity.key) return;
+    const currentValue = getValues('totalExpenseRatio');
+    // A hand-typed value blocks the read, including an explicit 0. A previous automatic value does
+    // not: it belongs to the identity being left, not to the user.
+    if (
+      currentValue !== undefined &&
+      (!terProvenance || Math.abs(terProvenance.value - currentValue) >= 0.0001)
+    ) {
+      return;
+    }
+
+    const identity = terIdentity;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled || terTouched) return;
+      if ((getValues('totalExpenseRatio') ?? undefined) !== currentValue) return;
+      setTerLookup({ identity: identity.key, status: 'reading' });
+      void fetchFundAllocations(
+        identity.kind === 'isin' ? [identity.value] : [],
+        identity.kind === 'ticker' ? [identity.value] : []
+      )
+        .then(({ ter }) => {
+          if (cancelled || terTouched) return;
+          const found = ter[identity.value];
+          if (!found) {
+            // An automatic value from another identity is stale; a user value never reaches here.
+            if (terProvenance) {
+              setValue('totalExpenseRatio', undefined);
+              setTerProvenance(null);
+            }
+            setTerAnswerIdentity(identity.key);
+            setTerLookup({ identity: identity.key, status: 'unavailable' });
+            return;
+          }
+          setValue('totalExpenseRatio', found.value, { shouldValidate: true });
+          setTerProvenance(found);
+          setTerAnswerIdentity(identity.key);
+          setTerLookup(null);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (terProvenance) {
+            setValue('totalExpenseRatio', undefined);
+            setTerProvenance(null);
+          }
+          setTerAnswerIdentity(identity.key);
+          setTerLookup({ identity: identity.key, status: 'unavailable' });
+        })
+        .finally(() => {
+          // A cancelled read leaves no spinner for the identity it no longer describes.
+          setTerLookup((current) =>
+            current?.identity === identity.key && current.status === 'reading' ? null : current
+          );
+        });
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    open,
+    newAsset_showTER,
+    terIdentity,
+    terTouched,
+    terProvenance,
+    terAnswerIdentity,
     getValues,
     setValue,
   ]);
@@ -1544,7 +1697,16 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
       // Step 2: Assemble bond details and full form payload
       const bondDetailsValue = buildBondDetailsFromForm(data, showBondDetails, showStepUp, asset?.bondDetails, new Date());
       const formData: AssetFormData = {
-        ...buildAssetFormDataFromValues(data, currentPrice, fetchedCurrentPriceEur, isComposite, composition, isBondWithIsin, knownCoefficient),
+        ...buildAssetFormDataFromValues(
+          data,
+          currentPrice,
+          fetchedCurrentPriceEur,
+          isComposite,
+          composition,
+          isBondWithIsin,
+          knownCoefficient,
+          terTouched ? null : terProvenance
+        ),
         bondDetails: bondDetailsValue,
       };
 
@@ -3194,48 +3356,55 @@ export function AssetDialog({ open, onClose, asset, onRegisterTrade, initialType
           </div>
           )}
 
-          {/* TER — only shown for ETF, commodity and crypto (all can be ETC wrappers) */}
+          {/* TER — funds and ETC wrappers (commodity/crypto can be either spot or a wrapper) */}
           {newAsset_showTER && (
           <div className="space-y-2 rounded-lg border p-4">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label htmlFor="showTER">TER (Total Expense Ratio)</Label>
-                <p className="text-xs text-muted-foreground">
-                  Costi annuali di gestione del fondo (es. ETF, fondi comuni)
-                </p>
-              </div>
-              <Switch
-                id="showTER"
-                checked={showTER}
-                onCheckedChange={(checked) => {
-                  setShowTER(checked);
-                  if (!checked) {
-                    setValue('totalExpenseRatio', undefined);
-                  }
-                }}
-              />
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium">TER (Total Expense Ratio)</p>
+              <p className="text-xs text-muted-foreground">
+                Costi annuali di gestione del fondo (es. ETF, fondi comuni)
+              </p>
             </div>
 
-            {showTER && (
-              <div className="mt-4 space-y-2">
-                <Label htmlFor="totalExpenseRatio">TER (%)</Label>
-                <Input
-                  id="totalExpenseRatio"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max="100"
-                  {...register('totalExpenseRatio', { valueAsNumber: true })}
-                  placeholder="es. 0.20"
-                />
-                {errors.totalExpenseRatio && (
-                  <p className="text-sm text-destructive">{errors.totalExpenseRatio.message}</p>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  Percentuale annuale dei costi di gestione (es. 0.20 per 0.20%)
+            <div className="mt-4 space-y-2">
+              <Label htmlFor="totalExpenseRatio">TER (%)</Label>
+              <Input
+                id="totalExpenseRatio"
+                type="number"
+                step="0.01"
+                min="0"
+                max="100"
+                {...register('totalExpenseRatio', {
+                  valueAsNumber: true,
+                  onChange: () => {
+                    setTerTouched(true);
+                    setTerProvenance(null);
+                  },
+                })}
+                placeholder="es. 0.20"
+              />
+              {errors.totalExpenseRatio && (
+                <p className="text-sm text-destructive">{errors.totalExpenseRatio.message}</p>
+              )}
+              {currentTerLookup?.status === 'reading' && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  Cerco il TER pubblicato per questo strumento…
                 </p>
-              </div>
-            )}
+              )}
+              {terProvenance && !terTouched && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  {`TER precompilato da ${TER_SOURCE_LABELS[terProvenance.source]}. Puoi modificarlo.`}
+                </p>
+              )}
+              {currentTerLookup?.status === 'unavailable' && !terTouched && !terProvenance && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  Nessun TER pubblicato trovato per questo identificativo.
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Percentuale annuale dei costi di gestione (es. 0.20 per 0.20%)
+              </p>
+            </div>
           </div>
           )}
 

@@ -3,7 +3,7 @@ import { getApiAuthErrorResponse, requireFirebaseAuth } from '@/lib/server/apiAu
 import { resolveInstrumentProfiles } from '@/lib/server/exposure/instrumentProfileService';
 import { startTiming } from '@/lib/server/serverTiming';
 import { fundAllocationQuerySchema, parseOr400 } from '@/lib/server/validation';
-import type { FundAllocationsResponse, InstrumentFundAllocation } from '@/types/exposure';
+import type { FundAllocationsResponse, InstrumentFundAllocation, InstrumentTer } from '@/types/exposure';
 
 /**
  * GET /api/portfolio/fund-allocation?isins=<ISIN,…>&tickers=<ticker,…>
@@ -12,7 +12,9 @@ import type { FundAllocationsResponse, InstrumentFundAllocation } from '@/types/
  * (`stockPosition`, `bondPosition`, `cashPosition`, …), served from the shared per-ticker cache
  * (`instrument-profile-cache/{ISIN}`). `lib/utils/fundComposition.ts` turns the answer into
  * `Asset.composition`, so an ETF/fund with a hybrid mix is split across classes in «Composizione»
- * instead of sitting on one class until someone types the split by hand.
+ * instead of sitting on one class until someone types the split by hand. The same answer carries
+ * Yahoo's published expense ratio, so the asset form can pre-fill a VISIBLE, editable TER instead
+ * of writing an external estimate behind the user's back.
  *
  * Two identity forms, each a bounded list: an ISIN (what a fund house publishes and the ETF form
  * types) and a ticker (the Bloomberg code a broker file carries — `GRID IM` → `GRID.MI` — which
@@ -44,16 +46,19 @@ export async function GET(request: NextRequest) {
         ...parsed.data.isins.map((ticker) => ({ ticker, module: 'fund' as const })),
         ...parsed.data.tickers.map((ticker) => ({ ticker, module: 'fund' as const })),
       ],
-      { timing, requireAllocation: true },
+      { timing, requireAllocation: true, requireTer: true },
     );
 
     const allocations: Record<string, InstrumentFundAllocation> = {};
+    const ter: Record<string, InstrumentTer> = {};
     for (const [ticker, profile] of Object.entries(response.profiles)) {
       if (profile.fund?.allocation) allocations[ticker] = profile.fund.allocation;
+      if (profile.fund?.ter) ter[ticker] = profile.fund.ter;
     }
 
     const body: FundAllocationsResponse = {
       allocations,
+      ter,
       oldestFetchedAt: response.oldestFetchedAt,
     };
     timing.mark('compute');

@@ -78,7 +78,7 @@ export function createAdminProfileCacheStore(db: Pick<typeof adminDb, 'collectio
 // ─── Freshness, per module ───────────────────────────────────────────────────
 
 function isUsefulFund(profile: InstrumentFundProfile): boolean {
-  return !!(profile.holdings?.length || profile.sectors?.length || profile.family || profile.allocation);
+  return !!(profile.holdings?.length || profile.sectors?.length || profile.family || profile.allocation || profile.ter);
 }
 
 function isUsefulStock(profile: InstrumentStockProfile): boolean {
@@ -90,6 +90,7 @@ function isFresh<M extends ProfileModule>(
   data: ModuleData[M],
   now: Date,
   requireAllocation = false,
+  requireTer = false,
 ): boolean {
   const fetched = Date.parse(data.fetchedAt);
   if (Number.isNaN(fetched)) return false;
@@ -98,6 +99,12 @@ function isFresh<M extends ProfileModule>(
   // document (written before the field existed) heals on the first import, and a fund Yahoo truly
   // has no allocation for is re-asked daily at most — never on every preview.
   if (module === 'fund' && requireAllocation && !(data as InstrumentFundProfile).allocation) {
+    return age < EMPTY_PROFILE_TTL_MS;
+  }
+  // The same healing for TER: a cache written before the field existed must not hold the form and
+  // the backfill blind for a whole month. Both requirements share ONE answer, so a fund that has
+  // either still missing is re-asked daily — never on every keystroke.
+  if (module === 'fund' && requireTer && !(data as InstrumentFundProfile).ter) {
     return age < EMPTY_PROFILE_TTL_MS;
   }
   const useful = module === 'fund' ? isUsefulFund(data as InstrumentFundProfile) : isUsefulStock(data as InstrumentStockProfile);
@@ -111,6 +118,10 @@ export interface ResolveInstrumentProfilesOptions {
   force?: boolean;
   /** The caller needs `allocation`: a fund module without it is re-asked daily (`isFresh`). */
   requireAllocation?: boolean;
+  /** The caller needs `ter`: a fund module without it is re-asked daily (`isFresh`). */
+  requireTer?: boolean;
+  /** Never write to the cache — the one-shot dry run reads Yahoo but leaves Firestore untouched. */
+  readOnly?: boolean;
   now?: Date;
   source?: YahooProfileSource;
   store?: ProfileCacheStore;
@@ -143,17 +154,17 @@ async function resolveModule<M extends ProfileModule>(
   ticker: string,
   module: M,
   cached: ModuleData[M] | undefined,
-  { force, now, source, store, requireAllocation }: ResolvedOptions,
+  { force, now, source, store, requireAllocation, requireTer, readOnly }: ResolvedOptions,
   counts: ProfileResolutionCounts,
 ): Promise<ModuleData[M] | undefined> {
-  if (cached && !force && isFresh(module, cached, now, requireAllocation)) {
+  if (cached && !force && isFresh(module, cached, now, requireAllocation, requireTer)) {
     counts.hits += 1;
     return cached;
   }
 
   counts.fetched += 1;
   const answer = (module === 'fund' ? await source.fetchFund(ticker, now) : await source.fetchStock(ticker, now)) as ModuleData[M] | null;
-  if (!answer) return cached;
+  if (!answer || readOnly) return answer ?? cached;
 
   try {
     store.writeModule(ticker, module, answer).catch((error: unknown) => {
@@ -197,6 +208,8 @@ export async function resolveInstrumentProfiles(
   const resolved: ResolvedOptions = {
     force: options.force ?? false,
     requireAllocation: options.requireAllocation ?? false,
+    requireTer: options.requireTer ?? false,
+    readOnly: options.readOnly ?? false,
     now: options.now ?? new Date(),
     source: options.source ?? yahooProfileSource,
     store: options.store ?? createAdminProfileCacheStore(),

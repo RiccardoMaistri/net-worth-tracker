@@ -274,3 +274,42 @@ describe('the composition is user-clearable', () => {
     expect(payload.composition).toEqual(composition);
   });
 });
+
+// The provider provenance is a claim about the value sitting next to it: editing the visible TER
+// clears BOTH fields, but a partial writer (a price refresh, the ledger) must not erase them.
+describe('TER provenance is user-clearable', () => {
+  const SENTINEL = Symbol('deleteField');
+
+  beforeEach(() => {
+    vi.mocked(updateDoc).mockClear();
+    vi.mocked(deleteField).mockReturnValue(SENTINEL as never);
+    vi.mocked(updateDoc).mockResolvedValue(undefined as never);
+    vi.mocked(getDoc).mockResolvedValue({ data: () => ({ userId: 'u1', quantity: 5 }) } as never);
+  });
+
+  it('deletes both provenance fields on both write paths when the value was edited', async () => {
+    await updateAsset('a1', { totalExpenseRatio: 0.3, terSource: undefined, terFetchedAt: undefined });
+    let payload = vi.mocked(updateDoc).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect(payload.totalExpenseRatio).toBe(0.3);
+    expect(payload.terSource).toBe(SENTINEL);
+    expect(payload.terFetchedAt).toBe(SENTINEL);
+
+    vi.mocked(updateDoc).mockClear();
+    await updateAssetMetadata('a1', { terSource: undefined, terFetchedAt: undefined });
+    payload = vi.mocked(updateDoc).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect(payload.terSource).toBe(SENTINEL);
+    expect(payload.terFetchedAt).toBe(SENTINEL);
+  });
+
+  it('leaves the provenance alone for a partial caller and keeps an explicit zero TER', async () => {
+    await updateAsset('a1', { currentPrice: 101 });
+    let payload = vi.mocked(updateDoc).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect('terSource' in payload).toBe(false);
+    expect('terFetchedAt' in payload).toBe(false);
+
+    vi.mocked(updateDoc).mockClear();
+    await updateAssetMetadata('a1', { totalExpenseRatio: 0 });
+    payload = vi.mocked(updateDoc).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect(payload.totalExpenseRatio).toBe(0);
+  });
+});
