@@ -56,7 +56,7 @@ type ReadEndpoint = keyof typeof READ_ENDPOINTS;
 
 const PUBLIC_ENDPOINTS: ReadonlySet<ReadEndpoint> = new Set<ReadEndpoint>(['tickers', 'time']);
 const AUTH_ERROR_CODES = new Set(['50111', '50113', '50114']);
-const RATE_LIMIT_CODES = new Set(['50011', '50013', '50026']);
+const RATE_LIMIT_CODES = new Set(['50011', '50013', '50026', '50001']);
 const TIMESTAMP_EXPIRED_CODE = '50102';
 
 export class OkxConfigError extends Error {
@@ -129,6 +129,8 @@ function friendlyMessage(code: string, msg: string): string {
       return 'OKX limita le richieste: riprova fra qualche minuto.';
     case '50102':
       return 'Timestamp OKX scaduto: l’orologio del server non è allineato.';
+    case '50001':
+      return 'OKX ha risposto 50001: Servizio temporaneamente non disponibile. Riprova tra qualche minuto.';
     default:
       return `OKX ha risposto ${code}${msg ? `: ${msg}` : ''}`;
   }
