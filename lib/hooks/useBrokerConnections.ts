@@ -63,6 +63,7 @@ export const BROKER_DISPLAY_NAME: Record<BrokerId, string> = {
   intesa: 'Intesa Sanpaolo',
   azimut: 'Azimut',
   binance: 'Binance',
+  okx: 'OKX',
 };
 
 /** Format last sync date for Italian locale. */

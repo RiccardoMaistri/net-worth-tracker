@@ -21,7 +21,9 @@ import { IntesaSanpaoloConnectionTile } from '@/components/settings/broker/Intes
 import { AzimutConnectionTile } from '@/components/settings/broker/AzimutConnectionTile';
 import { useAuth } from '@/contexts/AuthContext';
 import { canUseBinance } from '@/lib/utils/binanceAccess';
+import { canUseOkx } from '@/lib/utils/okxAccess';
 import { BinanceConnectionTile } from '@/components/settings/broker/BinanceConnectionTile';
+import { OkxConnectionTile } from '@/components/settings/broker/OkxConnectionTile';
 
 interface BrokerConnectionsSectionProps {
   ownerId: string;
@@ -41,6 +43,7 @@ export function BrokerConnectionsSection({ ownerId, disabled = false }: BrokerCo
       <IntesaSanpaoloConnectionTile ownerId={ownerId} disabled={disabled} />
       <AzimutConnectionTile ownerId={ownerId} disabled={disabled} />
       {canUseBinance(user?.email) && <BinanceConnectionTile ownerId={ownerId} disabled={disabled} />}
+      {canUseOkx(user?.email) && <OkxConnectionTile ownerId={ownerId} disabled={disabled} />}
     </div>
   );
 }

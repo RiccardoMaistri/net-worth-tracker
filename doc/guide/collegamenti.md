@@ -8,6 +8,8 @@
 > `components/settings/broker/BinanceConnectionTile.tsx`,
 > `lib/utils/binanceImport.ts` (parser, prezzo EUR e piano), `lib/server/binanceClient.ts` (richieste
 > firmate, whitelist di sola lettura), `app/api/broker/binance/read`,
+> `lib/server/okxClient.ts` (POC OKX in sola lettura), `lib/utils/okxPortfolio.ts` (il P&L spot e i
+> totali), `app/api/broker/okx/poc`, `scripts/okxPoc.mts`,
 > `lib/utils/scalableImport.ts` o `lib/utils/tradeRepublicImport.ts` (i mapping puri),
 > `lib/utils/intesaSanpaoloImport.ts` (parser e piano del file XLSX) o
 > `lib/utils/intesaSanpaoloWorkbook.ts` (lettura del file, libreria importata in modo lazily),
@@ -476,6 +478,76 @@
 - **Fuori scope, dichiarato**: liquidità EUR; depositi, prelievi e trasferimenti (quindi la quantità del
   Registro può restare sotto il saldo reale: è lo scostamento che la sync già segnala); monete vendute
   del tutto prima di oggi (i simboli scansionati sono quelli delle monete in mano); storico oltre 4 anni.
+
+## OKX — POC di sola lettura (`okxClient.ts`, `okxPortfolio.ts`, `scripts/okxPoc.mts`)
+
+> **Cos'è e cosa non è.** Un POC: legge il conto e ne stampa il P&L, non crea asset e non scrive
+> su Firestore. Il ponte vero (tile, piano, Registro) è il passo successivo, e questa sezione
+> esiste perché le assunzioni dell'API siano scritte prima, non scoperte dopo.
+
+- **`totalPnl` NON è il P&L realizzato.** OKX espone due metodi di costo sulla stessa posizione:
+  `openAvgPx`/`spotUpl`/`spotUplRatio` (costo MEDIO) e `accAvgPx`/`totalPnl`/`totalPnlRatio`
+  (costo CUMULATO), con `spotBal` come quantità netta comprata a cui entrambi si riferiscono
+  (articolo OKX «Spot cost price»). `totalPnl − spotUpl` non è «quanto ho incassato»: è la
+  differenza fra due modi di prezzare lo stesso portafoglio. La regola dell'app è il costo medio
+  (`averageCostEur`), quindi l'intestazione è la coppia `openAvgPx`/`spotUpl`; la coppia cumulata
+  viaggia accanto, mai sommata.
+- **Stablecoin e valute fiat non hanno costo né P&L, per prodotto.** OKX le esclude dal calcolo
+  del costo spot: i campi tornano `""`, che è «non applicabile», non una lettura fallita. Non
+  finiscono in `pnlUnavailable` (l'avviso è per una moneta che il P&L dovrebbe averlo).
+- **Il conto funding non ha P&L e non ha valori.** `/api/v5/asset/balances` restituisce solo
+  quantità (`bal`, `availBal`, `frozenBal`): una moneta nel funding è prezzata dai ticker spot
+  pubblici, e quella che nessun pair raggiunge resta **senza valore e nominata**, mai a 0. La
+  stessa moneta in più wallet è UNA posizione (le quantità si sommano, i wallet si nominano):
+  quattro posti, non quattro posizioni.
+- **Quattro wallet, una riga per moneta.** Trading (`/account/balance`), funding
+  (`/asset/balances`), **Simple Earn** (`/finance/savings/balance`) e **On-chain Earn**
+  (`/finance/staking-defi/orders-active`). `buildOkxPortfolio` fonde per valuta e nomina in
+  `wallets` dove la moneta sta (`funding+earn` per un TRX messo in staking): è la forma che il
+  ponte verso gli asset vuole, e il POC la produce già così.
+- **In Simple Earn si valorizza `amt`, non `loanAmt`.** I fondi sono prestati, non spariti:
+  `loanAmt` è la quota impiegata, `pendingAmt` quella in transito, entrambe DENTRO `amt`.
+- **Le earnings dell'On-chain Earn sono GIÀ nel funding.** OKX le accredita lì: un ordine TRX da
+  954,522039 con 0,16065194 di earnings sta accanto a un saldo funding TRX di esattamente
+  0,16065194. La posizione vale il **solo capitale** (`investData[].amt`): sommare le earnings
+  conta la stessa moneta due volte. `parseOkxStakingOrders` le legge e le tiene separate.
+- **`totalEq` è il conto TRADING, non il conto OKX.** Copre il trading e l'equity dei derivati;
+  funding, Simple Earn e On-chain Earn sono conti a sé con i loro endpoint. Il residuo si misura
+  quindi contro `tradingValueUsd`, mai contro il totale delle monete — altrimenti ogni conto con
+  soldi nel funding legge un falso scostamento (2026-11-27, conto reale: 20,79 USD di `totalEq`
+  contro 3.722 USD di holdings).
+- **Un P/L che nessuna moneta riporta è `null`, non zero.** Un conto in multi-currency margin
+  (`acctLv=2`) non ha costo medio spot: OKX restituisce `openAvgPx`/`spotUpl`/`spotBal` vuoti per
+  tutte le valute (i campi esistono, sono `""`), quindi il totale è **assente** e si stampa «—».
+  In quel modo il P/L del ponte dovrà venire dal Registro, come per Binance.
+- **`eqUsd` è il valore autorevole del trading** (`eq` può essere in USD nel multi-currency
+  margin), mentre `cashBal` è la quantità in moneta. Il POC usa `eqUsd` per il valore e
+  `cashBal` (poi `spotBal`) per la quantità; un conto a margine con prestiti non è modellato, e
+  il residuo fra `totalEq` e il **trading** è **dichiarato**, non spiegato.
+- **Una posizione derivata non è un asset.** Gli SWAP/futures non sono monete tracciabili:
+  `upl` e nozionale stanno in una sezione propria e non entrano nelle quantità delle monete.
+- **La chiave di un conto `my.okx.com` vuole `eea.okx.com`.** Su `www.okx.com` la stessa chiave
+  risponde `50111` — lo stesso codice di una chiave sbagliata. Il default del client è l'host EEA;
+  `OKX_BASE_URL` lo cambia per un conto globale, `OKX_DEMO=true` legge il conto demo con la stessa
+  chiave (`x-simulated-trading: 1`).
+- **Sola lettura è STRUTTURALE**: `READ_ENDPOINTS` è un elenco chiuso di cinque GET (balance,
+  funding, positions, tickers, server time). Aggiungerne una che scrive è il cambio che questa
+  guida vieta, come per Binance e Trade Republic. La chiave va creata con il solo permesso di
+  lettura: la whitelist è il secondo lucchetto.
+- **Ogni tentativo è firmato di nuovo**, e l'orologio si misura da `/api/v5/public/time`: la
+  firma è `Base64(HMAC-SHA256(timestamp + 'GET' + requestPath + body))` sul path CON la query.
+  Un `50102` (timestamp scaduto) risincronizza e riprova; un `50011`/429 aspetta e riprova.
+- **La route è ristretta all'owner.** `OKX_ALLOWED_EMAIL` è una lista separata da virgole,
+  server-side (default: l'email dell'owner, come Binance): la chiave è di UN account per deploy, e
+  un viewer con una sessione non deve poter leggere il portafoglio dell'host. La route è
+  owner-scoped (`assertCanAccessAccount`) anche se non scrive nulla.
+- **Il cambio USD→EUR è dichiarato.** OKX quota e calcola il P&L in USD; l'euro è
+  `Frankfurter` (`getExchangeRateToEur('USD')`) e, se la lettura fallisce, le cifre in euro sono
+  `null` con un avviso — mai un tasso inventato.
+- **Le suite**: `__tests__/okxPortfolio.test.ts` (i due metodi di costo, i wallet sommati, il
+  prezzo EUR via USD, l'assenza di P&L dichiarata), `__tests__/okxPocRoute.test.ts` (la forma
+  della risposta e la mappatura 401/429/503), `__tests__/okxAccess.test.ts` (l'allowlist).
+  Per provarlo sul conto vero: `npm run okx:poc`, `-- --json`, `-- --raw`.
 
 ## La classe dal nome — i due ponti su file (`fundNameClass.ts`)
 

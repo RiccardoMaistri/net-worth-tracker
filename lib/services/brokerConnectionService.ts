@@ -30,7 +30,7 @@ const BROKER_CONNECTIONS_COLLECTION = 'brokerConnections';
  * `intesa` is a file import (its `.xlsx` export), not a live session: the metadata shape is the
  * same, and the tile reads the file the user chooses.
  */
-export const BROKERS = ['scalable', 'traderepublic', 'intesa', 'azimut', 'binance'] as const;
+export const BROKERS = ['scalable', 'traderepublic', 'intesa', 'azimut', 'binance', 'okx'] as const;
 export type BrokerId = (typeof BROKERS)[number];
 
 export function isBrokerId(value: string): value is BrokerId {
@@ -184,6 +184,7 @@ export async function getAllBrokerConnections(
     intesa: null,
     azimut: null,
     binance: null,
+    okx: null,
   };
   await Promise.all(
     BROKERS.map(async (broker) => {
