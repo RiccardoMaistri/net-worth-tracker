@@ -117,14 +117,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (error instanceof OkxConfigError) {
       return NextResponse.json({ error: error.message }, { status: 503 });
     }
-    if (error instanceof OkxReadError) {
+    const err = error as OkxReadError | Error;
+    if (err instanceof OkxReadError) {
       return NextResponse.json(
-        { error: error.message },
-        { status: error.status === 401 ? 401 : error.status === 429 ? 429 : 502 }
+        { error: err.message },
+        { status: err.status === 401 ? 401 : err.status === 429 ? 429 : 502 }
       );
     }
-    if (error.message.includes('Parse Error') || error.message.includes('parse error')) {
-      return NextResponse.json({ error: error.message }, { status: 502 });
+    if ((err as Error).message.includes('Parse Error') || (err as Error).message.includes('parse error')) {
+      return NextResponse.json({ error: (err as Error).message }, { status: 502 });
     }
     console.error('[okx/read] unexpected failure', error);
     return NextResponse.json({ error: 'Lettura non riuscita: riprova.' }, { status: 500 });
