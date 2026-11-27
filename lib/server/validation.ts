@@ -80,7 +80,7 @@ export const dividendDataSchema = z.object({
 const assetTransactionTypeSchema = z.enum(['buy', 'sell', 'adjustment']);
 
 /** The two brokers the importer speaks to. A closed enum: provenance is not a free-text field. */
-const assetTransactionSourceSchema = z.enum(['scalable', 'traderepublic', 'binance']);
+const assetTransactionSourceSchema = z.enum(['scalable', 'traderepublic', 'binance', 'okx']);
 
 /**
  * The broker's OWN id for the operation. Only ever a value a broker returned, so the shape is
@@ -127,7 +127,7 @@ function refineAssetTransaction(
     fees?: number;
     linkedCashAssetId?: string;
     withheldTaxEur?: number;
-    source?: 'scalable' | 'traderepublic' | 'binance';
+    source?: 'scalable' | 'traderepublic' | 'binance' | 'okx';
     sourceRef?: string;
   },
   ctx: z.RefinementCtx
