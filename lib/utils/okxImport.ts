@@ -38,3 +38,17 @@ export const OKX_DEFAULT_TAX_RATE = 0.22
 
 /** Minimum EUR value threshold below which a new coin is considered dust and skipped. */
 export const OKX_MIN_NEW_VALUE_EUR = 1
+
+/**
+ * Legacy adapter — retained for backward compatibility.
+ * The bridge route `/api/broker/okx/read` now returns `{ holdings, warnings, meta }`
+ * directly, so this function is a no-op placeholder.
+ */
+export function adaptOkxPortfolioForTile(
+  balance?: unknown,
+  funding?: unknown,
+  savings?: unknown,
+  staking?: unknown
+): void {
+  // No-op: the bridge route handles the {holdings, warnings} shape directly.
+}

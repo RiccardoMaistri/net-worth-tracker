@@ -864,13 +864,14 @@ export interface BrokerConnectionsInput {
  * when the input that justifies it is absent, and here that input is the broker.
  */
 export function describeBrokerConnections(
-  broker: 'scalable' | 'traderepublic' | 'intesa' | 'azimut' | 'binance',
+  broker: 'scalable' | 'traderepublic' | 'intesa' | 'azimut' | 'binance' | 'okx',
   { lastSyncAt, holdingsCount, cashBalance, savingsPlanCount, cardExpenseCount }: BrokerConnectionsInput
 ): Narrative {
   const isTradeRepublic = broker === 'traderepublic';
   const isIntesa = broker === 'intesa';
   const isAzimut = broker === 'azimut';
   const isBinance = broker === 'binance';
+  const isOkx = broker === 'okx';
   const isFileBroker = isIntesa || isAzimut;
   const brokerName = isBinance
     ? 'Binance'
@@ -919,7 +920,9 @@ export function describeBrokerConnections(
           ? ' — le quantità restano del Registro, i prezzi arrivano da Yahoo.'
           : isBinance
             ? ' — le quantità restano del Registro, i prezzi arrivano da Yahoo o da Binance.'
-            : ' — i prezzi si aggiornano, le quantità restano del Registro.'
+            : isOkx
+        ? ' — i prezzi e le quantità si aggiornano, le operazioni importate da OKX.'
+        : ' — i prezzi si aggiornano, le quantità restano del Registro.'
     ),
     // A separate sentence, not a clause of «Ultima lettura»: the card count is written by the card
     // import, which is a different act from the portfolio sync whose date the first sentence names.

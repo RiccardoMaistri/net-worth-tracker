@@ -36,7 +36,7 @@ import {
   parseOkxSavingsBalances,
   parseOkxStakingOrders,
   parseOkxTickers,
-} from '@/lib/utils/okxPortfolio';
+} from '@/lib/utils/okxImport';
 import { getExchangeRateToEur } from '@/lib/services/currencyConversionService';
 
 const bodySchema = z.object({ ownerId: z.string().min(1) });
@@ -89,7 +89,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const [raw, usdEur] = await Promise.all([readOkxAccount(), readUsdEur()]);
     timing.mark('read');
-
     const portfolio = buildOkxPortfolio({
       balance: parseOkxBalance(raw.balance),
       funding: parseOkxFundingBalances(rows(raw.funding)),
@@ -124,7 +123,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         { status: error.status === 401 ? 401 : error.status === 429 ? 429 : 502 }
       );
     }
-    if (error instanceof OkxParseError) {
+    if (error.message.includes('Parse Error') || error.message.includes('parse error')) {
       return NextResponse.json({ error: error.message }, { status: 502 });
     }
     console.error('[okx/read] unexpected failure', error);

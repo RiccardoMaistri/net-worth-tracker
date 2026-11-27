@@ -29,6 +29,7 @@ const ROUTE: Record<AssetTransactionSource, string> = {
   scalable: '/api/broker/scalable/trades',
   traderepublic: '/api/broker/traderepublic/trades',
   binance: '/api/broker/binance/trades',
+  okx: '/api/broker/okx/trades',
 };
 
 function readError(data: unknown, fallback: string): string {
