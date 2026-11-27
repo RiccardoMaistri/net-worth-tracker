@@ -23,17 +23,18 @@
 import { Suspense, useMemo, useRef, useState } from 'react';
 import { format, subDays } from 'date-fns';
 import { it } from 'date-fns/locale';
-import { Home, Link2, Pencil, Trash2 } from 'lucide-react';
+import { Home, Link2, Pencil, Scissors, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ResponsiveModal } from '@/components/ui/responsive-modal';
 import { EmptyState } from '@/components/ui/empty-state';
 import { cn } from '@/lib/utils';
 import { TILE_SUB_EYEBROW_CLASS } from '@/components/ui/tile';
 import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
+import { halvedAmount } from '@/lib/utils/expenseHalving';
 import { getItalyDate } from '@/lib/utils/dateHelpers';
 import { getExpenseDate } from '@/lib/utils/expenseHelpers';
 import { describeRecurrence } from '@/lib/utils/recurrenceDates';
-import { describeMovementDetailReading } from '@/lib/utils/dialogNarrative';
+import { describeExpenseHalveConsequence, describeMovementDetailReading } from '@/lib/utils/dialogNarrative';
 import { useArmedDelete } from '@/lib/hooks/useArmedDelete';
 import { resolveSeriesDeleteMode } from '@/components/expenses/SeriesDeleteDialog';
 import { isScheduledRow } from '@/lib/utils/tracciamentoSummary';
@@ -100,6 +101,8 @@ interface TransactionDetailModalProps {
   onClose: () => void;
   onEdit: (expense: Expense) => void;
   onDelete: (expense: Expense) => void;
+  /** «Dividi a metà»: the second press halves this row's amount; absent = not offered. */
+  onHalve?: (expense: Expense) => void;
   /** «Collega la serie…» on a series row; absent = the action is not offered. */
   onLinkSeries?: (expense: Expense, target: LinkSeriesTarget) => void;
   isDemo: boolean;
@@ -146,6 +149,7 @@ function TransactionDetailModal({
   onClose,
   onEdit,
   onDelete,
+  onHalve,
   onLinkSeries,
   isDemo,
   categoryMetaMap,
@@ -155,6 +159,13 @@ function TransactionDetailModal({
 }: Readonly<TransactionDetailModalProps>) {
   const deleteRef = useRef<HTMLButtonElement | null>(null);
   const { armed, onClick: onArmedClick, onBlur } = useArmedDelete(deleteRef, () => onDelete(expense));
+  // «Dividi a metà» is a second two-click confirm in the same footer. A transfer is not offered:
+  // halving it would leave the other half of the movement nowhere to land.
+  const halveRef = useRef<HTMLButtonElement | null>(null);
+  const { armed: halveArmed, onClick: onHalveClick, onBlur: onHalveBlur } = useArmedDelete(halveRef, () => onHalve?.(expense));
+  // A transfer has no half to leave behind, and a cent cannot be split: never offer a button
+  // whose second press can only refuse.
+  const canHalve = !!onHalve && expense.type !== 'transfer' && halvedAmount(expense.amount) !== null;
 
   // «Disarmed» is a phase of ONE opening: settled during render (never in an effect), and
   // forgotten on close so the same row reopened starts from its idle reading.
@@ -226,6 +237,29 @@ function TransactionDetailModal({
     details.push({ label: 'Link', value: expense.link });
   }
 
+  // The row as «Dividi a metà» sees it: same date and links, half the amount. Rows with no half
+  // (a transfer, a cent) neither offer the button nor build the sentence.
+  const halveFacts =
+    expense.type !== 'transfer'
+      ? {
+          type: expense.type,
+          amount: expense.amount,
+          hasAccount: !!expense.linkedCashAssetId,
+          applied: !expense.balancePending && (!!expense.linkedCashAssetId || !!expense.debtAssetId),
+          repaysProperty: !!expense.debtAssetId,
+        }
+      : null;
+  const reading =
+    halveArmed && halveFacts && !armed
+      ? { narrative: [{ text: describeExpenseHalveConsequence(halveFacts) }], tone: 'neutral' as const }
+      : describeMovementDetailReading({
+          date,
+          scheduled,
+          phase: armed ? 'armed' : wasArmed ? 'disarmed' : 'idle',
+          // A row still waiting for its date has moved nothing, so its delete gives nothing back.
+          deletion: { type: expense.type, amount: expense.amount, hasAccount: appliedBalanceEffectsOf(expense).length > 0, hasFee: !!expense.transferFeeExpenseId },
+        });
+
   return (
     <ResponsiveModal
       open={open}
@@ -234,15 +268,30 @@ function TransactionDetailModal({
       // The scope after the dot is the SINGULAR of the row's type (doc/guide/dialog.md).
       eyebrow={`Movimenti · ${EXPENSE_TYPE_LABELS[expense.type]}`}
       title={rowName}
-      reading={describeMovementDetailReading({
-        date,
-        scheduled,
-        phase: armed ? 'armed' : wasArmed ? 'disarmed' : 'idle',
-        // A row still waiting for its date has moved nothing, so its delete gives nothing back.
-        deletion: { type: expense.type, amount: expense.amount, hasAccount: appliedBalanceEffectsOf(expense).length > 0, hasFee: !!expense.transferFeeExpenseId },
-      })}
+      reading={reading}
       footer={
         <>
+          {canHalve && (
+            <Button
+              ref={halveRef}
+              type="button"
+              variant={halveArmed ? 'default' : 'outline'}
+              onClick={onHalveClick}
+              onBlur={onHalveBlur}
+              disabled={isDemo}
+              aria-pressed={halveArmed}
+              aria-label={
+                isDemo
+                  ? 'Dividi a metà — non disponibile in modalità demo'
+                  : halveArmed
+                    ? `Premi di nuovo per dimezzare ${rowName}`
+                    : `Dividi a metà ${rowName}`
+              }
+            >
+              {!halveArmed && <Scissors className="mr-2 h-4 w-4" aria-hidden="true" />}
+              {halveArmed ? 'Conferma' : 'Dividi a metà'}
+            </Button>
+          )}
           <Button
             ref={deleteRef}
             type="button"
@@ -354,6 +403,8 @@ export interface TransactionFeedProps {
   grouped: boolean;
   onEdit: (expense: Expense) => void;
   onDelete: (expense: Expense) => void;
+  /** «Dividi a metà»: the second press halves this row's amount; absent = not offered. */
+  onHalve?: (expense: Expense) => void;
   /** «Collega la serie…» from a series row's detail; absent = not offered. */
   onLinkSeries?: (expense: Expense, target: LinkSeriesTarget) => void;
   /** Cash account names by id, for the detail's «Conto» row. */
@@ -393,6 +444,7 @@ export function TransactionFeed({
   grouped,
   onEdit,
   onDelete,
+  onHalve,
   onLinkSeries,
   accountNames,
   propertyNames,
@@ -522,6 +574,14 @@ export function TransactionFeed({
             closeDetail();
             onDelete(expense);
           }}
+          onHalve={
+            onHalve
+              ? (expense) => {
+                  closeDetail();
+                  onHalve(expense);
+                }
+              : undefined
+          }
           onLinkSeries={
             onLinkSeries
               ? (expense, target) => {

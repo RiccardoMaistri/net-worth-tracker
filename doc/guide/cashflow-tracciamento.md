@@ -12,7 +12,7 @@
 
 Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
 
-- **Cashflow**: `app/dashboard/cashflow/page.tsx`; Tracciamento `components/cashflow/ExpenseTrackingTab.tsx` + `components/cashflow/{TransactionFeed,CompactExpenseRow,MobileFiltersDrawer,MonthlyIncomeOverrideBox}.tsx` + `components/expenses/ExpenseTable.tsx` (the «Tabella» view: armed row delete, `SeriesDeleteDialog`), pure `lib/utils/{tracciamentoSummary,cashflowNarrative,movementsOwnerFilter,fixedIncomeSavingsRate}.ts` (`settleTotals` = the lived part the verdict judges; `currentComparisonWindow`/`previousComparisonWindow` = the two comparable windows, same days of the previous month for the month in progress; the «Intestatario» filter and the owner chip; `fixedIncomeSavingsRate` = the declared-income series shared with Analisi), `lib/constants/expenseTypeColors.ts` (the ONE type→colour map: dot, badge, flow series), specs `e2e/cashflow.{tracciamento,mobile,owner,accounts}.spec.ts`
+- **Cashflow**: `app/dashboard/cashflow/page.tsx`; Tracciamento `components/cashflow/ExpenseTrackingTab.tsx` + `components/cashflow/{TransactionFeed,CompactExpenseRow,MobileFiltersDrawer,MonthlyIncomeOverrideBox}.tsx` + `components/expenses/ExpenseTable.tsx` (the «Tabella» view: armed row delete, armed row «Dividi a metà», `SeriesDeleteDialog`) + `lib/services/expenseHalvingService.ts` with its pure rule `lib/utils/expenseHalving.ts` (halve ONE row, its account and its property's debt), pure `lib/utils/{tracciamentoSummary,cashflowNarrative,movementsOwnerFilter,fixedIncomeSavingsRate}.ts` (`settleTotals` = the lived part the verdict judges; `currentComparisonWindow`/`previousComparisonWindow` = the two comparable windows, same days of the previous month for the month in progress; the «Intestatario» filter and the owner chip; `fixedIncomeSavingsRate` = the declared-income series shared with Analisi), `lib/constants/expenseTypeColors.ts` (the ONE type→colour map: dot, badge, flow series), specs `e2e/cashflow.{tracciamento,mobile,owner,accounts}.spec.ts`
 - **Suites to run after a change here — Cashflow › Tracciamento** (moved from `AGENTS.md` § Commands on 2026-09-30): `tracciamentoSummary`, `cashflowNarrative` (+ `overviewNarrative` for `projectMonthEndSpending`, `patrimonioNarrative` for the articles)
 
 ## Cashflow › Tracciamento (`components/cashflow/ExpenseTrackingTab.tsx`, `components/cashflow/tiles/*`)
@@ -176,6 +176,15 @@ Moved here from `CLAUDE.md` → *Key Files* on 2026-09-19.
   le 12?», a `ResponsiveModal` `sm`), the same modal the feed's detail drawer reaches through `handleDeleteExpense`
   (`resolveSeriesDeleteMode` is the one rule). Every `<th>` names its column (`scope="col"` is now `TableHead`'s
   default), the sorted header carries `aria-sort`, and Data and Importo are mono (`FIGURE_CLASS`).
+- **«Dividi a metà» is a correction of ONE row, not a new row** (both surfaces, same armed confirm as the delete): it
+  halves the stored signed amount (to the cent, through `halvedAmount`; a row of 0,01 € is never offered), keeps date,
+  category, account, cost centre and series membership, and changes no sibling occurrence. `expenseHalvingService`
+  writes the row first, then reconciles the account with `editBalanceEffects`/`applyBalanceEffects` (a pending row
+  moves nothing until its date), then re-splits a mortgage instalment with `applyDebtRepaymentEdit`; callers invalidate
+  `assets.all` + `dashboard.overview` when anything moved, `costCenters.all` always. A transfer has no half to leave
+  behind and is never offered. `describeExpenseHalveConsequence` prints the cent the writer writes — a naive `/2`
+  would promise «186,905 €» on a 373,81 € row — and the table's Note cell / the detail's reading say what the second
+  press does; in demo the button stays disabled.
 - **An expense type has ONE colour map** — `lib/constants/expenseTypeColors.ts` (dot, badge, the two flow series);
   see AGENTS.md → Layout and Color Tokens. The «Tutte le categorie in Analisi» footer link is a
   `TILE_FOOTER_ACTION_CLASS` target (32/44px), and `RankedRows` hides its share column under a 250px container
