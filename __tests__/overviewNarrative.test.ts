@@ -26,6 +26,7 @@ import {
   buildOverviewVerdict,
   describeCashflow,
   describeComposition,
+  describeCostDrag,
   describeCosts,
   describeGoal,
   describeLiquidity,
@@ -499,6 +500,35 @@ describe('tile readings', () => {
     expect(plain(describeCosts(1034, 412380.52)!)).toBe('Pesa 86 € al mese, lo 0,25% del patrimonio.');
     expect(plain(describeCosts(1034, 0)!)).toBe('Pesa 86 € al mese.');
     expect(describeCosts(0, 412380.52)).toBeNull();
+  });
+
+  it('describeCostDrag should name what the TER removes over the horizon', () => {
+    const narrative = describeCostDrag({
+      invested: 300_000,
+      terPct: 0.25,
+      growthPct: 7,
+      years: 20,
+      grossValue: 0,
+      netValue: 0,
+      drag: 38_400,
+    });
+    expect(plain(narrative!)).toBe('In 20 anni, a questi costi, il portafoglio varrebbe ≈ 38.400 € in meno.');
+  });
+
+  it('describeCostDrag drops the sentence without a drag to report', () => {
+    expect(describeCostDrag(null)).toBeNull();
+    expect(describeCostDrag(undefined)).toBeNull();
+    expect(
+      describeCostDrag({
+        invested: 300_000,
+        terPct: 0,
+        growthPct: 7,
+        years: 20,
+        grossValue: 0,
+        netValue: 0,
+        drag: 0,
+      }),
+    ).toBeNull();
   });
 
   it('describeGoal should state what is still missing', () => {

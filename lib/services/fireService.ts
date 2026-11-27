@@ -999,18 +999,11 @@ export function computeAnnualCashflowData(allExpenses: Expense[], now: Date): An
 }
 
 /**
- * Default scenario parameters for FIRE projections.
- * Bear: conservative growth with higher inflation (stagflation-like).
- * Base: historical average returns with moderate inflation.
- * Bull: strong growth with low inflation (Goldilocks economy).
+ * The defaults live in a pure module so a server can read them without this module's
+ * `expenseService` → client Firebase chain; re-exported here because every existing caller
+ * imports them from the FIRE service.
  */
-export function getDefaultScenarios(): FIREProjectionScenarios {
-  return {
-    bear: { growthRate: 4.0, inflationRate: 3.5 },
-    base: { growthRate: 7.0, inflationRate: 2.5 },
-    bull: { growthRate: 10.0, inflationRate: 1.5 },
-  };
-}
+export { getDefaultScenarios } from '@/lib/utils/fireScenarios';
 
 /**
  * Calculates the Coast FIRE threshold for one scenario using real returns.

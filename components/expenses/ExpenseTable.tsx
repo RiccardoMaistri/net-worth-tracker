@@ -12,6 +12,10 @@
  *   the one question a series adds («solo questa o tutte?»). Until 2026-09-14 every delete went
  *   through a raw `AlertDialog` that asked «Sei sicuro?» and named neither the row nor the balance
  *   it moved back (one of the eight surfaces then outside the modal vocabulary — DESIGN.md → §5 Modal, Coverage).
+ * - «Dividi a metà» halves THIS row's amount with the same two-click confirm (a transfer is not
+ *   offered: halving it would leave the other half of the movement nowhere to land). The account
+ *   gives back the difference it had already moved; a mortgage instalment splits its principal
+ *   again (lib/services/expenseHalvingService.ts).
  * - Every figure is mono (the Mono Mandate): dates and amounts share one tabular column each.
  *
  * Pagination behaviour: page 1 again when the list changes (add/delete/filter) or the sort or
@@ -36,6 +40,8 @@ import {
 import { reverseAppliedBalances } from '@/lib/services/cashBalanceReconciliation';
 import { rowsDeletedWith } from '@/lib/utils/transferFee';
 import { queryKeys } from '@/lib/query/queryKeys';
+import { halveExpenseAmount } from '@/lib/services/expenseHalvingService';
+import { halvedAmount } from '@/lib/utils/expenseHalving';
 import {
   Table,
   TableBody,
@@ -48,7 +54,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Edit, Trash2, TrendingUp, TrendingDown, Calendar, ChevronLeft, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ChevronsUpDown } from 'lucide-react';
+import { Edit, Scissors, Trash2, TrendingUp, TrendingDown, Calendar, ChevronLeft, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ChevronsUpDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { it } from 'date-fns/locale';
@@ -56,7 +62,7 @@ import { cn } from '@/lib/utils';
 import { getExpenseDate } from '@/lib/utils/expenseHelpers';
 import { isScheduledRow } from '@/lib/utils/tracciamentoSummary';
 import { resolveOwnerLabel } from '@/lib/utils/movementsOwnerFilter';
-import { describeExpenseDeleteConsequence } from '@/lib/utils/dialogNarrative';
+import { describeExpenseDeleteConsequence, describeExpenseHalveConsequence, describeWriteError } from '@/lib/utils/dialogNarrative';
 import { useArmedDelete } from '@/lib/hooks/useArmedDelete';
 import { EXPENSE_TYPE_BADGE_CLASS } from '@/lib/constants/expenseTypeColors';
 import { SeriesDeleteDialog, resolveSeriesDeleteMode, type SeriesDeleteRequest } from '@/components/expenses/SeriesDeleteDialog';
@@ -102,6 +108,8 @@ interface ExpenseTableRowProps {
   onEdit: (expense: Expense) => void;
   /** A plain row: called by the row's own armed confirm. A series row: opens the series modal. */
   onDelete: (expense: Expense) => void;
+  /** The second press of «Dividi a metà»: halves this row's amount (never a transfer). */
+  onHalve: (expense: Expense) => void;
   /** The table's one live region: arm and disarm are sentences, spoken there. */
   announce: (text: string) => void;
 }
@@ -112,11 +120,17 @@ interface ExpenseTableRowProps {
  * Accessibility, the Versamenti precedent). A row of a series does not arm — its first click
  * opens the question the series adds — and says so in its name.
  */
-function ExpenseTableRow({ expense, scheduled, ownerLabel, singleType, categoryMeta, isDemo, busy, onEdit, onDelete, announce }: ExpenseTableRowProps) {
+function ExpenseTableRow({ expense, scheduled, ownerLabel, singleType, categoryMeta, isDemo, busy, onEdit, onDelete, onHalve, announce }: ExpenseTableRowProps) {
   const rowName = expense.notes?.trim() || expense.categoryName;
   const isSeries = resolveSeriesDeleteMode(expense) !== null;
+  // A transfer has no half to leave behind; a cent cannot be split. Neither is offered, so a
+  // button is never a promise the second press cannot keep.
+  const canHalve = expense.type !== 'transfer' && halvedAmount(expense.amount) !== null;
   const deleteRef = useRef<HTMLButtonElement | null>(null);
   const { armed, onClick: onArmedClick, onBlur } = useArmedDelete(deleteRef, () => onDelete(expense));
+  // One confirm at a time: while this one is armed the delete gives it the row, and vice versa.
+  const halveRef = useRef<HTMLButtonElement | null>(null);
+  const { armed: halveArmed, onClick: onHalveClick, onBlur: onHalveBlur } = useArmedDelete(halveRef, () => onHalve(expense));
   const wasArmed = useRef(false);
   useEffect(() => {
     if (armed) {
@@ -127,9 +141,29 @@ function ExpenseTableRow({ expense, scheduled, ownerLabel, singleType, categoryM
       announce('Eliminazione annullata');
     }
   }, [armed, announce, rowName]);
+  const wasHalveArmed = useRef(false);
+  useEffect(() => {
+    if (halveArmed) {
+      wasHalveArmed.current = true;
+      announce(`Premi di nuovo per dimezzare ${rowName}`);
+    } else if (wasHalveArmed.current) {
+      wasHalveArmed.current = false;
+      // The second press also disarms, but there the row is busy halving: only a real disarm says so.
+      if (!busy) announce('Nessun importo modificato');
+    }
+  }, [halveArmed, announce, rowName, busy]);
 
   const consequence = armed
     ? describeExpenseDeleteConsequence({ type: expense.type, amount: expense.amount, hasAccount: !!expense.linkedCashAssetId, hasFee: !!expense.transferFeeExpenseId })
+    : null;
+  const halveConsequence = halveArmed && canHalve && expense.type !== 'transfer'
+    ? describeExpenseHalveConsequence({
+        type: expense.type,
+        amount: expense.amount,
+        hasAccount: !!expense.linkedCashAssetId,
+        applied: !expense.balancePending && (!!expense.linkedCashAssetId || !!expense.debtAssetId),
+        repaysProperty: !!expense.debtAssetId,
+      })
     : null;
   const disabled = isDemo || busy;
   // A LOOKUP in the module-level map, never a call: a component obtained from a call during
@@ -206,6 +240,7 @@ function ExpenseTableRow({ expense, scheduled, ownerLabel, singleType, categoryM
             with its own max-width, because `max-w` on a `td` does not bind an auto-layout table and
             the sentence widened the column until the table ran past the tile (seen on the mirror). */}
         {consequence && <p className="mt-1 max-w-[220px] text-xs leading-snug text-destructive">{consequence}</p>}
+        {halveConsequence && <p className="mt-1 max-w-[220px] text-xs leading-snug text-muted-foreground">{halveConsequence}</p>}
       </TableCell>
       <TableCell className="text-center">
         {expense.link && (
@@ -222,9 +257,10 @@ function ExpenseTableRow({ expense, scheduled, ownerLabel, singleType, categoryM
       </TableCell>
       <TableCell>
         <div className="flex items-center justify-end gap-1">
-          {/* While the delete is armed the row has one action; the pencil gives its room to «Conferma»
-              so the column keeps its width (the armed row grew the table 40px past the tile). */}
-          {!armed && (
+          {/* While either confirm is armed the row has one action; the pencil gives its room to
+              «Conferma» so the column keeps its width (the armed row grew the table 40px past the
+              tile). Halving is offered only where a half exists (see `canHalve`). */}
+          {!armed && !halveArmed && (
             <Button
               variant="ghost"
               size="sm"
@@ -237,27 +273,50 @@ function ExpenseTableRow({ expense, scheduled, ownerLabel, singleType, categoryM
               <Edit className="h-4 w-4" aria-hidden="true" />
             </Button>
           )}
-          <Button
-            ref={deleteRef}
-            variant={armed ? 'destructive' : 'ghost'}
-            size="sm"
-            onClick={isSeries ? () => onDelete(expense) : onArmedClick}
-            onBlur={isSeries ? undefined : onBlur}
-            disabled={disabled}
-            aria-pressed={isSeries ? undefined : armed}
-            aria-label={
-              isDemo
-                ? 'Elimina — non disponibile in modalità demo'
-                : isSeries
-                  ? `Elimina ${rowName} o la sua serie`
-                  : armed
-                    ? `Premi di nuovo per eliminare ${rowName}`
-                    : `Elimina ${rowName}`
-            }
-            title={isDemo ? 'Non disponibile in modalità demo' : undefined}
-          >
-            {armed ? <span className="px-1 text-xs">Conferma</span> : <Trash2 className="h-4 w-4 text-destructive" aria-hidden="true" />}
-          </Button>
+          {!armed && canHalve && (
+            <Button
+              ref={halveRef}
+              variant={halveArmed ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={onHalveClick}
+              onBlur={onHalveBlur}
+              disabled={disabled}
+              aria-pressed={halveArmed}
+              aria-label={
+                isDemo
+                  ? 'Dividi a metà — non disponibile in modalità demo'
+                  : halveArmed
+                    ? `Premi di nuovo per dimezzare ${rowName}`
+                    : `Dividi a metà ${rowName}`
+              }
+              title={isDemo ? 'Non disponibile in modalità demo' : undefined}
+            >
+              {halveArmed ? <span className="px-1 text-xs">Conferma</span> : <Scissors className="h-4 w-4" aria-hidden="true" />}
+            </Button>
+          )}
+          {!halveArmed && (
+            <Button
+              ref={deleteRef}
+              variant={armed ? 'destructive' : 'ghost'}
+              size="sm"
+              onClick={isSeries ? () => onDelete(expense) : onArmedClick}
+              onBlur={isSeries ? undefined : onBlur}
+              disabled={disabled}
+              aria-pressed={isSeries ? undefined : armed}
+              aria-label={
+                isDemo
+                  ? 'Elimina — non disponibile in modalità demo'
+                  : isSeries
+                    ? `Elimina ${rowName} o la sua serie`
+                    : armed
+                      ? `Premi di nuovo per eliminare ${rowName}`
+                      : `Elimina ${rowName}`
+              }
+              title={isDemo ? 'Non disponibile in modalità demo' : undefined}
+            >
+              {armed ? <span className="px-1 text-xs">Conferma</span> : <Trash2 className="h-4 w-4 text-destructive" aria-hidden="true" />}
+            </Button>
+          )}
         </div>
       </TableCell>
     </TableRow>
@@ -280,6 +339,7 @@ export function ExpenseTable({ expenses, onEdit, onRefresh, isDemo = false, hasA
   // ========== State Management ==========
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [halvingId, setHalvingId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState<PageSizeOption>(20);
   // Multi-column sort: col determines which column, dir the direction
@@ -314,6 +374,38 @@ export function ExpenseTable({ expenses, onEdit, onRefresh, isDemo = false, hasA
       toast.error('Errore nell\'eliminazione della voce');
     }
     setDeletingId(null);
+  };
+
+  /**
+   * «Dividi a metà»: the row's amount becomes half, and its account gets back the difference it
+   * had already moved. The two-click confirm is the row's (useArmedDelete), so this runs only on
+   * the second press; the row is then refreshed by the parent, like a delete.
+   */
+  const halveExpense = async (expense: Expense) => {
+    if (halvedAmount(expense.amount) === null) {
+      toast.error('L’importo è troppo piccolo per essere diviso a metà.');
+      return;
+    }
+    // Read before the try, and the reset after the catch rather than in a finally: the React
+    // Compiler does not compile a logical expression inside a try/catch, nor a try/finally.
+    const invalidationOwner = user && ownerId ? ownerId : null;
+    try {
+      setHalvingId(expense.id);
+      const result = await halveExpenseAmount(expense, new Date());
+      if (result.assetsMoved) {
+        if (invalidationOwner) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.assets.all(invalidationOwner) });
+          queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.overview(invalidationOwner) });
+        }
+      }
+      if (invalidationOwner) queryClient.invalidateQueries({ queryKey: queryKeys.costCenters.all(invalidationOwner) });
+      toast.success(`Importo dimezzato: ${formatCurrency(result.amount)}`);
+      onRefresh();
+    } catch (error) {
+      console.error('Error halving expense:', error);
+      toast.error(describeWriteError(error));
+    }
+    setHalvingId(null);
   };
 
   const deleteAllRecurringExpenses = async (recurringParentId: string) => {
@@ -500,7 +592,10 @@ export function ExpenseTable({ expenses, onEdit, onRefresh, isDemo = false, hasA
   }
 
   const busyFor = (expense: Expense) =>
-    deletingId === expense.id || (!!expense.recurringParentId && deletingId === expense.recurringParentId) || (!!expense.installmentParentId && deletingId === expense.installmentParentId);
+    deletingId === expense.id ||
+    halvingId === expense.id ||
+    (!!expense.recurringParentId && deletingId === expense.recurringParentId) ||
+    (!!expense.installmentParentId && deletingId === expense.installmentParentId);
 
   return (
     <>
@@ -546,7 +641,7 @@ export function ExpenseTable({ expenses, onEdit, onRefresh, isDemo = false, hasA
                 </TableHead>
                 <TableHead className="max-w-[200px]">Note</TableHead>
                 <TableHead className="w-[50px] text-center">Link</TableHead>
-                <TableHead className="w-[100px] text-right">Azioni</TableHead>
+                <TableHead className="w-[130px] text-right">Azioni</TableHead>
               </TableRow>
             </TableHeader>
 
@@ -563,6 +658,7 @@ export function ExpenseTable({ expenses, onEdit, onRefresh, isDemo = false, hasA
                   busy={busyFor(expense)}
                   onEdit={onEdit}
                   onDelete={handleDelete}
+                  onHalve={halveExpense}
                   announce={announce}
                 />
               ))}

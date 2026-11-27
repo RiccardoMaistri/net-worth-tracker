@@ -1,8 +1,10 @@
-import type { DashboardOverviewCostDriver, DashboardOverviewPayload } from '@/types/dashboardOverview';
+import type { DashboardOverviewCostDrag, DashboardOverviewCostDriver, DashboardOverviewPayload } from '@/types/dashboardOverview';
 import { cachedFormatCurrencyEUR } from '@/lib/utils/formatters';
 import { formatPercentage } from '@/lib/services/chartService';
-import { describeCosts } from '@/lib/utils/overviewNarrative';
+import { describeCostDrag, describeCosts } from '@/lib/utils/overviewNarrative';
 import { cn } from '@/lib/utils';
+import { NarrativeSegments } from '@/components/ui/narrative-text';
+import { TileMethodNote } from '@/components/ui/tile-method-note';
 import { OverviewTile, TILE_SUB_EYEBROW_CLASS } from './OverviewTile';
 
 const MAX_DRIVERS = 3;
@@ -12,6 +14,8 @@ interface CostiTileProps {
   flags: DashboardOverviewPayload['flags'];
   /** Held instruments by annual TER cost, largest first. */
   costDrivers: DashboardOverviewCostDriver[];
+  /** What the TER removes over the tile's horizon; absent on old payloads, null without a TER. */
+  costDrag?: DashboardOverviewCostDrag | null;
   className?: string;
 }
 
@@ -19,10 +23,11 @@ interface CostiTileProps {
  * "Quanto mi costa, e per cosa?" — weighted TER and the estimated annual cost (TER + stamp
  * duty) side by side, then the instruments the TER cost actually comes from.
  */
-export function CostiTile({ metrics, flags, costDrivers, className }: CostiTileProps) {
+export function CostiTile({ metrics, flags, costDrivers, costDrag, className }: CostiTileProps) {
   const annualTotal = (metrics.annualPortfolioCost ?? 0) + (metrics.annualStampDuty ?? 0);
   const bothPresent = flags.hasTERTracking && flags.hasStampDuty;
   const drivers = costDrivers.slice(0, MAX_DRIVERS);
+  const dragNarrative = describeCostDrag(costDrag);
 
   return (
     <OverviewTile
@@ -68,6 +73,12 @@ export function CostiTile({ metrics, flags, costDrivers, className }: CostiTileP
         )}
       </p>
 
+      {dragNarrative && (
+        <p className="mt-2 text-[12px] leading-[1.45] text-muted-foreground">
+          <NarrativeSegments segments={dragNarrative} />
+        </p>
+      )}
+
       {/* Follows the figures (`mt-4`), not the tile's bottom (`mt-auto`): the drivers are part of
           the answer, not a footer link, and pinned they left ~110px of nothing between the TER
           line and «Pesano di più» whenever a taller tile shared the row (measured 2026-09-13). */}
@@ -90,6 +101,18 @@ export function CostiTile({ metrics, flags, costDrivers, className }: CostiTileP
             ))}
           </div>
         </div>
+      )}
+
+      {dragNarrative && (
+        <TileMethodNote subject="Costi in 20 anni" className="mt-4">
+          <span>
+            Il TER medio pesa solo sulle posizioni che lo dichiarano: liquidità, casa e fondo pensione restano fuori.
+          </span>
+          <span>
+            La proiezione compone oggi quel patrimonio per 20 anni al tasso di crescita dello scenario base FIRE, con e
+            senza il TER, senza versamenti né tasse: è una stima, non un rendimento promesso.
+          </span>
+        </TileMethodNote>
       )}
     </OverviewTile>
   );

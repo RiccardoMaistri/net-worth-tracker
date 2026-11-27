@@ -29,7 +29,7 @@ import {
 
 import type { Narrative, NarrativeSegment, VerdictTone } from '@/lib/utils/narrative';
 import type { CategoryRanking } from '@/lib/utils/tracciamentoSummary';
-import type { DashboardOverviewCategoryAmount, DashboardOverviewExpenseStats } from '@/types/dashboardOverview';
+import type { DashboardOverviewCategoryAmount, DashboardOverviewCostDrag, DashboardOverviewExpenseStats } from '@/types/dashboardOverview';
 
 // The segment shape and its plain-text rendering live in `narrative.ts` so every page's
 // narrative module shares them; re-exported here for the Panoramica's existing importers.
@@ -464,6 +464,20 @@ export function describeCosts(annualCost: number, totalValue = 0): Narrative | n
   }
   narrative.push(prose('.'));
   return narrative;
+}
+
+/**
+ * The Costi tile's second sentence: what the weighted TER removes over the projection's
+ * horizon, on today's TER-bearing base. Null when there is no drag to report — no TER, or a
+ * projection the maths refused — never «0 € in meno» (a claim the data cannot support).
+ */
+export function describeCostDrag(costDrag: DashboardOverviewCostDrag | null | undefined): Narrative | null {
+  if (!costDrag || !(costDrag.drag > 0) || !(costDrag.years > 0)) return null;
+  return [
+    prose(`In ${costDrag.years} anni, a questi costi, il portafoglio varrebbe ≈ `),
+    figure(cachedFormatCurrencyEUR(costDrag.drag, true)),
+    prose(' in meno.'),
+  ];
 }
 
 /**

@@ -48,3 +48,20 @@ export interface EcbRatesResponse {
   monthlyRates: EcbMonthlyRate[];
   cachedAt: string; // ISO string
 }
+
+// Monthly HICP Italy index (all items, 2015 = 100), one entry per PUBLISHED month.
+// No carry-forward: a month Eurostat has not published yet is simply absent.
+export interface InflationMonthlyIndex {
+  year: number;
+  month: number; // 1-12
+  index: number; // 2015 = 100
+}
+
+export interface InflationIndexResponse {
+  monthlyIndex: InflationMonthlyIndex[];
+  // The latest published month (the series' own end), or null for an empty series.
+  latestMonth: { year: number; month: number } | null;
+  cachedAt: string; // ISO string
+  // True when the server answered with an older cache because FRED failed.
+  stale: boolean;
+}

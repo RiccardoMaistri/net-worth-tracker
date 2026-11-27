@@ -22,6 +22,7 @@ import { it } from 'date-fns/locale';
 import { MONTH_NAMES } from '@/lib/constants/months';
 import type { Narrative } from './narrative';
 import { cachedFormatCurrencyEUR, formatDate } from './formatters';
+import { halvedAmount } from './expenseHalving';
 
 /** Where a modal's action is in its lifecycle. */
 export type ModalPhase = 'idle' | 'submitting' | 'success' | 'error';
@@ -418,6 +419,49 @@ export function describeExpenseDeleteConsequence(facts: ExpenseDeleteFacts): str
   return facts.type === 'income'
     ? `Eliminando, il conto viene addebitato di ${amount}.`
     : `Eliminando, il conto viene riaccreditato di ${amount}.`;
+}
+
+export interface ExpenseHalveFacts {
+  type: 'variable' | 'fixed' | 'debt' | 'income';
+  /** The row's amount, any sign. */
+  amount: number;
+  /** The row moves a cash account (`linkedCashAssetId`). */
+  hasAccount: boolean;
+  /** It has ALREADY moved it: a row still waiting for its date (`balancePending`) has not. */
+  applied: boolean;
+  /** A debt row linked to a property: halving it splits the principal on the debt again. */
+  repaysProperty?: boolean;
+}
+
+/**
+ * What the second press of an armed «Dividi a metà» does — the sentence the table row prints in
+ * its Note cell and the detail's reading shows while its button waits (AGENTS.md →
+ * Accessibility: the button stays short, the row carries the consequence).
+ *
+ * The operation halves THIS row only, so a recurring occurrence or an instalment says «questa
+ * voce», never «la serie»: nothing else in the plan moves. A row that already paid gives back
+ * the difference to its account; one still waiting for its date moves the smaller amount then.
+ */
+export function describeExpenseHalveConsequence(facts: ExpenseHalveFacts): string {
+  // The SAME rule the writer uses: printing a naive /2 would promise a cent the write does not
+  // make (373,81 € becomes 186,91 €, not 186,905 €).
+  const halved = halvedAmount(facts.amount);
+  const from = cachedFormatCurrencyEUR(Math.abs(facts.amount));
+  if (halved === null) return `L’importo di ${from} è troppo piccolo per essere dimezzato.`;
+  const half = cachedFormatCurrencyEUR(halved);
+  const base = `Dimezzando, questa voce passa da ${from} a ${half}`;
+
+  if (!facts.applied) {
+    const account = facts.hasAccount ? '; il conto si muoverà alla data della voce' : '';
+    const debt = facts.repaysProperty ? ' e la quota capitale del mutuo sarà ricalcolata alla data' : '';
+    return `${base}${account}${debt}.`;
+  }
+
+  const debt = facts.repaysProperty ? ' e la quota capitale del mutuo viene ricalcolata' : '';
+  if (!facts.hasAccount) return `${base}${debt}.`;
+  return facts.type === 'income'
+    ? `${base}, e il conto viene addebitato di ${half}${debt}.`
+    : `${base}, e il conto viene riaccreditato di ${half}${debt}.`;
 }
 
 export interface SeriesDeleteFacts {

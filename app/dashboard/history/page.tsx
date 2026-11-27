@@ -41,6 +41,7 @@ import { useFreshness } from '@/lib/hooks/useFreshness';
 import { useExpenses } from '@/lib/hooks/useExpenses';
 import { useAssetTransactions } from '@/lib/hooks/useAssetTransactions';
 import { usePensionContributions } from '@/lib/hooks/usePensionContributions';
+import { useInflationIndex } from '@/lib/hooks/useInflationIndex';
 import { calculateTotalEstimatedTaxes } from '@/lib/services/assetService';
 import { updateSnapshotNote } from '@/lib/services/snapshotService';
 import { getDefaultTargets } from '@/lib/services/assetAllocationService';
@@ -57,6 +58,8 @@ import type { Expense } from '@/types/expenses';
 import type { AssetTransaction } from '@/types/assetTransactions';
 import type { PensionContribution } from '@/types/pension';
 import { getItalyMonthYear, isItalyDayAfter } from '@/lib/utils/dateHelpers';
+import { deflate, resolveLatestInflationMonth } from '@/lib/utils/inflation';
+import type { InflationMonthlyIndex } from '@/types/benchmarks';
 import { buildMonthlyGrowthDrivers, buildYearlyGrowthDrivers, sumGrowthDrivers, type GrowthDriverContext } from '@/lib/utils/growthDrivers';
 import { resolvePensionReturnStart } from '@/lib/utils/pensionReturn';
 import {
@@ -124,6 +127,7 @@ const EMPTY_ASSETS: Asset[] = [];
 const EMPTY_EXPENSES: Expense[] = [];
 const EMPTY_TRANSACTIONS: AssetTransaction[] = [];
 const EMPTY_CONTRIBUTIONS: PensionContribution[] = [];
+const EMPTY_INFLATION_INDEX: InflationMonthlyIndex[] = [];
 
 export default function HistoryPage() {
   const { user } = useAuth();
@@ -141,6 +145,9 @@ export default function HistoryPage() {
   // The ledger and the pension contributions: the Driver measures the market from them.
   const transactionsQuery = useAssetTransactions(ownerId);
   const contributionsQuery = usePensionContributions(ownerId);
+  // The HICP index is an ENHANCEMENT of the Evoluzione tile: it never enters `composeReadState`,
+  // so a failed macro read leaves the page standing and only disables «Reale».
+  const inflationQuery = useInflationIndex();
   // The header's «Aggiornato alle…» while figures restored from the persisted cache are being
   // reread: the same six keys the read state composes.
   const freshness = useFreshness([snapshotsQuery, assetsQuery, settingsQuery, expensesQuery, transactionsQuery, contributionsQuery]);
@@ -172,6 +179,7 @@ export default function HistoryPage() {
     }
   };
   const [doublingMode, setDoublingMode] = useState<DoublingMode>('geometric');
+  const [evolutionMode, setEvolutionMode] = useState<'nominal' | 'real'>('nominal');
   const [showManualSnapshotModal, setShowManualSnapshotModal] = useState(false);
   const [noteDialogOpen, setNoteDialogOpen] = useState(false);
   // Valore per strumento: the month (null = the latest with a breakdown) and the ticked instruments.
@@ -228,6 +236,42 @@ export default function HistoryPage() {
 
   const netWorthHistory = useMemo(() => prepareNetWorthHistoryData(ordered), [ordered]);
   const evolutionPoints = useMemo(() => withMonthDeltas(netWorthHistory), [netWorthHistory]);
+
+  // ─── Evoluzione, nominale o reale ───────────────────────────────────────────
+  // The index ends where Eurostat stopped publishing: every point after that month has no
+  // deflator and is DROPPED from the real line (never carried forward), and the tile names the
+  // reference month. The page's verdict keeps the nominal series by decision.
+  const inflationIndex = inflationQuery.data?.monthlyIndex ?? EMPTY_INFLATION_INDEX;
+  const inflationLatestMonth = useMemo(
+    () => inflationQuery.data?.latestMonth ?? resolveLatestInflationMonth(inflationIndex),
+    [inflationQuery.data?.latestMonth, inflationIndex],
+  );
+  const realOrdered = useMemo(() => {
+    if (!inflationLatestMonth) return [];
+    return ordered.flatMap((snapshot) => {
+      const value = deflate(
+        snapshot.totalNetWorth,
+        { year: snapshot.year, month: snapshot.month },
+        inflationLatestMonth,
+        inflationIndex,
+      );
+      return value === null ? [] : [{ ...snapshot, totalNetWorth: value }];
+    });
+  }, [ordered, inflationLatestMonth, inflationIndex]);
+  const realGrowth = useMemo(
+    () => (realOrdered.length > 0 ? summarizeGrowth(realOrdered) : null),
+    [realOrdered],
+  );
+  const realPace = useMemo(() => summarizeGrowthPace(realOrdered), [realOrdered]);
+  const realEvolutionPoints = useMemo(() => withMonthDeltas(prepareNetWorthHistoryData(realOrdered)), [realOrdered]);
+  const inflationLoading = inflationQuery.isLoading;
+  const inflationUnavailable = inflationQuery.isError || (!inflationLoading && inflationLatestMonth === null);
+  const effectiveEvolutionMode = evolutionMode === 'real' && realGrowth !== null ? 'real' : 'nominal';
+  // `growth` is non-null past the empty-state return below; `realGrowth` is only chosen when non-null.
+  const displayGrowth = (effectiveEvolutionMode === 'real' ? realGrowth : growth)!;
+  const displayPace = effectiveEvolutionMode === 'real' ? realPace : pace;
+  const displayEvolutionPoints = effectiveEvolutionMode === 'real' ? realEvolutionPoints : evolutionPoints;
+
   const notes = useMemo(
     () =>
       ordered
@@ -437,12 +481,20 @@ export default function HistoryPage() {
             <EvoluzioneTile
               aside={describeEvolutionAside(growth)}
               reading={describeEvolution({ ath, moves })}
-              growth={growth}
-              pace={pace}
-              points={evolutionPoints}
+              growth={displayGrowth}
+              pace={displayPace}
+              points={displayEvolutionPoints}
               noteCount={notes.length}
               onAddNote={() => !isDemo && setNoteDialogOpen(true)}
               disabled={isDemo}
+              valueMode={effectiveEvolutionMode}
+              onValueModeChange={setEvolutionMode}
+              inflation={{
+                loading: inflationLoading,
+                unavailable: inflationUnavailable,
+                stale: inflationQuery.data?.stale ?? false,
+                latestMonth: inflationLatestMonth,
+              }}
             />
           </div>
           <div className={cn(TILE_CELL_CLASS, 'order-3 tablet:order-4 tablet:col-span-2 desktop:order-none')}>

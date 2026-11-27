@@ -102,6 +102,7 @@ export const queryKeys = {
     returns: (benchmarkId: string) => ['benchmarks', 'returns', benchmarkId] as const,
     fxRates: () => ['benchmarks', 'fx-rates'] as const,
     ecbRates: () => ['benchmarks', 'ecb-rates'] as const,
+    inflation: () => ['benchmarks', 'inflation'] as const,
   },
 
   // Portfolio — the Esposizione's Yahoo profiles, keyed by the OWNER and by the signature of the

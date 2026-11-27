@@ -22,7 +22,9 @@
 import { ChevronDown, HelpCircle, RotateCcw, Save, Target, TrendingDown, TrendingUp } from 'lucide-react';
 import type { FIREProjectionScenarios, FIREScenarioParams } from '@/types/assets';
 import type { Narrative } from '@/lib/utils/narrative';
-import { describeImpostazioni, describeScenarioParams } from '@/lib/utils/fireNarrative';
+import { describeImpostazioni, describeInflationReference, describeScenarioParams } from '@/lib/utils/fireNarrative';
+import { inflationRateOver, resolveLatestInflationMonth } from '@/lib/utils/inflation';
+import { useInflationIndex } from '@/lib/hooks/useInflationIndex';
 import { useChartColors } from '@/lib/hooks/useChartColors';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -93,6 +95,15 @@ export function FireParametri({
   isSavingScenarios,
 }: FireParametriProps) {
   const chartColors = useChartColors();
+  // The real datum beside the hypotheses: one shared HICP read, never part of this form's state.
+  const inflationQuery = useInflationIndex();
+  const inflationIndex = inflationQuery.data?.monthlyIndex ?? [];
+  const inflationReference = describeInflationReference({
+    status: inflationQuery.isLoading ? 'loading' : inflationQuery.isError ? 'unavailable' : 'ready',
+    ratePct: inflationRateOver(inflationIndex, 12),
+    latestMonth: inflationQuery.data?.latestMonth ?? resolveLatestInflationMonth(inflationIndex),
+    stale: inflationQuery.data?.stale ?? false,
+  });
 
   // The same bounds `handleSaveSettings` enforces, said AT the field while typing: a toast on
   // «Salva» names the problem after the fact, `aria-invalid` names it where it is (2026-09-22).
@@ -256,7 +267,7 @@ export function FireParametri({
 
           {/* Scenari (6) */}
           <div className={cn(TILE_CELL_CLASS, 'desktop:col-span-6')}>
-            <Tile eyebrow="Scenari" aside="crescita e inflazione annue, %" reading={describeScenarioParams()} ariaLabel="Parametri degli scenari">
+            <Tile eyebrow="Scenari" aside="crescita e inflazione annue, %" reading={[...describeScenarioParams(), ...(inflationReference ?? [])]} ariaLabel="Parametri degli scenari">
               <div className="mt-3.5 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 {SCENARIO_META.map(({ key, label, slot, icon: Icon }) => (
                   <div key={key} className="rounded-xl border border-border bg-muted p-3.5">
