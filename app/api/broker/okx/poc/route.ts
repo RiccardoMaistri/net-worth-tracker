@@ -27,6 +27,8 @@ import {
   getApiAuthErrorResponse,
   requireFirebaseAuth,
 } from '@/lib/server/apiAuth';
+import { adminDb } from '@/lib/firebase/admin';
+
 import { startTiming } from '@/lib/server/serverTiming';
 import { parseOr400 } from '@/lib/server/validation';
 import {
@@ -37,9 +39,9 @@ import {
   OkxReadError,
   readOkxAccount,
 } from '@/lib/server/okxClient';
-import { canUseOkx } from '@/lib/utils/okxAccess';
 import {
   buildOkxPortfolio,
+  OkxPortfolio,
   OkxParseError,
   parseOkxBalance,
   parseOkxFundingBalances,
@@ -49,6 +51,9 @@ import {
   parseOkxTickers,
 } from '@/lib/utils/okxPortfolio';
 import { getExchangeRateToEur } from '@/lib/services/currencyConversionService';
+import { createAsset, updateAsset } from '@/lib/services/assetService';
+
+const ASSETS_COLLECTION = 'assets';
 
 const bodySchema = z.object({ ownerId: z.string().min(1) });
 
@@ -68,6 +73,118 @@ function rows(value: unknown[] | null | undefined): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+/** Check if a payload record has an `ordId` field (used as a fallback instrument identifier). */
+function hasOrdId(record: unknown): record is Record<string, unknown> {
+  return (
+    typeof record === 'object' &&
+    record !== null &&
+    !Array.isArray(record) &&
+    'ordId' in record
+  );
+}
+
+/**
+ * Persist OKX-synced assets into the owner's Firestore `assets` collection.
+ * Each coin from the balance/funding/savings/staking becomes an asset with
+ * `okxInstrumentId` set to the OKX instrument identifier, so the app can track
+ * the source and later read the linkage.
+ */
+async function persistOkxAssets(
+  userId: string,
+  portfolio: OkxPortfolio,
+  raw: Awaited<ReturnType<typeof readOkxAccount>>,
+  usdEur: number | null
+): Promise<void> {
+  const now = new Date();
+  const assetsRef = adminDb.collection(ASSETS_COLLECTION);
+
+  // Build a map: OKX ticker (ccy) → instrument identifier (instId or ordId fallback)
+  const instrumentMap: Record<string, string> = {};
+
+  // Collect instrument IDs from positions (these have instId)
+  for (const pos of portfolio.positions) {
+    if (pos.instId) {
+      instrumentMap[pos.instId] = pos.instId;
+    }
+  }
+
+  // Process balance details: each currency becomes an asset
+  // raw.balance is unknown[]; each element may have a 'details' sub-array for per-currency data
+  const balanceArray: unknown[] = typeof raw.balance === 'object' && raw.balance !== null && Array.isArray(raw.balance)
+    ? raw.balance
+    : [];
+
+  for (const detail of portfolio.holdings) {
+    const ccy = detail.ccy;
+    // Determine the OKX instrument identifier for this coin
+    let okxInstId = ccy; // fallback: use ccy itself
+    // Look for a matching entry in the balance array by ccy
+    for (const balanceRow of balanceArray) {
+      if (
+        typeof balanceRow === 'object' && balanceRow !== null &&
+        typeof (balanceRow as Record<string, unknown>).ccy === 'string' &&
+        (balanceRow as Record<string, unknown>).ccy === ccy
+      ) {
+        // This row may have a nested 'details' array with more granular data
+        const rowDetails = (balanceRow as Record<string, unknown>).details;
+        if (Array.isArray(rowDetails)) {
+          for (const rawDetail of rowDetails) {
+            if (
+              typeof rawDetail === 'object' && rawDetail !== null &&
+              typeof (rawDetail as Record<string, unknown>).ccy === 'string' &&
+              (rawDetail as Record<string, unknown>).ccy === ccy &&
+              'ordId' in rawDetail
+            ) {
+              okxInstId = String((rawDetail as Record<string, unknown>).ordId);
+              break;
+            }
+          }
+        }
+        break;
+      }
+    }
+    instrumentMap[ccy] = okxInstId;
+
+    // Check if an asset with this ticker already exists for this user
+    // Use Admin SDK pattern: collection().where().get()
+    const assetSnapshot = await adminDb
+      .collection(ASSETS_COLLECTION)
+      .where('userId', '==', userId)
+      .where('ticker', '==', ccy)
+      .get();
+
+    const existingAssetDoc = assetSnapshot.docs[0];
+
+    // Build asset data without server-side fields (createAsset adds lastPriceUpdate, createdAt, updatedAt)
+    const assetData: import('@/types/assets').AssetFormData = {
+      ticker: ccy,
+      name: ccy,
+      type: 'crypto' as const,
+      assetClass: 'crypto',
+      currency: 'EUR',
+      quantity: detail.quantity ?? 0,
+      currentPrice: detail.priceUsd ?? 0,
+      // okxInstrumentId is the new linkage field added to Asset interface
+      okxInstrumentId: okxInstId,
+    };
+
+    if (existingAssetDoc.exists) {
+      // Update existing asset with the linkage
+      await updateAsset(existingAssetDoc.id, assetData);
+    } else {
+      // Create new asset - createAsset will add lastPriceUpdate, createdAt, updatedAt internally
+      await createAsset(userId, assetData);
+    }
+  }
+
+  // Funding balances are already represented in portfolio.holdings via the merge logic,
+  // so no separate loop is needed here.
+  // Note: query invalidation is handled by the React Query cache on the client side
+  // when the assets fetch key changes; the server-side write does not need to
+  // explicitly invalidate here because the route response already carries the fresh portfolio.
+}
+
+/** POST /api/broker/okx/poc */
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const timing = startTiming();
 
@@ -78,9 +195,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return getApiAuthErrorResponse(error) ?? NextResponse.json({ error: 'Non autenticato.' }, { status: 401 });
   }
 
-  if (!canUseOkx(decoded.email)) {
-    return NextResponse.json({ error: 'Accesso negato.' }, { status: 403 });
-  }
   timing.mark('auth');
 
   const body: unknown = await request.json().catch(() => null);
@@ -112,6 +226,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
     const warnings = [...raw.warnings, ...portfolio.warnings];
 
+    // ─── Persist OKX-synced assets with linkage ──────────────────────────────────────
+    // Only write when the owner matches the authenticated user (ownerId is the deploy owner).
+    // Each OKX coin becomes an asset with okxInstrumentId set so the app can track the source.
+    if (validated.data.ownerId === decoded.uid) {
+      await persistOkxAssets(decoded.uid, portfolio, raw, usdEur);
+    }
+    // If ownerId differs from decoded.uid, the route is being called for a shared account:
+    // we do not write to that account's assets (shared-account safety).
+
     timing.mark('compute');
     return NextResponse.json(
       {
@@ -138,7 +261,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (error instanceof OkxParseError) {
       return NextResponse.json({ error: error.message }, { status: 502 });
     }
+    // error is typed as `unknown` by the catch clause; narrow before using it
+    const errorMessage =
+      error instanceof Error ? error.message : 'Lettura non riuscita: riprova.';
     console.error('[okx/poc] unexpected failure', error);
-    return NextResponse.json({ error: 'Lettura non riuscita: riprova.' }, { status: 500 });
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

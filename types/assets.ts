@@ -229,6 +229,8 @@ export interface Asset {
   dividendCashAssetId?: string;
   bondDetails?: BondDetails; // Optional bond-specific details for coupon scheduling
   pensionFundDetails?: PensionFundDetails; // Optional fondo pensione details (type 'pensionFund'); see types/pension.ts
+  /** OKX instrument identifier that this asset was synced from (optional). */
+  okxInstrumentId?: string;
   // Start of the CURRENT continuous holding, stamped on (re)purchase — createAsset on ISIN reuse,
   // or updateAsset when quantity goes 0 → >0. Lets YOC / Current-Yield ignore dividends from a
   // previous, discontinuous holding of the same instrument. Absent for assets held since before
@@ -278,6 +280,8 @@ export interface AssetFormData {
   dividendCashAssetId?: string;
   bondDetails?: BondDetails; // Optional bond-specific details for coupon scheduling
   pensionFundDetails?: PensionFundDetails; // Optional fondo pensione details (type 'pensionFund'); see types/pension.ts
+  /** OKX instrument identifier that this asset was synced from (optional). */
+  okxInstrumentId?: string;
 }
 
 interface SubCategoryConfig {
