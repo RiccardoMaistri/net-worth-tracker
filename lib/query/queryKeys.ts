@@ -104,6 +104,12 @@ export const queryKeys = {
     ecbRates: () => ['benchmarks', 'ecb-rates'] as const,
   },
 
+  // The Panoramica's «Mercato oggi» basket. Global data, no owner segment — and therefore not
+  // a persisted prefix (lib/constants/persistCache.ts): the server cache is its cache.
+  market: {
+    today: () => ['market', 'today'] as const,
+  },
+
   // Portfolio — the Esposizione's Yahoo profiles, keyed by the OWNER and by the signature of the
   // tickers in view («AAPL:stock|VWCE.DE:fund»): a new ticker is a new key, so the read restarts
   // by itself (doc/guide/allocazione.md § Esposizione). The weighing happens in the browser, outside the cache.

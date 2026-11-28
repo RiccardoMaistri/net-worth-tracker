@@ -14,6 +14,7 @@ import { Camera } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCreateSnapshot } from '@/lib/hooks/useSnapshots';
 import { DASHBOARD_OVERVIEW_STALE_TIME_MS, useDashboardOverview } from '@/lib/hooks/useDashboardOverview';
+import { useMarketToday } from '@/lib/hooks/useMarketToday';
 import { useFreshness } from '@/lib/hooks/useFreshness';
 import { SavingsRateBadge } from '@/components/ui/SavingsRateBadge';
 import { getItalyDate, getItalyMonthYear } from '@/lib/utils/dateHelpers';
@@ -40,6 +41,7 @@ import { CostiTile } from '@/components/dashboard/overview/CostiTile';
 import { ObiettivoTile } from '@/components/dashboard/overview/ObiettivoTile';
 import { CategoryTile } from '@/components/dashboard/overview/CategoryTile';
 import { AssetPrincipaliTile } from '@/components/dashboard/overview/AssetPrincipaliTile';
+import { MercatoOggiTile } from '@/components/dashboard/overview/MercatoOggiTile';
 import { OverviewTile, TILE_CELL_CLASS } from '@/components/dashboard/overview/OverviewTile';
 import { TileGridSkeleton } from '@/components/ui/tile-grid-skeleton';
 import { ErrorNotice } from '@/components/ui/error-notice';
@@ -120,6 +122,8 @@ export default function DashboardPage() {
 
   const overviewQuery = useDashboardOverview(ownerId);
   const { data: overview, isLoading: loadingOverview, isError: overviewError, refetch: refetchOverview } = overviewQuery;
+  const marketTodayQuery = useMarketToday();
+  const { data: marketTodayResult, isLoading: loadingMarketToday, isError: marketTodayError, refetch: refetchMarketToday } = marketTodayQuery;
   // The header's «Aggiornato alle…» while a payload restored from the persisted cache is being
   // reread: on the overview's own one-minute threshold, and dated by the payload's
   // `freshness.updatedAt` when the materialised summary is older than the read that fetched it.
@@ -508,13 +512,21 @@ export default function DashboardPage() {
 
           <motion.div
             variants={cardItem}
-            className={cn(
-              CELL_CLASS,
-              'order-8 desktop:order-none tablet:col-span-2',
-              // Three equal tiles on the third row (4 · 4 · 4): at 3 columns the income tile
-              // could not hold a label, a 40px bar and two figures without overflowing its row.
-              expenseStats ? 'desktop:col-span-4' : 'desktop:col-span-12',
-            )}
+            className={cn(CELL_CLASS, 'order-8 desktop:order-none desktop:col-span-4')}
+          >
+            <MercatoOggiTile
+              quotes={marketTodayResult?.quotes ?? []}
+              fetchedAt={marketTodayResult?.fetchedAt ?? null}
+              stale={marketTodayResult?.stale ?? false}
+              loading={loadingMarketToday}
+              failed={marketTodayError}
+              onRetry={() => void refetchMarketToday()}
+            />
+          </motion.div>
+
+          <motion.div
+            variants={cardItem}
+            className={cn(CELL_CLASS, 'order-9 desktop:order-none desktop:col-span-12')}
           >
             <AssetPrincipaliTile
               topAssets={overview.topAssets ?? []}
